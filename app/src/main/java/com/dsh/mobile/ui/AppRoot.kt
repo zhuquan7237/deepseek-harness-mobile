@@ -30,7 +30,7 @@ fun AppRoot(repo: BridgeRepository) {
         Box(Modifier.fillMaxSize().background(palette.bg)) {
             when {
                 !state.ready -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = palette.brand, strokeWidth = 2.dp)
+                    CircularProgressIndicator(color = palette.accent, strokeWidth = 2.dp)
                 }
                 state.token == null -> PairingScreen(state, repo)
                 state.view == View.SETTINGS -> SettingsScreen(state, repo)

@@ -79,6 +79,7 @@ data class AppState(
     // models
     val doc: ModelDoc? = null,
     val modelsLoading: Boolean = false,
+    val modelLabel: String = "",
     // settings
     val theme: String = "auto",
     val toast: ToastMsg? = null,

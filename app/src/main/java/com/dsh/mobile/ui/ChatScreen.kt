@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,24 +19,32 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,7 +57,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -65,6 +73,12 @@ import com.dsh.mobile.data.Role
 import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.launch
 
+/**
+ * The chat screen mirrors the ChatGPT mobile conversation: back circle +
+ * two-line context pill + overflow, plain white assistant text, a navy user
+ * bubble, an action row under the newest reply, and a surface input card whose
+ * model chip opens a menu anchored above it.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(state: AppState, repo: BridgeRepository) {
@@ -76,42 +90,86 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
     var showRename by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
-        DshTopBar(
-            title = state.sessionTitle.ifEmpty { "会话" },
-            subtitle = buildString {
-                if (!state.connected) append("重连中…")
-                if (state.running) {
-                    if (isNotEmpty()) append(" · ")
-                    append("正在生成")
-                }
-            },
-            onBack = { repo.closeSession() },
-            actions = {
-                DshIconButton(Icons.Filled.MoreVert, "更多") { showActions = true }
-            },
-        )
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .height(60.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            CircleButton(Icons.AutoMirrored.Filled.ArrowBack, "返回") { repo.closeSession() }
+            ContextPill(
+                title = state.sessionTitle.ifEmpty { "会话" },
+                meta = if (state.connected) "电脑端 · 已连接" else "电脑端 · 重连中",
+                metaIcon = Icons.Filled.Computer,
+                metaOnline = state.connected,
+                modifier = Modifier.weight(1f),
+                onClick = { showActions = true },
+            )
+            CircleButton(Icons.Filled.MoreVert, "更多") { showActions = true }
+        }
         MessageList(
             state = state,
             onCopy = { text ->
                 clipboard.setText(AnnotatedString(text))
                 repo.toast("已复制")
             },
+            onRegenerate = { repo.regenerate() },
             modifier = Modifier.weight(1f),
         )
-        Composer(state, repo)
+        Composer(
+            state = state,
+            repo = repo,
+            onOpenModels = {
+                showModels = true
+                if (state.doc == null) repo.loadModels()
+            },
+        )
+    }
+
+    if (showModels) {
+        Box(Modifier.fillMaxSize().imePadding()) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { showModels = false }
+            )
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 12.dp, bottom = 82.dp)
+                    .width(310.dp)
+                    .heightIn(max = 420.dp)
+                    .border(1.dp, palette.textSecondary.copy(alpha = 0.12f), RoundedCornerShape(20.dp)),
+                shape = RoundedCornerShape(20.dp),
+                color = palette.surface,
+                shadowElevation = 10.dp,
+            ) {
+                ModelMenu(state = state, onPick = { provider, model, label ->
+                    repo.selectModel(provider, model, label)
+                    showModels = false
+                })
+            }
+        }
     }
 
     if (showActions) {
         ModalBottomSheet(
             onDismissRequest = { showActions = false },
-            containerColor = palette.bg,
+            containerColor = palette.surface,
+            dragHandle = { SheetHandle() },
         ) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).navigationBarsPadding()) {
                 SheetAction("停止生成", caption = "让电脑端停下当前回合") {
                     showActions = false
                     repo.cancelTurn()
                 }
-                SheetAction("重新生成", caption = "给电脑端发送「继续」，让它接着往下写") {
+                SheetAction("重新生成", caption = "让电脑端接着往下写") {
                     showActions = false
                     repo.regenerate()
                 }
@@ -129,18 +187,6 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
         }
     }
 
-    if (showModels) {
-        ModalBottomSheet(
-            onDismissRequest = { showModels = false },
-            containerColor = palette.bg,
-        ) {
-            ModelPicker(state, onPick = { provider, model ->
-                repo.selectModel(provider, model)
-                showModels = false
-            })
-        }
-    }
-
     if (showRename) {
         RenameDialog(
             initial = state.sessionTitle,
@@ -154,7 +200,12 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
 }
 
 @Composable
-private fun MessageList(state: AppState, onCopy: (String) -> Unit, modifier: Modifier) {
+private fun MessageList(
+    state: AppState,
+    onCopy: (String) -> Unit,
+    onRegenerate: () -> Unit,
+    modifier: Modifier,
+) {
     val palette = LocalDsh.current
     val listState = rememberLazyListState()
     val rows = state.history
@@ -162,11 +213,11 @@ private fun MessageList(state: AppState, onCopy: (String) -> Unit, modifier: Mod
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(top = 6.dp, bottom = 10.dp),
+        contentPadding = PaddingValues(top = 6.dp, bottom = 12.dp),
     ) {
         itemsIndexed(rows) { index, row ->
             val showActions = row.who == Role.ASSISTANT && index == rows.lastIndex && !state.running
-            MessageRow(row, showActions = showActions, onCopy = onCopy)
+            MessageRow(row, showActions = showActions, onCopy = onCopy, onRegenerate = onRegenerate)
         }
         if (live.isNotEmpty()) {
             itemsIndexed(live, key = { _, bubble -> "live:" + bubble.key }) { index, bubble ->
@@ -179,7 +230,7 @@ private fun MessageList(state: AppState, onCopy: (String) -> Unit, modifier: Mod
                     Text(
                         "还没有消息。说点什么，电脑端就会开始干活。",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = palette.textTertiary,
+                        color = palette.textSecondary,
                     )
                 }
             }
@@ -199,9 +250,9 @@ private fun MessageList(state: AppState, onCopy: (String) -> Unit, modifier: Mod
 }
 
 /**
- * The design shows the desktop's replies as plain canvas text (no bubble, no
- * visible label); the speaker still rides in the accessibility tree so a
- * screen reader — and the E2E suite — can tell who is speaking.
+ * The desktop's replies are plain canvas text (no bubble, no visible label);
+ * the speaker still rides in the accessibility tree so a screen reader — and
+ * the E2E suite — can tell who is speaking.
  */
 @Composable
 private fun SpeakerSemantics(content: @Composable () -> Unit) {
@@ -209,62 +260,84 @@ private fun SpeakerSemantics(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun MessageRow(row: ChatRow, showActions: Boolean = false, onCopy: (String) -> Unit = {}) {
+private fun MessageRow(
+    row: ChatRow,
+    showActions: Boolean = false,
+    onCopy: (String) -> Unit = {},
+    onRegenerate: () -> Unit = {},
+) {
     val palette = LocalDsh.current
     when (row.who) {
         Role.USER -> Column(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp),
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp),
             horizontalAlignment = Alignment.End,
         ) {
             Box(
                 Modifier
-                    .fillMaxWidth(0.9f)
+                    .fillMaxWidth(0.82f)
                     .widthIn(max = 520.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
                 Box(
                     Modifier
-                        .clip(RoundedCornerShape(20.dp, 20.dp, 8.dp, 20.dp))
-                        .background(palette.layer2)
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(palette.bubbleUser)
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
-                    Text(row.text, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
+                    Text(
+                        row.text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = palette.bubbleUserText,
+                    )
                 }
             }
         }
         Role.ASSISTANT -> SpeakerSemantics {
             Column(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 8.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
             ) {
                 Text(row.text, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
                 if (showActions) {
-                    Spacer(Modifier.height(4.dp))
-                    Box(
-                        Modifier
-                            .clip(CircleShape)
-                            .clickable { onCopy(row.text) }
-                            .padding(6.dp),
-                    ) {
-                        Icon(
-                            Icons.Filled.ContentCopy,
-                            contentDescription = "复制",
-                            tint = palette.textTertiary,
-                            modifier = Modifier.size(15.dp),
-                        )
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        MessageAction(Icons.Filled.ContentCopy, "复制") { onCopy(row.text) }
+                        MessageAction(Icons.Filled.Refresh, "重新生成", onRegenerate)
                     }
                 }
             }
         }
-        Role.TOOL -> Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)) {
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(palette.layer2)
-                    .padding(horizontal = 11.dp, vertical = 8.dp)
-            ) {
-                Text(row.text, style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
-            }
+        Role.TOOL -> Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 2.dp)
+        ) {
+            Text(
+                row.text,
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.textSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
+    }
+}
+
+/** One 22dp grey glyph in a 36dp touch target, ChatGPT's message action row. */
+@Composable
+private fun MessageAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+    val palette = LocalDsh.current
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = palette.textSecondary, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -273,12 +346,14 @@ private fun LiveRow(bubble: LiveBubble, first: Boolean) {
     val palette = LocalDsh.current
     SpeakerSemantics {
         Column(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 8.dp),
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
         ) {
             if (first) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Box(Modifier.size(6.dp).clip(CircleShape).background(palette.brand))
-                    Text("正在生成", style = MaterialTheme.typography.labelSmall, color = palette.brand)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
+                    Text("正在生成", style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
                 }
                 Spacer(Modifier.height(7.dp))
             }
@@ -287,8 +362,13 @@ private fun LiveRow(bubble: LiveBubble, first: Boolean) {
     }
 }
 
+/** The input card: model chip, field, round send/stop — all on one surface. */
 @Composable
-private fun Composer(state: AppState, repo: BridgeRepository) {
+private fun Composer(
+    state: AppState,
+    repo: BridgeRepository,
+    onOpenModels: () -> Unit,
+) {
     val palette = LocalDsh.current
     var draft by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -302,23 +382,22 @@ private fun Composer(state: AppState, repo: BridgeRepository) {
     ) {
         Row(
             Modifier
-                .weight(1f)
-                .shadow(3.dp, RoundedCornerShape(22.dp))
-                .clip(RoundedCornerShape(22.dp))
-                .background(palette.layer1)
-                .border(1.dp, palette.borderL2, RoundedCornerShape(22.dp))
-                .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(26.dp))
+                .background(palette.surface)
+                .padding(start = 8.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
+            ModelChip(state = state, onClick = onOpenModels)
             BasicTextField(
                 value = draft,
                 onValueChange = { draft = it },
                 modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 28.dp, max = 140.dp)
-                    .padding(vertical = 5.dp),
+                    .heightIn(min = 34.dp, max = 140.dp)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.textPrimary),
-                cursorBrush = SolidColor(palette.brand),
+                cursorBrush = SolidColor(palette.accent),
                 maxLines = 6,
                 decorationBox = { innerTextField ->
                     Box {
@@ -326,25 +405,27 @@ private fun Composer(state: AppState, repo: BridgeRepository) {
                             Text(
                                 if (state.connected) "给电脑端发消息…" else "重连中…",
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = palette.textCaption,
+                                color = palette.textTertiary,
                             )
                         }
                         innerTextField()
                     }
                 },
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
             if (state.running) {
                 CircleAction(
-                    filled = true,
+                    background = palette.surfaceHi,
                     icon = Icons.Filled.Stop,
+                    tint = palette.textPrimary,
                     contentDescription = "停止生成",
                     enabled = true,
                 ) { repo.cancelTurn() }
             } else {
                 CircleAction(
-                    filled = draft.isNotBlank(),
+                    background = if (draft.isNotBlank()) palette.accent else palette.surfaceHi,
                     icon = Icons.Filled.ArrowUpward,
+                    tint = if (draft.isNotBlank()) palette.onAccent else palette.textSecondary,
                     contentDescription = "发送",
                     enabled = draft.isNotBlank() && !state.sending,
                 ) {
@@ -362,17 +443,45 @@ private fun Composer(state: AppState, repo: BridgeRepository) {
     }
 }
 
+/** The model chip inside the input card; opens the menu above the composer. */
+@Composable
+private fun ModelChip(state: AppState, onClick: () -> Unit) {
+    val palette = LocalDsh.current
+    val label = state.modelLabel.ifBlank { "模型" }
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = palette.textSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 86.dp),
+        )
+        Icon(
+            Icons.Filled.ArrowDropDown,
+            contentDescription = "选择模型",
+            tint = palette.textSecondary,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
 @Composable
 private fun CircleAction(
-    filled: Boolean,
+    background: androidx.compose.ui.graphics.Color,
     icon: ImageVector,
+    tint: androidx.compose.ui.graphics.Color,
     contentDescription: String,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    val palette = LocalDsh.current
-    val background = if (enabled && filled) palette.buttonFill else palette.layer2
-    val tint = if (enabled && filled) palette.onButtonFill else palette.textCaption
     Box(
         Modifier
             .size(36.dp)
@@ -385,70 +494,66 @@ private fun CircleAction(
     }
 }
 
+/** Model menu: the list with a check on the current pick. */
 @Composable
-private fun ModelPicker(state: AppState, onPick: (String, String) -> Unit) {
+private fun ModelMenu(state: AppState, onPick: (String, String, String) -> Unit) {
     val palette = LocalDsh.current
     val doc = state.doc
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+    Column(Modifier.fillMaxWidth()) {
         Text(
-            "切换这个会话使用的模型",
+            "模型",
             style = MaterialTheme.typography.labelSmall,
-            color = palette.textTertiary,
-            modifier = Modifier.padding(start = 14.dp, top = 2.dp, bottom = 8.dp),
+            color = palette.textSecondary,
+            modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp),
         )
         when {
             state.modelsLoading && doc == null -> {
                 Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = palette.brand, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    CircularProgressIndicator(color = palette.accent, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                 }
             }
             doc == null || doc.items.isEmpty() -> {
                 Text(
                     "没有读到模型列表（需要电脑端授权）。",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = palette.textTertiary,
-                    modifier = Modifier.padding(14.dp),
+                    color = palette.textSecondary,
+                    modifier = Modifier.padding(16.dp),
                 )
             }
             else -> {
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp).navigationBarsPadding()) {
-                    itemsIndexed(doc.items) { _, item ->
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 340.dp).padding(bottom = 8.dp)) {
+                    items(doc.items) { item ->
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
-                                .clickable(enabled = item.enabled) { onPick(item.provider, item.modelId) }
-                                .padding(horizontal = 14.dp, vertical = 11.dp),
+                                .clickable(enabled = item.enabled) { onPick(item.provider, item.modelId, item.name) }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(Modifier.weight(1f)) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                                 Text(
                                     item.name,
-                                    style = MaterialTheme.typography.bodyLarge,
+                                    style = MaterialTheme.typography.bodyMedium,
                                     color = if (item.enabled) palette.textPrimary else palette.textTertiary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(
-                                        item.provider,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = palette.textTertiary,
-                                    )
-                                    Text(
-                                        item.modelId,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = palette.textCaption,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false),
-                                    )
-                                }
+                                Text(
+                                    item.provider,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = palette.textSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
-                            if (!item.enabled) Pill("已停用", palette.textCaption)
+                            if (!item.enabled) {
+                                MiniTag("已停用", palette.textTertiary)
+                            } else if (state.modelLabel.isNotBlank() && item.name == state.modelLabel) {
+                                Icon(Icons.Filled.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
+                            }
                         }
                     }
-                    item { Spacer(Modifier.height(16.dp)) }
                 }
             }
         }

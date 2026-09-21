@@ -386,14 +386,15 @@ class BridgeRepository(context: Context) {
         }
     }
 
-    fun selectModel(provider: String, model: String) {
+    fun selectModel(provider: String, model: String, label: String? = null) {
         val s = _state.value
         val sid = s.sessionId ?: return
         val token = s.token ?: return
         scope.launch {
             try {
                 api.selectModel(token, sid, provider, model)
-                toast("已切换到 $model")
+                _state.update { it.copy(modelLabel = label ?: model) }
+                toast("已切换到 ${label ?: model}")
             } catch (error: BridgeException) {
                 handleApiError(error, "切换模型失败")
             } catch (error: Exception) {

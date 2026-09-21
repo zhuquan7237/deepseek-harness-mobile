@@ -2,17 +2,23 @@ package com.dsh.mobile.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,24 +29,30 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,61 +67,117 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
+/**
+ * The session list follows the ChatGPT mobile shell: round top-bar buttons
+ * around a connection pill, a plain grouped list with no dividers, and the
+ * floating bottom dock (search + a blue CTA) the list scrolls under.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionsScreen(state: AppState, repo: BridgeRepository) {
     val palette = LocalDsh.current
     var renameTarget by remember { mutableStateOf<SessionSummary?>(null) }
+    var searchActive by rememberSaveable { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
-        DshTopBar(
-            title = "会话",
-            subtitle = buildString {
-                append(if (state.connected) "已连接" else "重连中…")
-                append(" · ")
-                append(state.sessions.size)
-                append(" 个会话")
-            },
-            actions = {
-                DshIconButton(Icons.Filled.Add, "新建会话") { repo.createSession() }
-                DshIconButton(Icons.Filled.Settings, "设置") { repo.openSettings() }
-            },
-        )
-        SearchField(value = state.search, onValueChange = { repo.setSearch(it) })
-        PullToRefreshBox(
-            isRefreshing = state.sessionsLoading,
-            onRefresh = { repo.loadSessions() },
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .height(60.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (state.sessions.isEmpty()) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState()),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        if (state.search.isNotBlank()) "没有匹配的会话" else "还没有会话。\n点右上角新建一个，开始第一句对话。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = palette.textTertiary,
-                        textAlign = TextAlign.Center,
-                    )
-                }
-            } else {
-                val groups = remember(state.sessions) { groupSessions(state.sessions) }
-                LazyColumn(Modifier.fillMaxSize()) {
-                    groups.forEach { group ->
-                        item(key = "header:" + group.label) { GroupHeader(group.label) }
-                        items(group.sessions, key = { it.sessionId }) { session ->
-                            SessionRow(
-                                session = session,
-                                onClick = { repo.openSession(session.sessionId) },
-                                onLongClick = { renameTarget = session },
-                            )
+            CircleButton(Icons.Filled.Settings, "设置") { repo.openSettings() }
+            Spacer(Modifier.width(10.dp))
+            StatusPill(
+                text = buildString {
+                    append(if (state.connected) "已连接" else "重连中…")
+                    append(" · ")
+                    append(state.sessions.size)
+                    append(" 个会话")
+                },
+                online = state.connected,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Spacer(Modifier.weight(1f))
+            CircleButton(Icons.Filled.Add, "新建会话") { repo.createSession() }
+        }
+
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            PullToRefreshBox(
+                isRefreshing = state.sessionsLoading,
+                onRefresh = { repo.loadSessions() },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (state.sessions.isEmpty()) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        EmptyState(searching = state.search.isNotBlank())
+                    }
+                } else {
+                    val groups = remember(state.sessions) { groupSessions(state.sessions) }
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 104.dp),
+                    ) {
+                        groups.forEach { group ->
+                            item(key = "header:" + group.label) {
+                                SectionHeader(group.label, Modifier.padding(start = 20.dp))
+                            }
+                            items(group.sessions, key = { it.sessionId }) { session ->
+                                SessionRow(
+                                    session = session,
+                                    onClick = { repo.openSession(session.sessionId) },
+                                    onLongClick = { renameTarget = session },
+                                )
+                            }
                         }
                     }
-                    item { Spacer(Modifier.height(16.dp)) }
                 }
+            }
+
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(96.dp)
+                    .background(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            listOf(Color.Transparent, palette.bg)
+                        )
+                    )
+            )
+            Row(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SearchPill(
+                    active = searchActive,
+                    value = state.search,
+                    onChange = { repo.setSearch(it) },
+                    onActivate = { searchActive = true },
+                    onClose = {
+                        searchActive = false
+                        repo.setSearch("")
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(10.dp))
+                PrimaryCta(
+                    icon = Icons.Filled.Edit,
+                    text = "新建",
+                    onClick = { repo.createSession() },
+                )
             }
         }
     }
@@ -123,6 +191,131 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                 renameTarget = null
             },
         )
+    }
+}
+
+@Composable
+private fun EmptyState(searching: Boolean) {
+    val palette = LocalDsh.current
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(horizontal = 32.dp),
+    ) {
+        Text(
+            if (searching) "没有匹配的会话" else "开始一个新会话",
+            style = MaterialTheme.typography.titleLarge,
+            color = palette.textPrimary,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            if (searching) "换个词试试" else "会话、模型和干活都在电脑上，这里是随身的控制器",
+            style = MaterialTheme.typography.bodyMedium,
+            color = palette.textSecondary,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/** Blue stadium CTA, the dock's right half on ChatGPT's list screen. */
+@Composable
+private fun PrimaryCta(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    onClick: () -> Unit,
+) {
+    val palette = LocalDsh.current
+    Row(
+        Modifier
+            .height(50.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(palette.accent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = palette.onAccent, modifier = Modifier.size(19.dp))
+        Text(text, style = MaterialTheme.typography.bodyLarge, color = palette.onAccent)
+    }
+}
+
+/** The dock's search half: a pill that turns into a live field when tapped. */
+@Composable
+private fun SearchPill(
+    active: Boolean,
+    value: String,
+    onChange: (String) -> Unit,
+    onActivate: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val palette = LocalDsh.current
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(active) {
+        if (active) runCatching { focusRequester.requestFocus() }
+    }
+    Row(
+        modifier
+            .height(50.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(palette.surface)
+            .clickable(enabled = !active, onClick = onActivate)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            Icons.Filled.Search,
+            contentDescription = "搜索会话",
+            tint = palette.textSecondary,
+            modifier = Modifier.size(19.dp),
+        )
+        if (active) {
+            BasicTextField(
+                value = value,
+                onValueChange = onChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.textPrimary),
+                cursorBrush = SolidColor(palette.accent),
+                decorationBox = { innerTextField ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (value.isEmpty()) {
+                            Text(
+                                "搜索会话",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = palette.textTertiary,
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+            Box(
+                Modifier
+                    .clip(CircleShape)
+                    .clickable { onClose() }
+                    .padding(2.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "清除搜索",
+                    tint = palette.textSecondary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        } else {
+            Text(
+                "搜索会话",
+                style = MaterialTheme.typography.bodyLarge,
+                color = palette.textTertiary,
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
@@ -149,16 +342,6 @@ private fun groupSessions(sessions: List<SessionSummary>): List<SessionGroup> {
     return byLabel.map { (label, list) -> SessionGroup(label, list) }
 }
 
-@Composable
-private fun GroupHeader(label: String) {
-    Text(
-        label,
-        style = MaterialTheme.typography.bodySmall,
-        color = LocalDsh.current.textTertiary,
-        modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 6.dp),
-    )
-}
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SessionRow(session: SessionSummary, onClick: () -> Unit, onLongClick: () -> Unit) {
@@ -166,71 +349,23 @@ private fun SessionRow(session: SessionSummary, onClick: () -> Unit, onLongClick
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 1.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 12.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(
-                session.title,
-                style = MaterialTheme.typography.titleSmall,
-                color = palette.textPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    Wire.timeText(session.updatedAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.textTertiary,
-                )
-                if (session.running) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Box(Modifier.size(6.dp).clip(CircleShape).background(palette.brand))
-                        Text("正在生成", style = MaterialTheme.typography.labelSmall, color = palette.brand)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SearchField(value: String, onValueChange: (String) -> Unit) {
-    val palette = LocalDsh.current
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .padding(horizontal = 6.dp, vertical = 1.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(palette.layer2)
-            .padding(horizontal = 12.dp, vertical = 9.dp),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 14.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        Icon(
-            Icons.Filled.Search,
-            contentDescription = null,
-            tint = palette.textTertiary,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(8.dp))
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
+        if (session.running) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
+        }
+        Text(
+            session.title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = palette.textPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
-            singleLine = true,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = palette.textPrimary),
-            cursorBrush = SolidColor(palette.brand),
-            decorationBox = { innerTextField ->
-                Box(contentAlignment = Alignment.CenterStart) {
-                    if (value.isEmpty()) {
-                        Text("搜索历史会话…", style = MaterialTheme.typography.bodyMedium, color = palette.textCaption)
-                    }
-                    innerTextField()
-                }
-            },
         )
     }
 }
@@ -241,26 +376,31 @@ fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> 
     var text by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        containerColor = palette.bg,
+        shape = RoundedCornerShape(24.dp),
+        containerColor = palette.surface,
         title = { Text("重命名会话", color = palette.textPrimary) },
         text = {
-            OutlinedTextField(
+            BasicTextField(
                 value = text,
                 onValueChange = { text = it },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.textPrimary),
+                cursorBrush = SolidColor(palette.accent),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(palette.surfaceHi)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
             )
         },
         confirmButton = {
             TextButton(onClick = {
                 if (text.isNotBlank()) onConfirm(text.trim())
                 else onDismiss()
-            }) { Text("保存") }
+            }) { Text("保存", color = palette.textPrimary) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text("取消", color = palette.textSecondary) }
         },
     )
 }
