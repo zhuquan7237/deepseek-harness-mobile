@@ -82,12 +82,28 @@ class EndToEndTest {
 
     private fun isOnSessionsScreen(): Boolean = anyText("个会话", substring = true)
 
+    private fun revokeByName(name: String) {
+        val state = http("GET", "/mobile-local/state")
+        val devices = state.optJSONArray("devices") ?: return
+        for (i in 0 until devices.length()) {
+            val device = devices.optJSONObject(i) ?: continue
+            if (device.optString("name") == name) {
+                http("DELETE", "/mobile-local/devices/" + device.optString("id"))
+            }
+        }
+    }
+
     /** Bring the app to a paired sessions screen, whatever state it is in. */
     private fun pairThroughUi() {
         val code = http("POST", "/mobile-local/rotate").optString("code")
         check(code.isNotBlank()) { "desktop did not hand out a pairing code" }
 
-        composeRule.waitUntil(40_000) { isOnPairingScreen() || isOnSessionsScreen() }
+        composeRule.waitUntil(40_000) { isOnPairingScreen() || isOnSessionsScreen() || anyContent("返回") }
+        // A previous test may leave the app on a chat or the settings screen.
+        if (anyContent("返回")) {
+            composeRule.onAllNodesWithContentDescription("返回")[0].performClick()
+            composeRule.waitUntil(15_000) { isOnSessionsScreen() || isOnPairingScreen() }
+        }
         // Let the app settle: a stale (revoked) token flips to pairing by itself.
         composeRule.waitUntil(30_000) { isOnPairingScreen() || anyText("已连接", substring = true) }
         if (!isOnPairingScreen()) {
@@ -158,18 +174,25 @@ class EndToEndTest {
         composeRule.waitUntil(120_000) { anyText("已连接", substring = true) }
     }
 
+    @Test
+    fun revokedTokenSelfHealsToPairing() {
+        pairThroughUi()
+        composeRule.waitUntil(30_000) { anyText("已连接", substring = true) }
+
+        // The desktop revokes this device. A live socket survives revocation
+        // (auth happens at upgrade), so force a reconnect with a network drop;
+        // the 401 at upgrade must flip the app back to the pairing screen
+        // instead of retrying forever.
+        revokeByName("emulator-e2e")
+        shell("cmd connectivity airplane-mode enable")
+        composeRule.waitUntil(90_000) { anyText("重连中", substring = true) || isOnPairingScreen() }
+        shell("cmd connectivity airplane-mode disable")
+        composeRule.waitUntil(120_000) { isOnPairingScreen() }
+    }
+
     /** Clean up the desktop-side binding this run created, by name. */
     @After
     fun revokeEmulatorDevice() {
-        runCatching {
-            val state = http("GET", "/mobile-local/state")
-            val devices = state.optJSONArray("devices") ?: return@runCatching
-            for (i in 0 until devices.length()) {
-                val device = devices.optJSONObject(i) ?: continue
-                if (device.optString("name") == "emulator-e2e") {
-                    http("DELETE", "/mobile-local/devices/" + device.optString("id"))
-                }
-            }
-        }
+        runCatching { revokeByName("emulator-e2e") }
     }
 }

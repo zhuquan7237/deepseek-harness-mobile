@@ -49,6 +49,7 @@ class BridgeRepository(context: Context) {
 
     init {
         stream.onFrame = { frame -> handleFrame(frame) }
+        stream.onUnauthorized = { handleUnauthorized() }
         stream.onState = { connected ->
             val was = _state.value.connected
             if (was != connected) _state.update { it.copy(connected = connected) }
@@ -198,12 +199,7 @@ class BridgeRepository(context: Context) {
             true
         } catch (error: BridgeException) {
             if (error.code == "E_UNAUTHORIZED") {
-                val theme = _state.value.theme
-                val base = _state.value.base
-                stream.stop()
-                store.clearBinding()
-                _state.update { AppState(ready = true, theme = theme, base = base, view = View.PAIRING) }
-                toast("令牌已失效，请重新配对")
+                handleUnauthorized()
             } else if (!quiet) {
                 toast(error.message)
             }
@@ -518,13 +514,21 @@ class BridgeRepository(context: Context) {
 
     private fun handleApiError(error: BridgeException, fallback: String) {
         if (error.code == "E_UNAUTHORIZED") {
-            val theme = _state.value.theme
-            stream.stop()
-            scope.launch { store.clearBinding() }
-            _state.update { AppState(ready = true, theme = theme, base = it.base, view = View.PAIRING) }
-            toast("令牌已失效，请重新配对")
+            handleUnauthorized()
         } else {
             toast(error.message.ifBlank { fallback })
+        }
+    }
+
+    /** The token no longer works anywhere: forget the binding, go pair again. */
+    private fun handleUnauthorized() {
+        stream.stop()
+        scope.launch {
+            val base = _state.value.base
+            val theme = _state.value.theme
+            store.clearBinding()
+            _state.update { AppState(ready = true, theme = theme, base = base, view = View.PAIRING) }
+            toast("令牌已失效，请重新配对")
         }
     }
 }

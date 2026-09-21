@@ -40,6 +40,10 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
     var onFrame: ((JSONObject) -> Unit)? = null
     var onState: ((Boolean) -> Unit)? = null
 
+    /** The token was refused at upgrade time (revoked on the desktop); retrying
+     *  can only fail, so the owner gets told instead of us looping forever. */
+    var onUnauthorized: (() -> Unit)? = null
+
     /** The highest event seq this device has processed; asked on every open. */
     var lastSeq: () -> Long = { 0L }
 
@@ -91,6 +95,11 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (response?.code == 401 && generationAtOpen == generation && !stopped) {
+                    stopInternal()
+                    onUnauthorized?.invoke()
+                    return
+                }
                 schedule(generationAtOpen)
             }
 
