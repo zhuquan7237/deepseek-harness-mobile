@@ -1,6 +1,14 @@
 package com.dsh.mobile.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -58,6 +66,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.contentDescription
@@ -72,6 +81,9 @@ import com.dsh.mobile.data.LiveBubble
 import com.dsh.mobile.data.Role
 import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.launch
+
+/** Material's push curve, reused for the popover's scale-in. */
+private val MenuEasing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
 
 /**
  * The chat screen mirrors the ChatGPT mobile conversation: back circle +
@@ -129,7 +141,19 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
         )
     }
 
-    if (showModels) {
+    AnimatedVisibility(
+        visible = showModels,
+        enter = fadeIn(tween(150)) + scaleIn(
+            animationSpec = tween(200, easing = MenuEasing),
+            initialScale = 0.92f,
+            transformOrigin = TransformOrigin(0f, 1f),
+        ),
+        exit = fadeOut(tween(120)) + scaleOut(
+            animationSpec = tween(140),
+            targetScale = 0.96f,
+            transformOrigin = TransformOrigin(0f, 1f),
+        ),
+    ) {
         Box(Modifier.fillMaxSize().imePadding()) {
             Box(
                 Modifier
@@ -217,11 +241,13 @@ private fun MessageList(
     ) {
         itemsIndexed(rows) { index, row ->
             val showActions = row.who == Role.ASSISTANT && index == rows.lastIndex && !state.running
-            MessageRow(row, showActions = showActions, onCopy = onCopy, onRegenerate = onRegenerate)
+            Box(Modifier.animateItem()) {
+                MessageRow(row, showActions = showActions, onCopy = onCopy, onRegenerate = onRegenerate)
+            }
         }
         if (live.isNotEmpty()) {
             itemsIndexed(live, key = { _, bubble -> "live:" + bubble.key }) { index, bubble ->
-                LiveRow(bubble, first = index == 0)
+                Box(Modifier.animateItem()) { LiveRow(bubble, first = index == 0) }
             }
         }
         if (rows.isEmpty() && live.isEmpty() && !state.historyLoading) {
@@ -422,10 +448,20 @@ private fun Composer(
                     enabled = true,
                 ) { repo.cancelTurn() }
             } else {
+                val sendBg by animateColorAsState(
+                    targetValue = if (draft.isNotBlank()) palette.accent else palette.surfaceHi,
+                    animationSpec = tween(200),
+                    label = "sendBg",
+                )
+                val sendTint by animateColorAsState(
+                    targetValue = if (draft.isNotBlank()) palette.onAccent else palette.textSecondary,
+                    animationSpec = tween(200),
+                    label = "sendTint",
+                )
                 CircleAction(
-                    background = if (draft.isNotBlank()) palette.accent else palette.surfaceHi,
+                    background = sendBg,
                     icon = Icons.Filled.ArrowUpward,
-                    tint = if (draft.isNotBlank()) palette.onAccent else palette.textSecondary,
+                    tint = sendTint,
                     contentDescription = "发送",
                     enabled = draft.isNotBlank() && !state.sending,
                 ) {

@@ -3,6 +3,14 @@ package com.dsh.mobile.ui
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,11 +24,37 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.View
 import com.dsh.mobile.ui.theme.DshTheme
 import com.dsh.mobile.ui.theme.LocalDsh
 
+/** Every screen the app can show; the depth decides the push direction. */
+private enum class Screen(val depth: Int) {
+    LOADING(0),
+    PAIRING(0),
+    SESSIONS(1),
+    CHAT(2),
+    SETTINGS(2),
+}
+
+private fun screenOf(state: AppState): Screen = when {
+    !state.ready -> Screen.LOADING
+    state.token == null -> Screen.PAIRING
+    state.view == View.SETTINGS -> Screen.SETTINGS
+    state.view == View.CHAT && state.sessionId != null -> Screen.CHAT
+    else -> Screen.SESSIONS
+}
+
+/** Material's own push curve: quick out of the gate, long gentle tail. */
+private val PushEasing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+
+/**
+ * Screen changes are pushes, not cuts: the incoming screen slides in the whole
+ * way while the outgoing one gives way by a third — the motion the mobile
+ * clients use. Pairing/loading cross-fade instead of sliding.
+ */
 @Composable
 fun AppRoot(repo: BridgeRepository) {
     val state by repo.state.collectAsStateWithLifecycle()
@@ -28,14 +62,47 @@ fun AppRoot(repo: BridgeRepository) {
         val palette = LocalDsh.current
         SystemBarTint(dark = palette.dark)
         Box(Modifier.fillMaxSize().background(palette.bg)) {
-            when {
-                !state.ready -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = palette.accent, strokeWidth = 2.dp)
+            AnimatedContent(
+                targetState = screenOf(state),
+                transitionSpec = {
+                    val crossFade = initialState == Screen.LOADING || targetState == Screen.LOADING ||
+                        initialState == Screen.PAIRING || targetState == Screen.PAIRING
+                    when {
+                        crossFade -> {
+                            fadeIn(tween(320, easing = PushEasing)) togetherWith fadeOut(tween(200))
+                        }
+                        targetState.depth > initialState.depth -> {
+                            (
+                                slideInHorizontally(tween(340, easing = PushEasing)) { it } +
+                                    fadeIn(tween(220, easing = PushEasing))
+                                ) togetherWith (
+                                slideOutHorizontally(tween(340, easing = PushEasing)) { -it / 3 } +
+                                    fadeOut(tween(180))
+                                )
+                        }
+                        else -> {
+                            (
+                                slideInHorizontally(tween(340, easing = PushEasing)) { -it / 3 } +
+                                    fadeIn(tween(220, easing = PushEasing))
+                                ) togetherWith (
+                                slideOutHorizontally(tween(340, easing = PushEasing)) { it } +
+                                    fadeOut(tween(180))
+                                )
+                        }
+                    }
+                },
+                label = "screen",
+                modifier = Modifier.fillMaxSize(),
+            ) { screen ->
+                when (screen) {
+                    Screen.LOADING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = palette.accent, strokeWidth = 2.dp)
+                    }
+                    Screen.PAIRING -> PairingScreen(state, repo)
+                    Screen.SETTINGS -> SettingsScreen(state, repo)
+                    Screen.CHAT -> ChatScreen(state, repo)
+                    Screen.SESSIONS -> SessionsScreen(state, repo)
                 }
-                state.token == null -> PairingScreen(state, repo)
-                state.view == View.SETTINGS -> SettingsScreen(state, repo)
-                state.view == View.CHAT && state.sessionId != null -> ChatScreen(state, repo)
-                else -> SessionsScreen(state, repo)
             }
             ToastHost(state.toast)
         }

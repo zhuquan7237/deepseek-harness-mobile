@@ -129,11 +129,13 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                                 SectionHeader(group.label, Modifier.padding(start = 20.dp))
                             }
                             items(group.sessions, key = { it.sessionId }) { session ->
-                                SessionRow(
-                                    session = session,
-                                    onClick = { repo.openSession(session.sessionId) },
-                                    onLongClick = { renameTarget = session },
-                                )
+                                Box(Modifier.animateItem()) {
+                                    SessionRow(
+                                        session = session,
+                                        onClick = { repo.openSession(session.sessionId) },
+                                        onLongClick = { renameTarget = session },
+                                    )
+                                }
                             }
                         }
                     }
