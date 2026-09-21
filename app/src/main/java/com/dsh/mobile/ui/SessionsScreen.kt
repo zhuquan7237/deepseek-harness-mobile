@@ -54,6 +54,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -98,10 +100,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                     append(" 个会话")
                 },
                 online = state.connected,
-                modifier = Modifier.weight(1f, fill = false),
             )
-            Spacer(Modifier.weight(1f))
-            CircleButton(Icons.Filled.Add, "新建会话") { repo.createSession() }
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -231,6 +230,7 @@ private fun PrimaryCta(
             .clip(RoundedCornerShape(999.dp))
             .background(palette.accent)
             .clickable(onClick = onClick)
+            .semantics { contentDescription = "新建会话" }
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
