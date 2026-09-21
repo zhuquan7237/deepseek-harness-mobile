@@ -89,20 +89,64 @@ object Wire {
 
     data class HistoryParse(val rows: List<ChatRow>, val running: Boolean)
 
+    /** One content block inside an assistant/user message. */
+    private data class Part(
+        val type: String,
+        val text: String = "",
+        val name: String = "",
+        val callId: String = "",
+        val args: String = "",
+    )
+
+    /** Content blocks of a message-ish node, tolerating string-only content. */
+    private fun partsOf(node: JSONObject): List<Part> {
+        val content = node.optJSONArray("content")
+        if (content == null) {
+            val text = extractText(node)
+            return if (text.isBlank()) emptyList() else listOf(Part("text", text = text))
+        }
+        val out = ArrayList<Part>(content.length())
+        for (i in 0 until content.length()) {
+            val part = content.optJSONObject(i) ?: continue
+            out.add(
+                Part(
+                    type = part.optString("type"),
+                    text = part.optString("text"),
+                    name = part.optString("name"),
+                    callId = part.optString("id").ifEmpty { part.optString("callId") },
+                    args = decodeArgs(part.optString("arguments")),
+                )
+            )
+        }
+        return out
+    }
+
     /** Turn the history page into display rows plus a running guess: the last
-     *  turn-ish event wins (start without a later end = in flight). */
+     *  turn-ish event wins (start without a later end = in flight).
+     *
+     *  Assistant turns carry three kinds of blocks — reasoning, the answer, and
+     *  tool calls. The phone renders them as separate rows: the thinking folds
+     *  away, the answer is the message, and a tool call names the tool so a
+     *  runaway tool loop cannot bury the conversation. */
     fun parseHistory(json: JSONObject): HistoryParse {
         val items = json.optJSONArray("items") ?: JSONArray()
         val rows = ArrayList<ChatRow>()
         var lastTurn: String? = null
+        var stepStart = 0L
+        val seenCalls = HashSet<String>()
         for (i in 0 until items.length()) {
             val item = items.optJSONObject(i) ?: continue
             val event = item.optJSONObject("event") ?: item
             val type = event.optString("type")
             val data = event.optJSONObject("data") ?: JSONObject()
+            val time = millis(event.optLong("time", 0L))
             when (type) {
-                "turn/start" -> lastTurn = "start"
+                "turn/start" -> {
+                    lastTurn = "start"
+                    stepStart = time
+                }
                 "turn/end" -> lastTurn = "end"
+                "step/start" -> stepStart = time
                 "user/message" -> {
                     val text = extractText(data)
                     // The engine injects runtime context and skill reminders as
@@ -111,14 +155,130 @@ object Wire {
                     if (text.isNotBlank() && !isInjectedContext(text)) rows.add(ChatRow(Role.USER, text))
                 }
                 "assistant/message" -> {
-                    val text = extractText(data.opt("message") ?: data)
-                    if (text.isNotBlank()) rows.add(ChatRow(Role.ASSISTANT, text))
+                    val msg = data.optJSONObject("message") ?: data
+                    val parts = partsOf(msg)
+                    val reasoning = parts.filter { it.type == "reasoning" }
+                        .joinToString("\n\n") { it.text }.trim()
+                    val answer = parts.filter { it.type == "text" }
+                        .joinToString("\n\n") { it.text }.trim()
+                    if (reasoning.isNotEmpty()) {
+                        val seconds = if (stepStart > 0 && time > stepStart) (time - stepStart) / 1000 else 0L
+                        rows.add(ChatRow(Role.REASONING, reasoning, if (seconds > 0) "思考 $seconds 秒" else "思考过程"))
+                    }
+                    if (answer.isNotEmpty()) rows.add(ChatRow(Role.ASSISTANT, answer))
+                    // Tool calls can arrive inside the message or as their own
+                    // event; whichever shows up first wins, the other is skipped.
+                    for (call in parts.filter { it.type == "tool-call" }) {
+                        if (call.callId.isNotEmpty() && !seenCalls.add(call.callId)) continue
+                        val name = call.name.ifEmpty { "工具" }
+                        rows.add(ChatRow(Role.TOOL, "调用 $name", hint(call.args), call.args))
+                    }
                 }
-                "tool/call" -> rows.add(ChatRow(Role.TOOL, "调用工具 " + data.optString("name")))
-                "tool/result" -> rows.add(ChatRow(Role.TOOL, "工具返回" + if (data.optBoolean("isError", false)) "（失败）" else ""))
+                "tool/call" -> {
+                    val callId = data.optString("callId").ifEmpty { data.optString("id") }
+                    if (callId.isEmpty() || seenCalls.add(callId)) {
+                        val name = data.optString("name").ifEmpty { "工具" }
+                        val args = decodeArgs(data.optString("arguments"))
+                        rows.add(ChatRow(Role.TOOL, "调用 $name", hint(args), args))
+                    }
+                }
+                "tool/result" -> {
+                    val msg = data.optJSONObject("message") ?: data
+                    val text = extractText(msg)
+                    rows.add(
+                        ChatRow(
+                            who = Role.TOOL,
+                            text = if (isFailedResult(data)) "返回失败" else "工具返回",
+                            detail = hint(text, 100),
+                            raw = text,
+                        )
+                    )
+                }
             }
         }
         return HistoryParse(rows, lastTurn == "start")
+    }
+
+    /** First meaningful line of a payload, short enough for a meta row. */
+    fun hint(text: String, limit: Int = 80): String {
+        val line = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        return if (line.length > limit) line.take(limit - 1) + "…" else line
+    }
+
+    /**
+     * Did the tool fail? The flag sits on the tool-result block inside the
+     * message, sometimes on the event itself — read both instead of scanning the
+     * serialized text, which changes spacing between engine builds.
+     */
+    fun isFailedResult(data: JSONObject): Boolean {
+        if (data.optBoolean("isError", false)) return true
+        val containers = listOfNotNull(data, data.optJSONObject("message"))
+        for (container in containers) {
+            if (container.optBoolean("isError", false)) return true
+            val content = container.optJSONArray("content") ?: continue
+            for (i in 0 until content.length()) {
+                val part = content.optJSONObject(i) ?: continue
+                if (part.optBoolean("isError", false)) return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Tool arguments arrive as a JSON string of a JSON object; the markup we
+     * want to preview hides inside it with escaped newlines. Decode to the real
+     * text so the SVG/HTML extractor sees well-formed markup.
+     */
+    fun decodeArgs(raw: String): String {
+        if (raw.isBlank()) return ""
+        val obj = try {
+            JSONObject(raw)
+        } catch (_: Exception) {
+            return unescape(raw)
+        }
+        val out = StringBuilder()
+        collectStrings(obj, out)
+        return if (out.isEmpty()) raw else out.toString()
+    }
+
+    private fun collectStrings(node: Any?, out: StringBuilder) {
+        when (node) {
+            null, JSONObject.NULL -> Unit
+            is String -> {
+                if (out.isNotEmpty()) out.append('\n')
+                out.append(node)
+            }
+            is JSONArray -> for (i in 0 until node.length()) collectStrings(node.opt(i), out)
+            is JSONObject -> {
+                val keys = node.keys()
+                while (keys.hasNext()) collectStrings(node.opt(keys.next()), out)
+            }
+        }
+    }
+
+    private fun unescape(raw: String): String =
+        raw.replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"").replace("\\\\", "\\")
+
+    /** A drawing the app can render itself. */
+    data class Artifact(val kind: String, val markup: String)
+
+    private val fenceRe = Regex("```(svg|html)\\s*\\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+    private val svgRe = Regex("<svg[\\s\\S]*?</svg>", RegexOption.IGNORE_CASE)
+    private val htmlRe = Regex("<!doctype html[\\s\\S]*?</html>|<html[\\s\\S]*?</html>", RegexOption.IGNORE_CASE)
+
+    /**
+     * Pull renderable markup out of a message or tool payload. Fenced blocks win
+     * (they are explicit), then a standalone `<svg>`, then a whole HTML document.
+     */
+    fun findArtifact(text: String): Artifact? {
+        if (text.isBlank()) return null
+        fenceRe.find(text)?.let {
+            val kind = it.groupValues[1].lowercase()
+            return Artifact(kind, it.groupValues[2].trim())
+        }
+        svgRe.find(text)?.let { return Artifact("svg", it.value.trim()) }
+        htmlRe.find(text)?.let { return Artifact("html", it.value.trim()) }
+        return null
     }
 
     /** Engine-injected context that rides in on the user role. */
@@ -171,6 +331,20 @@ object Wire {
             }
         }
         return ""
+    }
+
+    /**
+     * What a streaming chunk carries: an adapter may stream its thinking before
+     * the answer, and the phone must not paste that into the reply bubble.
+     */
+    fun chunkIsReasoning(data: JSONObject?): Boolean {
+        val chunk = data?.opt("chunk")
+        if (chunk is JSONObject) {
+            if (chunk.optString("type") == "reasoning") return true
+            val delta = chunk.optJSONObject("delta")
+            if (delta != null && delta.optString("type") == "reasoning") return true
+        }
+        return false
     }
 
     fun parseModelDoc(doc: JSONObject): ModelDoc {

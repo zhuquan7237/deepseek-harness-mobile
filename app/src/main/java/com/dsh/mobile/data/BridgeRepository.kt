@@ -466,21 +466,27 @@ class BridgeRepository(context: Context) {
         if (sid.isNotEmpty() && sid != s.sessionId) return
         val data = frame.optJSONObject("data") ?: JSONObject()
         when (frame.optString("type")) {
-            "turn/start" -> _state.update { it.copy(running = true, live = emptyList()) }
-            "turn/end" -> _state.update { it.copy(running = false, live = emptyList()) }
+            "turn/start" -> _state.update { it.copy(running = true, live = emptyList(), thinking = false) }
+            "turn/end" -> _state.update { it.copy(running = false, live = emptyList(), thinking = false) }
             "assistant/chunk" -> {
-                val text = Wire.chunkText(data)
-                if (text.isNotEmpty()) {
-                    val key = "${data.opt("turn") ?: 0}:${data.opt("step") ?: 0}"
-                    _state.update { current ->
-                        val live = current.live.toMutableList()
-                        val index = live.indexOfFirst { it.key == key }
-                        if (index >= 0) {
-                            live[index] = live[index].copy(text = live[index].text + text)
-                        } else {
-                            live.add(LiveBubble(key, text))
+                // A streaming adapter may send thinking first; it belongs in the
+                // running indicator, never inside the reply bubble.
+                if (Wire.chunkIsReasoning(data)) {
+                    if (!_state.value.thinking) _state.update { it.copy(thinking = true) }
+                } else {
+                    val text = Wire.chunkText(data)
+                    if (text.isNotEmpty()) {
+                        val key = "${data.opt("turn") ?: 0}:${data.opt("step") ?: 0}"
+                        _state.update { current ->
+                            val live = current.live.toMutableList()
+                            val index = live.indexOfFirst { it.key == key }
+                            if (index >= 0) {
+                                live[index] = live[index].copy(text = live[index].text + text)
+                            } else {
+                                live.add(LiveBubble(key, text))
+                            }
+                            current.copy(live = live, thinking = false)
                         }
-                        current.copy(live = live)
                     }
                 }
             }

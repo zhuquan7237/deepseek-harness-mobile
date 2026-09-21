@@ -4,7 +4,7 @@ package com.dsh.mobile.data
 enum class View { PAIRING, SESSIONS, CHAT, SETTINGS }
 
 /** Who said a message in the conversation log. */
-enum class Role { USER, ASSISTANT, TOOL }
+enum class Role { USER, ASSISTANT, TOOL, REASONING }
 
 data class DeviceInfo(
     val id: String = "",
@@ -29,7 +29,17 @@ data class SessionSummary(
     val cwd: String,
 )
 
-data class ChatRow(val who: Role, val text: String)
+/**
+ * One display row. [detail] is the small meta line (tool name, result snippet,
+ * "思考 N 秒"); [raw] keeps the full payload so previews can pull markup out of
+ * tool arguments and results without re-reading history.
+ */
+data class ChatRow(
+    val who: Role,
+    val text: String,
+    val detail: String = "",
+    val raw: String = "",
+)
 
 /** One in-flight assistant bubble, keyed by `turn:step`. */
 data class LiveBubble(val key: String, val text: String)
@@ -74,6 +84,7 @@ data class AppState(
     val history: List<ChatRow> = emptyList(),
     val live: List<LiveBubble> = emptyList(),
     val running: Boolean = false,
+    val thinking: Boolean = false,
     val sending: Boolean = false,
     val historyLoading: Boolean = false,
     // models

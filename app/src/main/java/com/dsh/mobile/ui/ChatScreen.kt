@@ -1,5 +1,6 @@
 package com.dsh.mobile.ui
 
+import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,16 +36,23 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
@@ -57,6 +66,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -74,11 +85,14 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.ChatRow
 import com.dsh.mobile.data.LiveBubble
 import com.dsh.mobile.data.Role
+import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.launch
 
@@ -100,6 +114,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
     var showActions by remember { mutableStateOf(false) }
     var showModels by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
+    var preview by remember { mutableStateOf<Wire.Artifact?>(null) }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -129,6 +144,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
                 repo.toast("已复制")
             },
             onRegenerate = { repo.regenerate() },
+            onPreview = { preview = it },
             modifier = Modifier.weight(1f),
         )
         Composer(
@@ -221,6 +237,17 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             },
         )
     }
+
+    preview?.let { artifact ->
+        PreviewSheet(
+            artifact = artifact,
+            onDismiss = { preview = null },
+            onCopy = {
+                clipboard.setText(AnnotatedString(artifact.markup))
+                repo.toast("源码已复制")
+            },
+        )
+    }
 }
 
 @Composable
@@ -228,6 +255,7 @@ private fun MessageList(
     state: AppState,
     onCopy: (String) -> Unit,
     onRegenerate: () -> Unit,
+    onPreview: (Wire.Artifact) -> Unit,
     modifier: Modifier,
 ) {
     val palette = LocalDsh.current
@@ -242,12 +270,36 @@ private fun MessageList(
         itemsIndexed(rows) { index, row ->
             val showActions = row.who == Role.ASSISTANT && index == rows.lastIndex && !state.running
             Box(Modifier.animateItem()) {
-                MessageRow(row, showActions = showActions, onCopy = onCopy, onRegenerate = onRegenerate)
+                MessageRow(
+                    row = row,
+                    showActions = showActions,
+                    onCopy = onCopy,
+                    onRegenerate = onRegenerate,
+                    onPreview = onPreview,
+                )
             }
         }
         if (live.isNotEmpty()) {
             itemsIndexed(live, key = { _, bubble -> "live:" + bubble.key }) { index, bubble ->
                 Box(Modifier.animateItem()) { LiveRow(bubble, first = index == 0) }
+            }
+        }
+        if (state.thinking && live.isEmpty()) {
+            item(key = "thinking") {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
+                    Text(
+                        "正在思考…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary,
+                    )
+                }
             }
         }
         if (rows.isEmpty() && live.isEmpty() && !state.historyLoading) {
@@ -291,6 +343,7 @@ private fun MessageRow(
     showActions: Boolean = false,
     onCopy: (String) -> Unit = {},
     onRegenerate: () -> Unit = {},
+    onPreview: (Wire.Artifact) -> Unit = {},
 ) {
     val palette = LocalDsh.current
     when (row.who) {
@@ -320,6 +373,7 @@ private fun MessageRow(
                 }
             }
         }
+        Role.REASONING -> ReasoningRow(row)
         Role.ASSISTANT -> SpeakerSemantics {
             Column(
                 Modifier
@@ -327,6 +381,11 @@ private fun MessageRow(
                     .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
             ) {
                 Text(row.text, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
+                val artifact = remember(row.text) { Wire.findArtifact(row.text) }
+                if (artifact != null) {
+                    Spacer(Modifier.height(10.dp))
+                    PreviewChip(artifact.kind) { onPreview(artifact) }
+                }
                 if (showActions) {
                     Spacer(Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -336,19 +395,140 @@ private fun MessageRow(
                 }
             }
         }
-        Role.TOOL -> Row(
+        Role.TOOL -> ToolRow(row, onPreview)
+    }
+}
+
+/**
+ * The engine hands the phone its thinking as a content block. On a desktop that
+ * is a side panel; here it is folded into one quiet line — tap to read — so a
+ * long reasoning chain cannot bury the answer.
+ */
+@Composable
+private fun ReasoningRow(row: ChatRow) {
+    val palette = LocalDsh.current
+    var open by remember(row.text) { mutableStateOf(false) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 2.dp),
+    ) {
+        Row(
             Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 2.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { open = !open }
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            Icon(
+                Icons.Filled.AutoAwesome,
+                contentDescription = null,
+                tint = palette.textTertiary,
+                modifier = Modifier.size(14.dp),
+            )
             Text(
-                row.text,
-                style = MaterialTheme.typography.bodySmall,
+                row.detail.ifBlank { "思考过程" },
+                style = MaterialTheme.typography.labelMedium,
                 color = palette.textSecondary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+            )
+            Icon(
+                if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (open) "收起思考过程" else "展开思考过程",
+                tint = palette.textTertiary,
+                modifier = Modifier.size(18.dp),
             )
         }
+        AnimatedVisibility(visible = open) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 8.dp, top = 4.dp, bottom = 6.dp, end = 0.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(palette.surfaceHi)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                Text(
+                    row.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.textSecondary,
+                    lineHeight = 20.sp,
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Tool traffic is context, not conversation: one dim line per call, with the
+ * first line of the arguments as a hint. When the payload carries a drawing the
+ * row offers a preview instead of a wall of markup.
+ */
+@Composable
+private fun ToolRow(row: ChatRow, onPreview: (Wire.Artifact) -> Unit) {
+    val palette = LocalDsh.current
+    val artifact = remember(row.raw) { Wire.findArtifact(row.raw) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 3.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            Icons.Filled.Build,
+            contentDescription = null,
+            tint = palette.textTertiary,
+            modifier = Modifier.size(13.dp),
+        )
+        Text(
+            row.text,
+            style = MaterialTheme.typography.bodySmall,
+            color = palette.textSecondary,
+            maxLines = 1,
+        )
+        Text(
+            row.detail,
+            style = MaterialTheme.typography.bodySmall,
+            color = palette.textTertiary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        if (artifact != null) {
+            Spacer(Modifier.width(4.dp))
+            PreviewChip(artifact.kind) { onPreview(artifact) }
+        }
+    }
+}
+
+/** Opens the drawing/HTML the agent just produced, rendered for real. */
+@Composable
+private fun PreviewChip(kind: String, onClick: () -> Unit) {
+    val palette = LocalDsh.current
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(9.dp))
+            .background(palette.accent.copy(alpha = 0.12f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(
+            Icons.Filled.Image,
+            contentDescription = null,
+            tint = palette.accent,
+            modifier = Modifier.size(13.dp),
+        )
+        Text(
+            if (kind == "svg") "预览图形" else "预览网页",
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.accent,
+        )
     }
 }
 
@@ -365,6 +545,94 @@ private fun MessageAction(icon: ImageVector, label: String, onClick: () -> Unit)
     ) {
         Icon(icon, contentDescription = label, tint = palette.textSecondary, modifier = Modifier.size(20.dp))
     }
+}
+
+/**
+ * Renders what the agent drew: SVG is wrapped in a page that scales it to the
+ * sheet, HTML runs as a page. The WebView gets no JS bridge and no file access,
+ * so markup produced by the agent cannot reach the device.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PreviewSheet(artifact: Wire.Artifact, onDismiss: () -> Unit, onCopy: () -> Unit) {
+    val palette = LocalDsh.current
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = palette.surface,
+        dragHandle = { SheetHandle() },
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .navigationBarsPadding(),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (artifact.kind == "svg") "图形预览" else "网页预览",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = palette.textPrimary,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "复制源码",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = palette.accent,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onCopy)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(420.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(
+                        1.dp,
+                        palette.textSecondary.copy(alpha = 0.15f),
+                        RoundedCornerShape(14.dp),
+                    )
+                    .background(Color.White),
+            ) {
+                key(artifact.markup) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { context ->
+                            WebView(context).apply {
+                                settings.javaScriptEnabled = artifact.kind == "html"
+                                settings.domStorageEnabled = true
+                                settings.allowFileAccess = false
+                                settings.allowContentAccess = false
+                                settings.loadWithOverviewMode = true
+                                settings.useWideViewPort = true
+                                setBackgroundColor(android.graphics.Color.WHITE)
+                                loadDataWithBaseURL(
+                                    null,
+                                    artifactPage(artifact),
+                                    "text/html",
+                                    "utf-8",
+                                    null,
+                                )
+                            }
+                        },
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+/** SVG needs a page around it before a WebView will scale it to the sheet. */
+private fun artifactPage(artifact: Wire.Artifact): String = if (artifact.kind != "svg") {
+    artifact.markup
+} else {
+    """<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{margin:0;padding:12px;background:#ffffff;}
+svg{max-width:100%;height:auto;display:block;margin:0 auto;}</style></head><body>${artifact.markup}</body></html>"""
 }
 
 @Composable
