@@ -139,7 +139,9 @@ class EndToEndTest {
         composeRule.onAllNodes(hasSetTextAction())[0].performTextInput("P1 mobile e2e: reply with exactly: pong")
         composeRule.onAllNodesWithContentDescription("发送")[0].performClick()
         composeRule.waitUntil(20_000) { anyText("P1 mobile e2e", substring = true) }
-        composeRule.waitUntil(150_000) { anyText("电脑端", substring = true) }
+        // A real desktop turn happens: an assistant row lands (its semantics
+        // mark the speaker even though the design shows no visible label).
+        composeRule.waitUntil(150_000) { anyContent("电脑端") }
         composeRule.waitUntil(150_000) { !anyContent("停止生成") }
 
         // Stop path: start another turn and cancel it.

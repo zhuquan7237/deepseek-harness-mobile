@@ -22,7 +22,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,7 +43,10 @@ import com.dsh.mobile.data.ToastMsg
 import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.delay
 
-/** Top bar shared by every screen: back arrow, title + status subtitle, actions. */
+/**
+ * Top bar: a quiet strip with ghost icon buttons and one hairline under it,
+ * matching the current desktop clients.
+ */
 @Composable
 fun DshTopBar(
     title: String,
@@ -50,28 +55,25 @@ fun DshTopBar(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val palette = LocalDsh.current
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(palette.bg)
-    ) {
+    Column(Modifier.fillMaxWidth().background(palette.bg)) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 4.dp, vertical = 4.dp)
+                .height(48.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onBack != null) {
                 DshIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, label = "返回", onClick = onBack)
                 Spacer(Modifier.width(2.dp))
             } else {
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
             }
             Column(Modifier.weight(1f)) {
                 Text(
                     title,
-                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleMedium,
                     color = palette.textPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -79,7 +81,7 @@ fun DshTopBar(
                 if (!subtitle.isNullOrBlank()) {
                     Text(
                         subtitle,
-                        style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall,
                         color = palette.textTertiary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -87,23 +89,24 @@ fun DshTopBar(
                 }
             }
             actions()
+            Spacer(Modifier.width(4.dp))
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(palette.borderL1))
+        HorizontalDivider(color = palette.borderL1, thickness = 1.dp)
     }
 }
 
+/** Ghost icon button: transparent circle, secondary tint — no grey block. */
 @Composable
 fun DshIconButton(icon: ImageVector, label: String, onClick: () -> Unit) {
     val palette = LocalDsh.current
     Box(
         Modifier
-            .size(34.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(palette.layer2)
+            .size(38.dp)
+            .clip(CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = palette.textPrimary, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = label, tint = palette.textSecondary, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -119,20 +122,21 @@ fun StatusDot(connected: Boolean) {
     )
 }
 
+/** Tiny outlined pill for statuses like 正在生成. */
 @Composable
 fun Pill(text: String, color: Color) {
     Text(
         text,
-        style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+        style = MaterialTheme.typography.labelSmall,
         color = color,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .border(1.dp, color.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 7.dp, vertical = 1.dp),
+            .border(1.dp, color.copy(alpha = 0.4f), RoundedCornerShape(999.dp))
+            .padding(horizontal = 8.dp, vertical = 1.dp),
     )
 }
 
-/** The app's toast: bottom-centered, auto-dismissing. */
+/** The app's toast: a small dark pill above the composer. */
 @Composable
 fun ToastHost(toast: ToastMsg?) {
     val palette = LocalDsh.current
@@ -147,21 +151,17 @@ fun ToastHost(toast: ToastMsg?) {
         }
     }
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
-        AnimatedVisibility(
-            visible = visible && toast != null,
-            enter = fadeIn(),
-            exit = fadeOut(),
-        ) {
+        AnimatedVisibility(visible = visible && toast != null, enter = fadeIn(), exit = fadeOut()) {
             Box(
                 Modifier
-                    .padding(bottom = 96.dp, start = 24.dp, end = 24.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .padding(bottom = 104.dp, start = 32.dp, end = 32.dp)
+                    .clip(RoundedCornerShape(14.dp))
                     .background(palette.toastBg)
                     .padding(horizontal = 14.dp, vertical = 9.dp),
             ) {
                 Text(
                     toast?.message.orEmpty(),
-                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall,
                     color = Color.White,
                 )
             }
@@ -169,7 +169,7 @@ fun ToastHost(toast: ToastMsg?) {
     }
 }
 
-/** A quiet full-width menu row used inside the action sheet. */
+/** A plain menu row for bottom sheets: no borders, subtle press fill. */
 @Composable
 fun SheetAction(text: String, caption: String? = null, danger: Boolean = false, onClick: () -> Unit) {
     val palette = LocalDsh.current
@@ -183,15 +183,21 @@ fun SheetAction(text: String, caption: String? = null, danger: Boolean = false, 
     ) {
         Text(
             text,
-            style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyLarge,
             color = if (danger) palette.error else palette.textPrimary,
         )
         if (!caption.isNullOrBlank()) {
             Text(
                 caption,
-                style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall,
                 color = palette.textTertiary,
             )
         }
     }
+}
+
+/** A hairline separator between settings rows / list sections. */
+@Composable
+fun DshDivider(modifier: Modifier = Modifier) {
+    HorizontalDivider(modifier = modifier, color = LocalDsh.current.borderL1, thickness = 1.dp)
 }

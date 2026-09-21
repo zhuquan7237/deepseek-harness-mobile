@@ -19,13 +19,16 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
@@ -34,8 +37,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,8 +48,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dsh.mobile.data.AppState
@@ -63,6 +69,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(state: AppState, repo: BridgeRepository) {
     val palette = LocalDsh.current
+    val clipboard = LocalClipboardManager.current
     BackHandler { repo.closeSession() }
     var showActions by remember { mutableStateOf(false) }
     var showModels by remember { mutableStateOf(false) }
@@ -72,17 +79,25 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
         DshTopBar(
             title = state.sessionTitle.ifEmpty { "会话" },
             subtitle = buildString {
-                append(if (state.connected) "已连接" else "重连中…")
-                if (state.running) append(" · 正在生成")
-                val dir = state.sessionCwd.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\')
-                if (dir.isNotBlank()) append(" · ").append(dir)
+                if (!state.connected) append("重连中…")
+                if (state.running) {
+                    if (isNotEmpty()) append(" · ")
+                    append("正在生成")
+                }
             },
             onBack = { repo.closeSession() },
             actions = {
                 DshIconButton(Icons.Filled.MoreVert, "更多") { showActions = true }
             },
         )
-        MessageList(state, Modifier.weight(1f))
+        MessageList(
+            state = state,
+            onCopy = { text ->
+                clipboard.setText(AnnotatedString(text))
+                repo.toast("已复制")
+            },
+            modifier = Modifier.weight(1f),
+        )
         Composer(state, repo)
     }
 
@@ -92,12 +107,6 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             containerColor = palette.bg,
         ) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).navigationBarsPadding()) {
-                Text(
-                    "这个会话的动作",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = palette.textSecondary,
-                    modifier = Modifier.padding(start = 14.dp, top = 4.dp, bottom = 6.dp),
-                )
                 SheetAction("停止生成", caption = "让电脑端停下当前回合") {
                     showActions = false
                     repo.cancelTurn()
@@ -145,43 +154,39 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
 }
 
 @Composable
-private fun MessageList(state: AppState, modifier: Modifier) {
+private fun MessageList(state: AppState, onCopy: (String) -> Unit, modifier: Modifier) {
+    val palette = LocalDsh.current
     val listState = rememberLazyListState()
     val rows = state.history
     val live = state.live
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(vertical = 8.dp),
+        contentPadding = PaddingValues(top = 6.dp, bottom = 10.dp),
     ) {
-        itemsIndexed(rows) { _, row -> MessageRow(row) }
+        itemsIndexed(rows) { index, row ->
+            val showActions = row.who == Role.ASSISTANT && index == rows.lastIndex && !state.running
+            MessageRow(row, showActions = showActions, onCopy = onCopy)
+        }
         if (live.isNotEmpty()) {
-            item {
-                Text(
-                    "电脑端 · 正在生成",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = LocalDsh.current.textTertiary,
-                    modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 2.dp),
-                )
-            }
-            itemsIndexed(live, key = { _, bubble -> "live:" + bubble.key }) { _, bubble ->
-                LiveRow(bubble)
+            itemsIndexed(live, key = { _, bubble -> "live:" + bubble.key }) { index, bubble ->
+                LiveRow(bubble, first = index == 0)
             }
         }
         if (rows.isEmpty() && live.isEmpty() && !state.historyLoading) {
             item {
-                Box(Modifier.fillMaxWidth().padding(top = 64.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().padding(top = 72.dp), contentAlignment = Alignment.Center) {
                     Text(
                         "还没有消息。说点什么，电脑端就会开始干活。",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = LocalDsh.current.textTertiary,
+                        color = palette.textTertiary,
                     )
                 }
             }
         }
     }
 
-    val itemCount = rows.size + (if (live.isEmpty()) 0 else live.size + 1)
+    val itemCount = rows.size + (if (live.isEmpty()) 0 else live.size)
     val lastLiveLength = live.lastOrNull()?.text?.length ?: 0
     LaunchedEffect(itemCount, lastLiveLength) {
         if (itemCount <= 0) return@LaunchedEffect
@@ -193,46 +198,68 @@ private fun MessageList(state: AppState, modifier: Modifier) {
     }
 }
 
+/**
+ * The design shows the desktop's replies as plain canvas text (no bubble, no
+ * visible label); the speaker still rides in the accessibility tree so a
+ * screen reader — and the E2E suite — can tell who is speaking.
+ */
 @Composable
-private fun MessageRow(row: ChatRow) {
+private fun SpeakerSemantics(content: @Composable () -> Unit) {
+    Box(Modifier.semantics { contentDescription = "电脑端" }) { content() }
+}
+
+@Composable
+private fun MessageRow(row: ChatRow, showActions: Boolean = false, onCopy: (String) -> Unit = {}) {
     val palette = LocalDsh.current
     when (row.who) {
         Role.USER -> Column(
-            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp),
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp),
             horizontalAlignment = Alignment.End,
         ) {
-            Text("我", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
             Box(
                 Modifier
-                    .padding(top = 4.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(palette.layer3)
-                    .padding(horizontal = 13.dp, vertical = 10.dp)
+                    .fillMaxWidth(0.9f)
+                    .widthIn(max = 520.dp),
+                contentAlignment = Alignment.CenterEnd,
             ) {
-                Text(row.text, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(20.dp, 20.dp, 8.dp, 20.dp))
+                        .background(palette.layer2)
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    Text(row.text, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
+                }
             }
         }
-        Role.ASSISTANT -> Column(
-            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp),
-            horizontalAlignment = Alignment.Start,
-        ) {
-            Text("电脑端", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
-            Box(
-                Modifier
-                    .padding(top = 4.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(palette.layer1)
-                    .border(1.dp, palette.borderL1, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 13.dp, vertical = 10.dp)
+        Role.ASSISTANT -> SpeakerSemantics {
+            Column(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 8.dp),
             ) {
                 Text(row.text, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
+                if (showActions) {
+                    Spacer(Modifier.height(4.dp))
+                    Box(
+                        Modifier
+                            .clip(CircleShape)
+                            .clickable { onCopy(row.text) }
+                            .padding(6.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.ContentCopy,
+                            contentDescription = "复制",
+                            tint = palette.textTertiary,
+                            modifier = Modifier.size(15.dp),
+                        )
+                    }
+                }
             }
         }
-        Role.TOOL -> Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)) {
+        Role.TOOL -> Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)) {
             Box(
                 Modifier
                     .clip(RoundedCornerShape(10.dp))
-                    .border(1.dp, palette.borderL2, RoundedCornerShape(10.dp))
+                    .background(palette.layer2)
                     .padding(horizontal = 11.dp, vertical = 8.dp)
             ) {
                 Text(row.text, style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
@@ -242,19 +269,19 @@ private fun MessageRow(row: ChatRow) {
 }
 
 @Composable
-private fun LiveRow(bubble: LiveBubble) {
+private fun LiveRow(bubble: LiveBubble, first: Boolean) {
     val palette = LocalDsh.current
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp),
-        horizontalAlignment = Alignment.Start,
-    ) {
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(14.dp))
-                .background(palette.layer1)
-                .border(1.dp, palette.borderL2, RoundedCornerShape(14.dp))
-                .padding(horizontal = 13.dp, vertical = 10.dp)
+    SpeakerSemantics {
+        Column(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 8.dp),
         ) {
+            if (first) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(palette.brand))
+                    Text("正在生成", style = MaterialTheme.typography.labelSmall, color = palette.brand)
+                }
+                Spacer(Modifier.height(7.dp))
+            }
             Text(bubble.text, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
         }
     }
@@ -265,55 +292,59 @@ private fun Composer(state: AppState, repo: BridgeRepository) {
     val palette = LocalDsh.current
     var draft by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
-    Column(Modifier.fillMaxWidth().background(palette.bg)) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(palette.borderL1))
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .imePadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
         Row(
             Modifier
-                .fillMaxWidth()
-                .imePadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .weight(1f)
+                .shadow(3.dp, RoundedCornerShape(22.dp))
+                .clip(RoundedCornerShape(22.dp))
+                .background(palette.layer1)
+                .border(1.dp, palette.borderL2, RoundedCornerShape(22.dp))
+                .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
-            TextField(
+            BasicTextField(
                 value = draft,
                 onValueChange = { draft = it },
-                modifier = Modifier.weight(1f).heightIn(max = 132.dp),
-                placeholder = {
-                    Text(
-                        if (state.connected) "给电脑端发消息…" else "重连中…",
-                        color = palette.textCaption,
-                    )
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 28.dp, max = 140.dp)
+                    .padding(vertical = 5.dp),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.textPrimary),
+                cursorBrush = SolidColor(palette.brand),
+                maxLines = 6,
+                decorationBox = { innerTextField ->
+                    Box {
+                        if (draft.isEmpty()) {
+                            Text(
+                                if (state.connected) "给电脑端发消息…" else "重连中…",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = palette.textCaption,
+                            )
+                        }
+                        innerTextField()
+                    }
                 },
-                maxLines = 5,
-                shape = RoundedCornerShape(12.dp),
-                textStyle = MaterialTheme.typography.bodyLarge,
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = palette.layer2,
-                    unfocusedContainerColor = palette.layer2,
-                    disabledContainerColor = palette.layer2,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent,
-                    cursorColor = palette.brand,
-                    focusedTextColor = palette.textPrimary,
-                    unfocusedTextColor = palette.textPrimary,
-                ),
             )
             Spacer(Modifier.width(8.dp))
             if (state.running) {
-                RoundButton(
-                    color = palette.error,
+                CircleAction(
+                    filled = true,
                     icon = Icons.Filled.Stop,
-                    tint = Color.White,
                     contentDescription = "停止生成",
                     enabled = true,
                 ) { repo.cancelTurn() }
             } else {
-                RoundButton(
-                    color = palette.buttonFill,
-                    icon = Icons.AutoMirrored.Filled.Send,
-                    tint = palette.onButtonFill,
+                CircleAction(
+                    filled = draft.isNotBlank(),
+                    icon = Icons.Filled.ArrowUpward,
                     contentDescription = "发送",
                     enabled = draft.isNotBlank() && !state.sending,
                 ) {
@@ -332,23 +363,25 @@ private fun Composer(state: AppState, repo: BridgeRepository) {
 }
 
 @Composable
-private fun RoundButton(
-    color: Color,
+private fun CircleAction(
+    filled: Boolean,
     icon: ImageVector,
-    tint: Color,
     contentDescription: String,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
+    val palette = LocalDsh.current
+    val background = if (enabled && filled) palette.buttonFill else palette.layer2
+    val tint = if (enabled && filled) palette.onButtonFill else palette.textCaption
     Box(
         Modifier
-            .size(38.dp)
+            .size(36.dp)
             .clip(CircleShape)
-            .background(if (enabled) color else color.copy(alpha = 0.35f))
+            .background(background)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(19.dp))
     }
 }
 
@@ -359,9 +392,9 @@ private fun ModelPicker(state: AppState, onPick: (String, String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         Text(
             "切换这个会话使用的模型",
-            style = MaterialTheme.typography.titleSmall,
-            color = palette.textSecondary,
-            modifier = Modifier.padding(start = 14.dp, top = 4.dp, bottom = 6.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.textTertiary,
+            modifier = Modifier.padding(start = 14.dp, top = 2.dp, bottom = 8.dp),
         )
         when {
             state.modelsLoading && doc == null -> {

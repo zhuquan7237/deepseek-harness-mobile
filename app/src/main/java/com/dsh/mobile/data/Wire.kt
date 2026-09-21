@@ -105,7 +105,10 @@ object Wire {
                 "turn/end" -> lastTurn = "end"
                 "user/message" -> {
                     val text = extractText(data)
-                    if (text.isNotBlank()) rows.add(ChatRow(Role.USER, text))
+                    // The engine injects runtime context and skill reminders as
+                    // user-role messages; a phone should not render them as if
+                    // the human typed them.
+                    if (text.isNotBlank() && !isInjectedContext(text)) rows.add(ChatRow(Role.USER, text))
                 }
                 "assistant/message" -> {
                     val text = extractText(data.opt("message") ?: data)
@@ -117,6 +120,12 @@ object Wire {
         }
         return HistoryParse(rows, lastTurn == "start")
     }
+
+    /** Engine-injected context that rides in on the user role. */
+    fun isInjectedContext(text: String): Boolean =
+        text.startsWith("Current runtime context.") ||
+            text.startsWith("<system-reminder>") ||
+            text.startsWith("<available_skills>")
 
     /** Pull display text out of any message-ish node (string / text / content[] /
      *  parts[] / nested message). */

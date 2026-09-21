@@ -90,6 +90,35 @@ class WireTest {
     }
 
     @Test
+    fun injectedContextIsNotRenderedAsUserText() {
+        val items = JSONArray()
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "user/message")
+                        .put("data", JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "Current runtime context. This snapshot supersedes earlier ones.")))),
+                ),
+            )
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "user/message")
+                        .put("data", JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "<system-reminder>\nA skill is a reusable set…")))),
+                ),
+            )
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "user/message")
+                        .put("data", JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "真正的用户消息")))),
+                ),
+            )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(1, parsed.rows.size)
+        assertEquals("真正的用户消息", parsed.rows[0].text)
+    }
+
+    @Test
     fun historyFinishedTurnIsNotRunning() {
         val items = JSONArray()
             .put(JSONObject().put("event", JSONObject().put("type", "turn/start").put("data", JSONObject())))

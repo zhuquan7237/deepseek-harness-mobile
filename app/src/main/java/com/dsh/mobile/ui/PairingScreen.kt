@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,10 +19,12 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -44,7 +47,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.compose.foundation.text.KeyboardOptions
 import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.Wire
@@ -93,13 +95,13 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             .fillMaxSize()
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(40.dp))
         Text(
             "DeepSeek Harness",
-            fontSize = 22.sp,
+            fontSize = 26.sp,
             fontWeight = FontWeight.SemiBold,
             color = palette.textPrimary,
         )
@@ -108,9 +110,9 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             style = MaterialTheme.typography.bodyMedium,
             color = palette.textSecondary,
         )
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(10.dp))
 
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedTextField(
                 value = base,
                 onValueChange = { base = it },
@@ -150,22 +152,31 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             )
         }
 
+        Spacer(Modifier.height(2.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
+            OutlinedButton(
                 onClick = { launchScan() },
-                modifier = Modifier.weight(1f).height(46.dp),
+                modifier = Modifier.weight(1f).height(48.dp),
                 enabled = !state.pairing,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, palette.borderL2),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.textPrimary),
             ) {
                 Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("扫码配对")
             }
-            OutlinedButton(
+            Button(
                 onClick = { repo.pair(base, code, deviceName) },
-                modifier = Modifier.weight(1f).height(46.dp),
+                modifier = Modifier.weight(1f).height(48.dp),
                 enabled = !state.pairing,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.buttonFill,
+                    contentColor = palette.onButtonFill,
+                    disabledContainerColor = palette.layer2,
+                    disabledContentColor = palette.textCaption,
+                ),
             ) {
                 Text("用配对码配对")
             }
@@ -190,13 +201,15 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
 
 @Composable
 private fun fieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedContainerColor = LocalDsh.current.layer2,
-    unfocusedContainerColor = LocalDsh.current.layer2,
+    focusedContainerColor = Color.Transparent,
+    unfocusedContainerColor = Color.Transparent,
     focusedBorderColor = LocalDsh.current.brand,
-    unfocusedBorderColor = Color.Transparent,
+    unfocusedBorderColor = LocalDsh.current.borderL2,
     cursorColor = LocalDsh.current.brand,
     focusedTextColor = LocalDsh.current.textPrimary,
     unfocusedTextColor = LocalDsh.current.textPrimary,
+    focusedLabelColor = LocalDsh.current.brand,
+    unfocusedLabelColor = LocalDsh.current.textTertiary,
 )
 
 private fun scanOptions(): ScanOptions = ScanOptions().apply {
