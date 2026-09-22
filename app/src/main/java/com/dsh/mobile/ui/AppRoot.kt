@@ -66,14 +66,6 @@ fun AppRoot(repo: BridgeRepository) {
     DshTheme(state.theme) {
         val palette = LocalDsh.current
         SystemBarTint(dark = palette.dark)
-        // 进 App 直接开一个新对话：历史会话在聊天页的左侧抽屉里（用户要求）。
-        // 一次性标志位，避免从设置页返回时又新建一个。
-        LaunchedEffect(state.ready, state.token) {
-            if (state.ready && state.token != null && !repo.launchedNewChat) {
-                repo.launchedNewChat = true
-                if (state.sessionId == null) repo.createSession()
-            }
-        }
         Box(Modifier.fillMaxSize().background(palette.bg)) {
             AnimatedContent(
                 targetState = screenOf(state),

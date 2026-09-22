@@ -158,24 +158,14 @@ private val MenuEasing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTextApi::class)
 @Composable
 fun ChatScreen(state: AppState, repo: BridgeRepository) {
-    // 历史会话不再是"主页"：进 App 直接是新对话，会话列表收进左侧抽屉（用户要求）
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val drawerScope = rememberCoroutineScope()
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            ModalDrawerSheet(modifier = Modifier.width(304.dp)) {
-                SessionDrawer(state, repo) { drawerScope.launch { drawerState.close() } }
-            }
-        },
-    ) {
-        ChatBody(state, repo, onOpenDrawer = { drawerScope.launch { drawerState.open() } })
-    }
+    // 会话列表仍然是"主页"（用户试过抽屉版后觉得不如原来，让恢复）：
+    // 顶栏左侧就是返回键，回列表。
+    ChatBody(state, repo, onBack = { repo.closeSession() })
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTextApi::class)
 @Composable
-private fun ChatBody(state: AppState, repo: BridgeRepository, onOpenDrawer: () -> Unit) {
+private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit) {
     val palette = LocalDsh.current
     val clipboard = LocalClipboardManager.current
     BackHandler { repo.closeSession() }
@@ -269,7 +259,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onOpenDrawer: () -
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            CircleButton(Icons.Outlined.Menu, "会话列表") { onOpenDrawer() }
+            CircleButton(Icons.AutoMirrored.Outlined.ArrowBack, "返回") { onBack() }
             // 模型选择照 ChatGPT 放在顶栏（不占输入条地方）：点第二行直接开模型菜单，
             // 连接状态由前面的小圆点表示，标题区仍然点开更多菜单
             ContextPill(
@@ -1695,79 +1685,4 @@ private fun PeekAction(label: String, palette: com.dsh.mobile.ui.theme.DshPalett
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 10.dp),
     )
-}
-
-/** 左侧抽屉：进 App 是新对话，历史会话从这里翻（用户要求）。 */
-@Composable
-private fun SessionDrawer(state: AppState, repo: BridgeRepository, onPicked: () -> Unit) {
-    val palette = LocalDsh.current
-    Column(Modifier.fillMaxSize().background(palette.bg)) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 20.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("会话", style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
-            Spacer(Modifier.weight(1f))
-            Box(
-                // 之前这里错接成 onPicked()（只关抽屉），设置页根本打不开——手机上实测的 bug
-                Modifier.size(36.dp).clip(CircleShape).clickable {
-                    repo.openSettings()
-                    onPicked()
-                },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Outlined.Settings, "设置", tint = palette.textSecondary, modifier = Modifier.size(19.dp))
-            }
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(palette.surface)
-                    .clickable { repo.createSession(); onPicked() }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(Icons.Outlined.Add, "新对话", tint = palette.accent, modifier = Modifier.size(18.dp))
-                Text("新对话", style = MaterialTheme.typography.bodyMedium, color = palette.accent)
-            }
-        }
-        Text(
-            "最近",
-            style = MaterialTheme.typography.labelMedium,
-            color = palette.textTertiary,
-            modifier = Modifier.padding(start = 22.dp, top = 18.dp, bottom = 6.dp),
-        )
-        LazyColumn(Modifier.fillMaxSize()) {
-            items(state.sessions) { session ->
-                val current = session.sessionId == state.sessionId
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (current) palette.surfaceHi else Color.Transparent)
-                        .clickable { repo.openSession(session.sessionId); onPicked() }
-                        .padding(horizontal = 12.dp, vertical = 11.dp),
-                ) {
-                    Text(
-                        session.title.ifBlank { "未命名会话" },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = palette.textPrimary,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        Wire.timeText(session.updatedAt),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = palette.textTertiary,
-                    )
-                }
-            }
-        }
-    }
 }

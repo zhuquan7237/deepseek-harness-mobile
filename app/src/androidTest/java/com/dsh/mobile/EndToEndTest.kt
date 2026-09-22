@@ -172,13 +172,14 @@ class EndToEndTest {
         runCatching { composeRule.onAllNodesWithContentDescription("停止生成")[0].performClick() }
         composeRule.waitUntil(180_000) { !anyContent("停止生成") }
 
-        // 报告过的真机 bug：抽屉里那个齿轮点不开设置页（错接了"只关抽屉"）。
-        composeRule.onAllNodesWithContentDescription("会话列表")[0].performClick()
-        composeRule.waitUntil(15_000) { anyContent("设置") }
-        composeRule.onAllNodesWithContentDescription("设置")[0].performClick()
-        composeRule.waitUntil(20_000) { anyText("模型配置") || anyText("这台手机") }
-        composeRule.waitUntil(15_000) { anyContent("返回") }
+        // 设置往返：对话 → 返回列表 → 设置 → 返回列表
         composeRule.onAllNodesWithContentDescription("返回")[0].performClick()
+        composeRule.waitUntil(30_000) { isOnSessionsScreen() }
+        composeRule.onAllNodesWithContentDescription("设置")[0].performClick()
+        composeRule.waitUntil(20_000) { anyText("模型配置") }
+        composeRule.onAllNodesWithContentDescription("返回")[0].performClick()
+        composeRule.waitUntil(30_000) { isOnSessionsScreen() }
+        composeRule.onAllNodesWithText("P1 mobile e2e", substring = true)[0].performClick()
         composeRule.waitUntil(30_000) { isOnChatScreen() }
 
         // The session actions P1 promised are all reachable.
