@@ -40,6 +40,9 @@ data class SessionSummary(
     val updatedAt: Long,
     val running: Boolean,
     val cwd: String,
+    /** 这个会话用的模型（来自 projections.values.modelSelection）——打开历史会话时要继承它。 */
+    val modelProvider: String = "",
+    val modelId: String = "",
 )
 
 /**

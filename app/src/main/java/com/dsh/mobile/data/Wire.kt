@@ -52,13 +52,32 @@ object Wire {
 
     fun parseSession(json: JSONObject): SessionSummary {
         val id = json.optString("sessionId").ifEmpty { json.optString("id") }
+        val model = sessionModel(json)
         return SessionSummary(
             sessionId = id,
             title = titleOf(json),
             updatedAt = millis(json.optLong("updatedAt", 0L)),
             running = json.optBoolean("running", false),
             cwd = json.optString("cwd"),
+            modelProvider = model?.first.orEmpty(),
+            modelId = model?.second.orEmpty(),
         )
+    }
+
+    /**
+     * 会话用的模型在 `projections.values.modelSelection`（`next` 优先，退回 `lastUsed`）。
+     * 注意：**history 响应里没有这个字段**（只有 ok/items/hasMore），
+     * 之前就是去 history 里找，所以打开历史会话时模型一直是空的。
+     */
+    fun sessionModel(json: JSONObject): Pair<String, String>? {
+        val selection = json.optJSONObject("projections")
+            ?.optJSONObject("values")
+            ?.optJSONObject("modelSelection")
+            ?: return null
+        val pick = selection.optJSONObject("next") ?: selection.optJSONObject("lastUsed") ?: return null
+        val provider = pick.optString("provider")
+        val model = pick.optString("model")
+        return if (provider.isNotEmpty() && model.isNotEmpty()) provider to model else null
     }
 
     /** The engine keeps a display title inside `projections.values` under one of

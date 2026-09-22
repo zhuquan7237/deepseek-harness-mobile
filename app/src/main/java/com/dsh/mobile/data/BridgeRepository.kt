@@ -372,6 +372,17 @@ class BridgeRepository(context: Context) {
 
     fun openSession(sessionId: String) {
         val listed = _state.value.sessions.firstOrNull { it.sessionId == sessionId }
+        // 打开历史会话要继承它自己的模型：列表里带了 projections.values.modelSelection，
+        // 这里取出来当标签（模型名单缓存里有就用显示名，没有就用模型 id）
+        val provider = listed?.modelProvider.orEmpty()
+        val model = listed?.modelId.orEmpty()
+        val label = when {
+            model.isEmpty() -> ""
+            else -> _state.value.doc?.items
+                ?.firstOrNull { it.provider == provider && it.modelId == model }
+                ?.name
+                ?: model
+        }
         _state.update {
             it.copy(
                 view = View.CHAT,
@@ -381,6 +392,9 @@ class BridgeRepository(context: Context) {
                 history = emptyList(),
                 live = emptyList(),
                 running = false,
+                modelProvider = provider,
+                modelId = model,
+                modelLabel = label,
             )
         }
         loadHistory(sessionId)

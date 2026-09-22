@@ -181,6 +181,12 @@ class EndToEndTest {
         composeRule.waitUntil(30_000) { isOnSessionsScreen() }
         composeRule.onAllNodesWithText("P1 mobile e2e", substring = true)[0].performClick()
         composeRule.waitUntil(30_000) { isOnChatScreen() }
+        // 真机 bug：打开历史会话时顶栏显示"没有选择模型"。会话自己的模型必须被继承
+        // （来自 projections.values.modelSelection，而不是 history 响应——那里没有这个字段）。
+        composeRule.waitUntil(20_000) {
+            anyText("deepseek", substring = true) || anyText("gpt-", substring = true) || anyText("flash", substring = true)
+        }
+        composeRule.onAllNodesWithText("模型")[0].assertDoesNotExist()
 
         // The session actions P1 promised are all reachable.
         composeRule.onAllNodesWithContentDescription("更多")[0].performClick()
