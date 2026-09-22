@@ -38,7 +38,7 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
     private var generation = 0
 
     var onFrame: ((JSONObject) -> Unit)? = null
-    var onState: ((Boolean) -> Unit)? = null
+    var onConn: ((Conn) -> Unit)? = null
 
     /** The token was refused at upgrade time (revoked on the desktop); retrying
      *  can only fail, so the owner gets told instead of us looping forever. */
@@ -68,12 +68,13 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
 
     private fun open() {
         if (stopped || wsUrl.isEmpty()) return
+        onConn?.invoke(Conn.CONNECTING)
         val generationAtOpen = ++generation
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (generationAtOpen != generation) return
                 retry = 0
-                onState?.invoke(true)
+                onConn?.invoke(Conn.ONLINE)
                 webSocket.send(JSONObject().put("type", "hello").put("since", lastSeq()).toString())
             }
 
@@ -104,7 +105,7 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
             }
 
             private fun schedule(generationAtEvent: Int) {
-                if (generationAtEvent == generation) onState?.invoke(false)
+                if (generationAtEvent == generation) onConn?.invoke(Conn.OFFLINE)
                 if (stopped || generationAtEvent != generation) return
                 val waitMs = min(15_000L, (800.0 * 1.6.pow(retry.toDouble())).toLong())
                 retry += 1

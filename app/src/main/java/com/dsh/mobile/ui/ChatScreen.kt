@@ -67,6 +67,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -90,10 +92,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.ChatRow
+import com.dsh.mobile.data.Conn
 import com.dsh.mobile.data.LiveBubble
 import com.dsh.mobile.data.Role
 import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Material's push curve, reused for the popover's scale-in. */
@@ -129,9 +133,13 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             CircleButton(Icons.AutoMirrored.Filled.ArrowBack, "返回") { repo.closeSession() }
             ContextPill(
                 title = state.sessionTitle.ifEmpty { "会话" },
-                meta = if (state.connected) "电脑端 · 已连接" else "电脑端 · 重连中",
+                meta = when (state.conn) {
+                    Conn.ONLINE -> "电脑端 · 已连接"
+                    Conn.CONNECTING -> "电脑端 · 正在连接"
+                    Conn.OFFLINE -> "电脑端 · 未连接，重连中"
+                },
                 metaIcon = Icons.Filled.Computer,
-                metaOnline = state.connected,
+                metaConn = state.conn,
                 modifier = Modifier.weight(1f),
                 onClick = { showActions = true },
             )
@@ -267,12 +275,13 @@ private fun MessageList(
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(top = 6.dp, bottom = 12.dp),
     ) {
-        itemsIndexed(rows) { index, row ->
+        itemsIndexed(rows, key = { index, row -> "row:$index:" + row.who + ":" + row.text.hashCode() }) { index, row ->
             val showActions = row.who == Role.ASSISTANT && index == rows.lastIndex && !state.running
             Box(Modifier.animateItem()) {
                 MessageRow(
                     row = row,
                     showActions = showActions,
+                    reveal = index == state.revealRow,
                     onCopy = onCopy,
                     onRegenerate = onRegenerate,
                     onPreview = onPreview,
@@ -285,22 +294,7 @@ private fun MessageList(
             }
         }
         if (state.thinking && live.isEmpty()) {
-            item(key = "thinking") {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
-                    Text(
-                        "正在思考…",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = palette.textSecondary,
-                    )
-                }
-            }
+            item(key = "thinking") { ThinkingRow(state.thinkingSince) }
         }
         if (rows.isEmpty() && live.isEmpty() && !state.historyLoading) {
             item {
@@ -341,10 +335,25 @@ private fun SpeakerSemantics(content: @Composable () -> Unit) {
 private fun MessageRow(
     row: ChatRow,
     showActions: Boolean = false,
+    reveal: Boolean = false,
     onCopy: (String) -> Unit = {},
     onRegenerate: () -> Unit = {},
     onPreview: (Wire.Artifact) -> Unit = {},
 ) {
+
+    /** Characters drawn so far; the animation only runs for a freshly arrived reply. */
+    val animate = reveal && Motion.animations
+    var shown by remember(row.text) { mutableIntStateOf(if (animate) 0 else Int.MAX_VALUE) }
+    LaunchedEffect(row.text) {
+        if (!animate) return@LaunchedEffect
+        val step = maxOf(1, row.text.length / 40)
+        while (shown < row.text.length) {
+            shown = minOf(row.text.length, shown + step)
+            delay(16)
+        }
+    }
+    val done = shown >= row.text.length
+    val body = if (done) row.text else row.text.substring(0, shown.coerceIn(0, row.text.length))
     val palette = LocalDsh.current
     when (row.who) {
         Role.USER -> Column(
@@ -380,13 +389,13 @@ private fun MessageRow(
                     .fillMaxWidth()
                     .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
             ) {
-                Text(row.text, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
-                val artifact = remember(row.text) { Wire.findArtifact(row.text) }
+                Text(body, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
+                val artifact = if (done) remember(row.text) { Wire.findArtifact(row.text) } else null
                 if (artifact != null) {
                     Spacer(Modifier.height(10.dp))
                     PreviewChip(artifact.kind) { onPreview(artifact) }
                 }
-                if (showActions) {
+                if (showActions && done) {
                     Spacer(Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         MessageAction(Icons.Filled.ContentCopy, "复制") { onCopy(row.text) }
@@ -635,6 +644,39 @@ private fun artifactPage(artifact: Wire.Artifact): String = if (artifact.kind !=
 svg{max-width:100%;height:auto;display:block;margin:0 auto;}</style></head><body>${artifact.markup}</body></html>"""
 }
 
+/**
+ * The one place the app is allowed to look alive while it waits: a shimmering
+ * "正在思考" with the seconds elapsed, so a slow turn never reads as a freeze.
+ * The desktop's engine sends no streaming deltas (verified: a whole reply lands
+ * as one `assistant/message`), so this label is the only progress signal there
+ * is — which is exactly why it has to move.
+ */
+@Composable
+private fun ThinkingRow(since: Long) {
+    val palette = LocalDsh.current
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(since) {
+        if (!Motion.animations) return@LaunchedEffect
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+    val seconds = if (since > 0) ((now - since) / 1000).toInt().coerceAtLeast(0) else 0
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        ShimmerText("正在思考", style = MaterialTheme.typography.labelMedium)
+        if (seconds >= 3) {
+            Text("· ${seconds} 秒", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
+        }
+    }
+}
+
 @Composable
 private fun LiveRow(bubble: LiveBubble, first: Boolean) {
     val palette = LocalDsh.current
@@ -798,7 +840,18 @@ private fun CircleAction(
     }
 }
 
-/** Model menu: the list with a check on the current pick. */
+/** `1050000` reads as noise in a phone list; `1M` does not. */
+private fun contextLabel(raw: String): String? {
+    val value = raw.toLongOrNull() ?: return null
+    if (value <= 0) return null
+    return when {
+        value >= 1_000_000 -> if (value % 1_000_000 == 0L) "${value / 1_000_000}M" else "${"%.1f".format(value / 1_000_000.0)}M"
+        value >= 1_000 -> "${value / 1_000}K"
+        else -> value.toString()
+    }
+}
+
+/** Model menu: grouped by provider, with a check on the current pick. */
 @Composable
 private fun ModelMenu(state: AppState, onPick: (String, String, String) -> Unit) {
     val palette = LocalDsh.current
@@ -825,36 +878,103 @@ private fun ModelMenu(state: AppState, onPick: (String, String, String) -> Unit)
                 )
             }
             else -> {
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 340.dp).padding(bottom = 8.dp)) {
-                    items(doc.items) { item ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable(enabled = item.enabled) { onPick(item.provider, item.modelId, item.name) }
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                // The wire gives a flat list ranked by a cross-provider `order`,
+                // which reads as shuffled. Group by provider, keep the desktop's
+                // provider order, and rank inside a group by that same order.
+                val providerRank = remember(doc) {
+                    doc.providers.withIndex().associate { (index, provider) -> provider.id to index }
+                }
+                val groups = remember(doc) {
+                    doc.items
+                        .groupBy { it.provider }
+                        .entries
+                        .sortedBy { providerRank[it.key] ?: Int.MAX_VALUE }
+                        .map { entry -> entry.key to entry.value.sortedWith(compareBy({ it.order }, { it.modelId })) }
+                }
+                val active = doc.items.firstOrNull { item ->
+                    item.modelId == state.modelId && (state.modelProvider.isEmpty() || item.provider == state.modelProvider)
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp),
+                    contentPadding = PaddingValues(bottom = 14.dp),
+                ) {
+                    if (active != null) {
+                        item(key = "active") {
+                            Text(
+                                "当前",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.textSecondary,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 2.dp),
+                            )
+                        }
+                        item(key = "active-row") {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Text(
-                                    item.name,
+                                    active.name,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = if (item.enabled) palette.textPrimary else palette.textTertiary,
+                                    color = palette.textPrimary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
                                 )
-                                Text(
-                                    item.provider,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = palette.textSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Icon(Icons.Filled.Check, contentDescription = "当前模型", tint = palette.accent, modifier = Modifier.size(18.dp))
                             }
-                            if (!item.enabled) {
-                                MiniTag("已停用", palette.textTertiary)
-                            } else if (state.modelLabel.isNotBlank() && item.name == state.modelLabel) {
-                                Icon(Icons.Filled.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
+                        }
+                        item(key = "active-gap") { Hairline(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp)) }
+                    }
+                    groups.forEach { (provider, rows) ->
+                        val title = doc.providers.firstOrNull { it.id == provider }?.name?.ifBlank { provider } ?: provider
+                        item(key = "h:$provider") {
+                            Text(
+                                title,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.textSecondary,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 3.dp),
+                            )
+                        }
+                        items(rows, key = { it.id }) { item ->
+                            val current = item.modelId == state.modelId &&
+                                (state.modelProvider.isEmpty() || item.provider == state.modelProvider)
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable(enabled = item.enabled) { onPick(item.provider, item.modelId, item.name) }
+                                    .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                    Text(
+                                        item.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (item.enabled) palette.textPrimary else palette.textTertiary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    val meta = buildList {
+                                        contextLabel(item.contextWindow)?.let { add(it) }
+                                        if (item.imageInput) add("图片")
+                                    }.joinToString(" · ")
+                                    if (meta.isNotEmpty()) {
+                                        Text(
+                                            meta,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = palette.textTertiary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                                when {
+                                    !item.enabled -> MiniTag("已停用", palette.textTertiary)
+                                    current -> Icon(Icons.Filled.Check, contentDescription = "当前模型", tint = palette.accent, modifier = Modifier.size(18.dp))
+                                }
                             }
                         }
                     }

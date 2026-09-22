@@ -60,6 +60,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dsh.mobile.data.AppState
+import com.dsh.mobile.data.Conn
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.SessionSummary
 import com.dsh.mobile.data.Wire
@@ -94,12 +95,18 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
             Spacer(Modifier.width(10.dp))
             StatusPill(
                 text = buildString {
-                    append(if (state.connected) "已连接" else "重连中…")
+                    append(
+                        when (state.conn) {
+                            Conn.ONLINE -> "已连接"
+                            Conn.CONNECTING -> "正在连接"
+                            Conn.OFFLINE -> "未连接 · 重连中"
+                        }
+                    )
                     append(" · ")
                     append(state.sessions.size)
                     append(" 个会话")
                 },
-                online = state.connected,
+                conn = state.conn,
             )
         }
 

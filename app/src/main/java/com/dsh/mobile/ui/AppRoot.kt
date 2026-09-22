@@ -71,23 +71,16 @@ fun AppRoot(repo: BridgeRepository) {
                         crossFade -> {
                             fadeIn(tween(320, easing = PushEasing)) togetherWith fadeOut(tween(200))
                         }
+                        // Slide only, no alpha: two full-screen layers fading at once
+                        // is four layers of overdraw on the frame — exactly the cost a
+                        // low-end GPU cannot pay while a 40-row list is sliding.
                         targetState.depth > initialState.depth -> {
-                            (
-                                slideInHorizontally(tween(340, easing = PushEasing)) { it } +
-                                    fadeIn(tween(220, easing = PushEasing))
-                                ) togetherWith (
-                                slideOutHorizontally(tween(340, easing = PushEasing)) { -it / 3 } +
-                                    fadeOut(tween(180))
-                                )
+                            slideInHorizontally(tween(300, easing = PushEasing)) { it } togetherWith
+                                slideOutHorizontally(tween(300, easing = PushEasing)) { -it / 3 }
                         }
                         else -> {
-                            (
-                                slideInHorizontally(tween(340, easing = PushEasing)) { -it / 3 } +
-                                    fadeIn(tween(220, easing = PushEasing))
-                                ) togetherWith (
-                                slideOutHorizontally(tween(340, easing = PushEasing)) { it } +
-                                    fadeOut(tween(180))
-                                )
+                            slideInHorizontally(tween(300, easing = PushEasing)) { -it / 3 } togetherWith
+                                slideOutHorizontally(tween(300, easing = PushEasing)) { it }
                         }
                     }
                 },

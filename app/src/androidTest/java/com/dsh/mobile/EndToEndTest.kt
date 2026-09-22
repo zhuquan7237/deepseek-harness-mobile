@@ -16,6 +16,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -37,6 +38,16 @@ class EndToEndTest {
 
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    /**
+     * The "正在思考" shimmer and the reply reveal are infinite/looping animations;
+     * Compose's `waitForIdle` waits for the frame clock to go quiet, so they have
+     * to be off or every `performClick()` in this suite would hang.
+     */
+    @Before
+    fun quietMotion() {
+        com.dsh.mobile.ui.Motion.animations = false
+    }
 
     private val host = "http://10.0.2.2:17731"
 

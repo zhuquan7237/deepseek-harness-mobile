@@ -71,7 +71,11 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
             SettingsValue("设备", state.device?.name?.ifBlank { "未命名" } ?: "—")
             SettingsValue("权限", state.device?.scopes?.joinToString(" / ") ?: "—")
             SettingsValue("状态", if (state.connected) "已连接（事件流）" else "重连中…")
-            SettingsValue("事件游标", state.seq.toString())
+            SettingsValue("设备权限", state.scopes.joinToString(" / ").ifBlank { "未知" })
+            SettingsValue(
+                "当前模型",
+                listOf(state.modelProvider, state.modelId).filter { it.isNotBlank() }.joinToString(" / ").ifBlank { "未知" },
+            )
             SettingsValue("服务器", state.base.ifBlank { "—" })
             if (state.server != null) {
                 SettingsValue("桥接", "${state.server.product} · v${state.server.version}")

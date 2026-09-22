@@ -347,7 +347,30 @@ object Wire {
         return false
     }
 
+    /**
+     * The model document as the bridge builds it: `providers` (in the desktop's
+     * own order) plus a flat `items` list whose `order` is a rank *across*
+     * providers — so a naive flat render interleaves providers and looks
+     * shuffled. The UI groups by provider and uses this order inside a group.
+     */
     fun parseModelDoc(doc: JSONObject): ModelDoc {
+        val providers = ArrayList<ModelProvider>()
+        val rawProviders = doc.optJSONArray("providers") ?: JSONArray()
+        for (i in 0 until rawProviders.length()) {
+            val raw = rawProviders.optJSONObject(i) ?: continue
+            val id = raw.optString("id")
+            if (id.isEmpty()) continue
+            providers.add(
+                ModelProvider(
+                    id = id,
+                    name = raw.optString("name").ifEmpty { id },
+                    baseURL = raw.optString("baseURL"),
+                    apiMode = raw.optString("apiMode"),
+                    apiKeyRef = raw.optString("apiKeyRef"),
+                    keyConfigured = raw.optBoolean("apiKeyConfigured", false),
+                )
+            )
+        }
         val items = doc.optJSONArray("items") ?: JSONArray()
         val list = ArrayList<ModelItem>()
         for (i in 0 until items.length()) {
@@ -356,23 +379,51 @@ object Wire {
             val input = params?.optJSONArray("input")
             var image = false
             if (input != null) for (j in 0 until input.length()) if (input.optString(j) == "image") image = true
+            val provider = raw.optString("provider")
             list.add(
                 ModelItem(
-                    id = raw.optString("id"),
+                    id = raw.optString("id").ifEmpty { provider + "::" + raw.optString("modelId") },
                     name = raw.optString("name").ifEmpty { raw.optString("modelId") },
-                    provider = raw.optString("provider"),
+                    provider = provider,
                     modelId = raw.optString("modelId"),
                     enabled = raw.optBoolean("enabled", true),
                     contextWindow = params?.opt("contextWindow")?.toString() ?: "—",
                     imageInput = image,
+                    providerName = raw.optString("providerName").ifEmpty {
+                        providers.firstOrNull { it.id == provider }?.name ?: provider
+                    },
+                    order = raw.optInt("order", i),
+                    baseURL = raw.optString("baseURL"),
+                    apiMode = raw.optString("apiMode"),
+                    apiKeyRef = raw.optString("apiKeyRef"),
+                    apiKeyConfigured = raw.optBoolean("apiKeyConfigured", false),
                 )
             )
         }
         return ModelDoc(
             revision = doc.optLong("revision", 0L),
             overlayRevision = doc.optLong("overlayRevision", 0L),
+            providers = providers,
             items = list,
         )
+    }
+
+    /**
+     * The model a session is running, taken from its newest `model/selection`
+     * event — the only place the wire records it (`{provider, model}`).
+     */
+    fun parseModelSelection(history: JSONObject): Pair<String, String>? {
+        val items = history.optJSONArray("items") ?: return null
+        var found: Pair<String, String>? = null
+        for (i in 0 until items.length()) {
+            val event = items.optJSONObject(i)?.optJSONObject("event") ?: continue
+            if (event.optString("type") != "model/selection") continue
+            val data = event.optJSONObject("data") ?: continue
+            val provider = data.optString("provider")
+            val model = data.optString("model")
+            if (provider.isNotEmpty() && model.isNotEmpty()) found = provider to model
+        }
+        return found
     }
 
     data class ScanPayload(val base: String?, val code: String)

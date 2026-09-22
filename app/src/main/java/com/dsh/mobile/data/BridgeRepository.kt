@@ -45,17 +45,21 @@ class BridgeRepository(context: Context) {
     private var toastCounter = 0
     private var lastSeqWrite = 0L
     private var reloadJob: Job? = null
+
+    /** Highest event seq seen; lives outside [AppState] so events never redraw the UI. */
+    @Volatile
+    private var lastSeq: Long = 0L
     private var searchJob: Job? = null
 
     init {
         stream.onFrame = { frame -> handleFrame(frame) }
         stream.onUnauthorized = { handleUnauthorized() }
-        stream.onState = { connected ->
+        stream.onConn = { conn ->
             val was = _state.value.connected
-            if (was != connected) _state.update { it.copy(connected = connected) }
-            if (connected && !was) onReconnected()
+            if (_state.value.conn != conn) _state.update { it.copy(conn = conn) }
+            if (conn == Conn.ONLINE && !was) onReconnected()
         }
-        stream.lastSeq = { _state.value.seq }
+        stream.lastSeq = { lastSeq }
 
         scope.launch { boot() }
     }
@@ -76,10 +80,10 @@ class BridgeRepository(context: Context) {
                 base = stored.base,
                 token = stored.token,
                 device = Wire.parseDevice(stored.device),
-                seq = stored.seq,
                 view = View.SESSIONS,
             )
         }
+        lastSeq = stored.seq
         val ok = refreshMeta(quiet = false)
         if (!ok && _state.value.token == null) return // meta said the token is gone
         connect()
@@ -189,23 +193,27 @@ class BridgeRepository(context: Context) {
         val token = _state.value.token ?: return false
         return try {
             val meta = api.meta(token)
+            val device = Wire.parseDevice(meta.optJSONObject("device"))
             _state.update {
                 it.copy(
-                    device = Wire.parseDevice(meta.optJSONObject("device")),
+                    device = device,
                     server = Wire.parseServer(meta.optJSONObject("server")),
                     publicUrl = meta.optJSONObject("capabilities")?.optString("publicUrl").orEmpty(),
+                    scopes = device.scopes,
                 )
             }
             true
         } catch (error: BridgeException) {
             if (error.code == "E_UNAUTHORIZED") {
                 handleUnauthorized()
-            } else if (!quiet) {
-                toast(error.message)
+            } else {
+                // A failed background refresh is a connection state, not an event
+                // worth interrupting for: the header already says 未连接/重连中.
+                _state.update { it.copy(conn = Conn.OFFLINE) }
             }
             false
         } catch (error: Exception) {
-            if (!quiet) toast("连接电脑端失败：${error.message ?: "网络错误"}")
+            _state.update { it.copy(conn = Conn.OFFLINE) }
             false
         }
     }
@@ -317,9 +325,28 @@ class BridgeRepository(context: Context) {
             try {
                 val json = api.history(token, sid, 100)
                 val parsed = Wire.parseHistory(json)
-                _state.update {
-                    if (it.sessionId != sid) it
-                    else it.copy(history = parsed.rows, running = parsed.running, historyLoading = false)
+                val selection = Wire.parseModelSelection(json)
+                _state.update { current ->
+                    if (current.sessionId != sid) {
+                        current
+                    } else {
+                        val last = parsed.rows.lastOrNull()
+                        val fresh = last != null && last.who == Role.ASSISTANT &&
+                            current.history.lastOrNull()?.text != last.text
+                        current.copy(
+                            history = parsed.rows,
+                            running = parsed.running,
+                            historyLoading = false,
+                            revealRow = if (fresh) parsed.rows.lastIndex else -1,
+                            modelProvider = selection?.first ?: current.modelProvider,
+                            modelId = selection?.second ?: current.modelId,
+                            modelLabel = if (current.modelLabel.isBlank() && selection != null) {
+                                selection.second
+                            } else {
+                                current.modelLabel
+                            },
+                        )
+                    }
                 }
             } catch (error: BridgeException) {
                 _state.update { it.copy(historyLoading = false) }
@@ -393,7 +420,7 @@ class BridgeRepository(context: Context) {
         scope.launch {
             try {
                 api.selectModel(token, sid, provider, model)
-                _state.update { it.copy(modelLabel = label ?: model) }
+                _state.update { it.copy(modelLabel = label ?: model, modelProvider = provider, modelId = model) }
                 toast("已切换到 ${label ?: model}")
             } catch (error: BridgeException) {
                 handleApiError(error, "切换模型失败")
@@ -443,17 +470,20 @@ class BridgeRepository(context: Context) {
     private fun handleFrame(frame: JSONObject) {
         val kind = frame.optString("kind")
         val seq = frame.optLong("seq", 0L)
-        if (kind != "hello" && seq > _state.value.seq) {
-            _state.update { it.copy(seq = seq) }
+        if (kind != "hello" && seq > lastSeq) {
+            // Deliberately NOT part of the UI state: an event stream that bumps a
+            // StateFlow for every frame drags the entire screen through
+            // recomposition dozens of times per turn — which is jank you can see
+            // while scrolling. Only the reconnect handshake needs this number.
+            lastSeq = seq
             persistSeq(seq)
         }
         when (kind) {
             "notify" -> {
-                if (frame.optString("level") != "debug") {
-                    val title = frame.optString("title")
-                    val body = frame.optString("body")
-                    toast(listOf(title, body).filter { it.isNotBlank() }.joinToString(" · "))
-                }
+                // Turn-complete and config notices arrive once per turn — and every
+                // replayed one arrives again on reconnect. Toasting them buried the
+                // phone in popups; the list refresh plus the header pill carry the
+                // same information without stealing the screen.
                 if (_state.value.view == View.SESSIONS) loadSessions()
             }
             "event" -> handleEvent(frame)
@@ -466,8 +496,12 @@ class BridgeRepository(context: Context) {
         if (sid.isNotEmpty() && sid != s.sessionId) return
         val data = frame.optJSONObject("data") ?: JSONObject()
         when (frame.optString("type")) {
-            "turn/start" -> _state.update { it.copy(running = true, live = emptyList(), thinking = false) }
-            "turn/end" -> _state.update { it.copy(running = false, live = emptyList(), thinking = false) }
+            "turn/start" -> _state.update {
+                it.copy(running = true, live = emptyList(), thinking = true, thinkingSince = System.currentTimeMillis())
+            }
+            "turn/end" -> _state.update {
+                it.copy(running = false, live = emptyList(), thinking = false, thinkingSince = 0L)
+            }
             "assistant/chunk" -> {
                 // A streaming adapter may send thinking first; it belongs in the
                 // running indicator, never inside the reply bubble.

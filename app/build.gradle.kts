@@ -20,7 +20,13 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 on, resources shrunk: a debug Compose build is roughly twice the
+            // frame cost of a release one, which is most of the "掉帧" on a real
+            // phone. Signed with the debug key on purpose so it upgrades the
+            // debug-signed build already on the phone (same signature).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

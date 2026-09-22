@@ -1,8 +1,11 @@
 package com.dsh.mobile.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -35,6 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.dsh.mobile.data.Conn
 import com.dsh.mobile.data.ToastMsg
 import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.delay
@@ -74,21 +79,21 @@ fun CircleButton(
     }
 }
 
-/** The 5–6dp online dot ChatGPT puts inside its context pills. */
+/** The 5–6dp state dot inside the context pills: green / amber / gray. */
 @Composable
-fun StatusDot(online: Boolean, size: Dp = 6.dp) {
+fun StatusDot(conn: Conn, size: Dp = 6.dp) {
     val palette = LocalDsh.current
-    Box(
-        Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(if (online) palette.online else palette.offline)
-    )
+    val color = when (conn) {
+        Conn.ONLINE -> palette.online
+        Conn.CONNECTING -> palette.warn
+        Conn.OFFLINE -> palette.offline
+    }
+    Box(Modifier.size(size).clip(CircleShape).background(color))
 }
 
 /** `surface` pill with a status dot and one line of text. */
 @Composable
-fun StatusPill(text: String, online: Boolean, modifier: Modifier = Modifier) {
+fun StatusPill(text: String, conn: Conn, modifier: Modifier = Modifier) {
     val palette = LocalDsh.current
     Row(
         modifier
@@ -98,7 +103,7 @@ fun StatusPill(text: String, online: Boolean, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        StatusDot(online)
+        StatusDot(conn)
         Text(text, style = MaterialTheme.typography.bodySmall, color = palette.textSecondary, maxLines = 1)
     }
 }
@@ -114,7 +119,7 @@ fun ContextPill(
     modifier: Modifier = Modifier,
     metaIcon: ImageVector? = null,
     metaDot: Boolean = true,
-    metaOnline: Boolean = true,
+    metaConn: Conn = Conn.ONLINE,
     onClick: (() -> Unit)? = null,
 ) {
     val palette = LocalDsh.current
@@ -138,7 +143,7 @@ fun ContextPill(
             if (metaIcon != null) {
                 Icon(metaIcon, contentDescription = null, tint = palette.textSecondary, modifier = Modifier.size(12.dp))
             }
-            if (metaDot) StatusDot(metaOnline, size = 5.dp)
+            if (metaDot) StatusDot(metaConn, size = 5.dp)
             Text(
                 meta,
                 style = MaterialTheme.typography.labelSmall,
@@ -202,28 +207,42 @@ fun SheetAction(text: String, caption: String? = null, danger: Boolean = false, 
     }
 }
 
-/** The app's toast: a small pill floating above the composer / dock. */
+/**
+ * The app's toast: a compact floating chip that slides up from the bottom, in
+ * the ChatGPT register — dark rounded rect, one line, gone in ~2s. It is only
+ * for things the user just did; connection trouble belongs in the header pill.
+ * (It used to fire for every replayed turn event, which is what buried the
+ * phone in popups during a reconnect.)
+ */
 @Composable
 fun ToastHost(toast: ToastMsg?) {
     val palette = LocalDsh.current
     var visible by remember { mutableStateOf(false) }
     var lastSeen by remember { mutableStateOf(0) }
+    var lastMessage by remember { mutableStateOf("") }
     LaunchedEffect(toast?.seq) {
+        val message = toast?.message.orEmpty()
         if (toast != null && toast.seq != lastSeen) {
             lastSeen = toast.seq
+            if (message.isBlank() || (message == lastMessage && visible)) return@LaunchedEffect
+            lastMessage = message
             visible = true
-            delay(2600)
+            delay(if (message.length > 16) 3200 else 2100)
             visible = false
         }
     }
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
-        AnimatedVisibility(visible = visible && toast != null, enter = fadeIn(), exit = fadeOut()) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        AnimatedVisibility(
+            visible = visible && toast != null,
+            enter = fadeIn(tween(140)) + slideInVertically(tween(220)) { it / 2 },
+            exit = fadeOut(tween(140)) + slideOutVertically(tween(160)) { it / 3 },
+        ) {
             Box(
                 Modifier
-                    .padding(bottom = 118.dp, start = 32.dp, end = 32.dp)
-                    .clip(RoundedCornerShape(999.dp))
+                    .padding(bottom = 104.dp, start = 24.dp, end = 24.dp)
+                    .clip(RoundedCornerShape(14.dp))
                     .background(palette.toastBg)
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .padding(horizontal = 16.dp, vertical = 11.dp),
             ) {
                 Text(
                     toast?.message.orEmpty(),
