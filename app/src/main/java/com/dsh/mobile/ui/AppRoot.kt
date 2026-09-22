@@ -6,10 +6,9 @@ import android.content.ContextWrapper
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -67,37 +66,55 @@ fun AppRoot(repo: BridgeRepository) {
             AnimatedContent(
                 targetState = screenOf(state),
                 transitionSpec = {
-                    val crossFade = initialState == Screen.LOADING || targetState == Screen.LOADING ||
-                        initialState == Screen.PAIRING || targetState == Screen.PAIRING
-                    when {
-                        crossFade -> {
-                            fadeIn(tween(320, easing = PushEasing)) togetherWith fadeOut(tween(200))
-                        }
-                        // Slide only, no alpha: two full-screen layers fading at once
-                        // is four layers of overdraw on the frame — exactly the cost a
-                        // low-end GPU cannot pay while a 40-row list is sliding.
-                        targetState.depth > initialState.depth -> {
-                            slideInHorizontally(tween(300, easing = PushEasing)) { it } togetherWith
-                                slideOutHorizontally(tween(300, easing = PushEasing)) { -it / 3 }
-                        }
-                        else -> {
-                            slideInHorizontally(tween(300, easing = PushEasing)) { -it / 3 } togetherWith
-                                slideOutHorizontally(tween(300, easing = PushEasing)) { it }
-                        }
+                    // Learned on the phone, kept because every other variant looked
+                    // broken in a screen recording:
+                    //
+                    // 1. Never make both screens translucent at once. A cross-fade of
+                    //    two full screens reads as 重影: both pages' text stays legible
+                    //    through the other.
+                    // 2. Never move a screen half way off an edge. A left-aligned list
+                    //    loses the first characters of every row ("Ping Pong Reply" →
+                    //    "ong Reply") and it looks like a rendering fault, not motion.
+                    //
+                    // So exactly one layer animates and it is always opaque:
+                    // forward — the next screen slides in from beyond the right edge,
+                    // its left edge on screen from the first frame, over a screen that
+                    // stays perfectly still (this is also Android's own default).
+                    // back — the previous screen settles in from a hair of zoom; no
+                    // sideways offset exists to clip.
+                    val forward = targetState.depth > initialState.depth
+                    // Both screens animate on purpose. A screen whose exit has no
+                    // motion (ExitTransition.None, a zero-offset slide, even
+                    // KeepUntilTransitionsFinished) gets dropped while the incoming
+                    // slide is still ~20% short of covering it, and the frame goes
+                    // black where the old page was. Scaling the outgoing keeps it in
+                    // the composition for the whole transition without translating it
+                    // sideways (a translation is what clips a left-aligned list).
+                    val recede = scaleOut(tween(300, easing = PushEasing), targetScale = 0.96f)
+                    if (forward) {
+                        slideInHorizontally(tween(300, easing = PushEasing)) { it } togetherWith recede
+                    } else {
+                        scaleIn(tween(280, easing = PushEasing), initialScale = 0.94f) togetherWith recede
                     }
                 },
                 label = "screen",
                 modifier = Modifier.fillMaxSize(),
             ) { screen ->
-                when (screen) {
-                    Screen.LOADING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = palette.accent, strokeWidth = 2.dp)
+                // Every screen paints its own opaque layer. Without it both screens
+                // are translucent during a push/pop, so their contents overlap and the
+                // transition reads as a double image instead of one screen sliding
+                // over another.
+                Box(Modifier.fillMaxSize().background(palette.bg)) {
+                    when (screen) {
+                        Screen.LOADING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = palette.accent, strokeWidth = 2.dp)
+                        }
+                        Screen.PAIRING -> PairingScreen(state, repo)
+                        Screen.SETTINGS -> SettingsScreen(state, repo)
+                        Screen.MODELS -> ModelsScreen(state, repo)
+                        Screen.CHAT -> ChatScreen(state, repo)
+                        Screen.SESSIONS -> SessionsScreen(state, repo)
                     }
-                    Screen.PAIRING -> PairingScreen(state, repo)
-                    Screen.SETTINGS -> SettingsScreen(state, repo)
-                    Screen.MODELS -> ModelsScreen(state, repo)
-                    Screen.CHAT -> ChatScreen(state, repo)
-                    Screen.SESSIONS -> SessionsScreen(state, repo)
                 }
             }
             ToastHost(state.toast)
