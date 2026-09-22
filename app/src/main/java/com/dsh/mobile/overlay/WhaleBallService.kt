@@ -31,9 +31,12 @@ import com.dsh.mobile.ui.WhaleLines
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.min
+import com.dsh.mobile.ui.WhaleFace
+import com.dsh.mobile.ui.WhaleMood
 
 /**
  * 应用外的鲸鱼娘悬浮球。
@@ -62,6 +65,7 @@ class WhaleBallService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var bob: ValueAnimator? = null
     private var bubble: TextView? = null
+    private var lastCelebrate = 0L
     private var side = 0 // -1 左，1 右
     private var pats = 0
     private var lastTapAt = 0L
@@ -77,10 +81,8 @@ class WhaleBallService : Service() {
     /** 只听一个 StateFlow 的 running 变化，任务结束冒一句话。 */
     private val scope = CoroutineScope(Dispatchers.Main.immediate)
     private var wasRunning = false
-    private val faceNormal by lazy { R.drawable.whale_face_normal }
-    private val faceHappy by lazy { R.drawable.whale_face_happy }
-    private val faceShy by lazy { R.drawable.whale_face_shy }
-    private val faceSleepy by lazy { R.drawable.whale_face_sleepy }
+    private val faceNormal by lazy { WhaleFace.NORMAL.res }
+    private val faceSleepy by lazy { WhaleFace.SLEEPY.res }
 
     /** 恢复成普通脸（表情是临时的，都会自己回来）。 */
     private val backToNormal = Runnable { setFace(faceNormal) }
@@ -137,20 +139,20 @@ class WhaleBallService : Service() {
         scope.launch {
             val repo = (application as? DshApp)?.repo ?: return@launch
             repo.state.collect { st ->
-                if (wasRunning && !st.running && ::ball.isInitialized) {
-                    setFace(faceHappy)
-                    // 完成：先蹦两下，再报一句 —— 比单纯冒字更像"干完了"
-                    ball.animate().translationY(-dp(12).toFloat()).setDuration(130).withEndAction {
-                        ball.animate().translationY(0f).setDuration(150).withEndAction {
-                            ball.animate().translationY(-dp(6).toFloat()).setDuration(100).withEndAction {
-                                ball.animate().translationY(0f).setDuration(130).start()
-                                startBob()
-                            }.start()
-                        }.start()
-                    }.start()
-                    showBubble(WhaleLines.DONE.random(), done = true)
-                }
+                if (wasRunning && !st.running) celebrate()
                 wasRunning = st.running
+            }
+        }
+        // 兜底：App 在后台时实时状态可能收不到，靠列表轮询补一次"任务完成"
+        scope.launch {
+            val repo = (application as? DshApp)?.repo ?: return@launch
+            var prevRunning = 0
+            while (true) {
+                delay(15_000)
+                runCatching { repo.loadSessions() }
+                val now = repo.state.value.sessions.count { it.running }
+                if (prevRunning > 0 && now == 0) celebrate()
+                if (now > 0 || prevRunning == 0) prevRunning = now
             }
         }
     }
@@ -189,7 +191,7 @@ class WhaleBallService : Service() {
 
     private fun addBall() {
         ball = ImageView(this).apply {
-            setImageResource(faceNormal)
+            setImageResource(WhaleFace.NORMAL.res)
             scaleType = ImageView.ScaleType.FIT_CENTER
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
             contentDescription = "鲸鱼娘"
@@ -307,7 +309,7 @@ class WhaleBallService : Service() {
         // 刚收起来的那一下点击已经在上面处理过了，别再开（否则就是"关不掉"）
         if (android.os.SystemClock.uptimeMillis() - lastHideAt < 400) return
         bob?.pause()
-        setFace(faceHappy)
+        setFace(WhaleMood.forStart().res)
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
@@ -394,14 +396,14 @@ class WhaleBallService : Service() {
             .withEndAction { panel.post { runCatching { window.removeView(panel) } } }
             .start()
         bob?.resume()
-        if (handler.hasCallbacks(backToNormal).not()) setFace(faceNormal)
+        if (handler.hasCallbacks(backToNormal).not()) setFace(WhaleFace.NORMAL.res)
     }
 
     // ------------------------------------------------------------------ 表情
 
     private fun pat() {
         pats++
-        setFace(if (pats % 2 == 1) faceShy else faceHappy)
+        setFace(WhaleMood.forPat(pats).res)
         showBubble(patLines[(pats - 1) % patLines.size])
         handler.removeCallbacks(getSleepy)
         bob?.cancel()
@@ -410,6 +412,27 @@ class WhaleBallService : Service() {
             ball.animate().translationY(0f).setDuration(160).start()
             startBob()
         }.start()
+    }
+
+    /**
+     * 任务完成：蹦两下 + 冒一句。两条检测路径（实时状态 / 列表轮询）共用，
+     * 6 秒内只报一次，免得重复弹。
+     */
+    private fun celebrate() {
+        if (!::ball.isInitialized) return
+        val now = System.currentTimeMillis()
+        if (now - lastCelebrate < 6_000) return
+        lastCelebrate = now
+        setFace(WhaleMood.forDone().res)
+        ball.animate().translationY(-dp(12).toFloat()).setDuration(130).withEndAction {
+            ball.animate().translationY(0f).setDuration(150).withEndAction {
+                ball.animate().translationY(-dp(6).toFloat()).setDuration(100).withEndAction {
+                    ball.animate().translationY(0f).setDuration(130).start()
+                    startBob()
+                }.start()
+            }.start()
+        }.start()
+        showBubble(WhaleLines.DONE.random(), done = true)
     }
 
     /** 淡出任务：换一句话时不重复排队。 */
@@ -454,10 +477,31 @@ class WhaleBallService : Service() {
             setColor(if (done) Color.parseColor("#E62E4A3A") else Color.parseColor("#E62B3036"))
             if (done) setStroke(dp(1), Color.parseColor("#804BE07A"))
         }
-        // 球可能被拖过：每次都把气泡重新对到她头顶
+        // 气泡不能死板地挂在左上角：球贴到哪个边，它就往哪边收
+        //   ① 球在屏幕右半边 → 气泡右对齐到球；左半边 → 左对齐
+        //   ② 上方放不下（球贴着状态栏）→ 翻到球下方
+        //   ③ 最后再夹进屏幕范围，永不越界
         (tv.layoutParams as? WindowManager.LayoutParams)?.let { params ->
-            params.x = (ballParams.x + ballSize / 2 - dp(40)).coerceAtLeast(dp(6))
-            params.y = (ballParams.y - dp(34)).coerceAtLeast(statusBar() + dp(2))
+            tv.measure(
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            )
+            val bw = tv.measuredWidth.coerceAtLeast(dp(48))
+            val bh = tv.measuredHeight.coerceAtLeast(dp(28))
+            val metrics = resources.displayMetrics
+            val screenW = metrics.widthPixels
+            val screenH = metrics.heightPixels
+            val ballCenter = ballParams.x + ballSize / 2
+            val gap = dp(7)
+            val rawX = if (ballCenter > screenW / 2) ballParams.x + ballSize - bw else ballParams.x
+            val above = ballParams.y - bh - gap
+            val below = ballParams.y + ballSize + gap
+            val rawY = if (above >= statusBar() + dp(2)) above else below
+            params.x = rawX.coerceIn(dp(6), (screenW - bw - dp(6)).coerceAtLeast(dp(6)))
+            params.y = rawY.coerceIn(
+                statusBar() + dp(2),
+                (screenH - bh - dp(8)).coerceAtLeast(statusBar() + dp(2)),
+            )
             runCatching { window.updateViewLayout(tv, params) }
         }
         tv.animate().cancel()

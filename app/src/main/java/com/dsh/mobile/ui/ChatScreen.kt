@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -109,6 +110,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.animation.slideInVertically
 import androidx.compose.material.icons.outlined.CheckCircle
+import android.graphics.Bitmap
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
+import androidx.compose.material.icons.outlined.Add
+import java.io.File
 
 /** 空会话时的开场白：点一下就把这句话发给电脑端。 */
 private val OPENERS = listOf(
@@ -138,6 +146,45 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
     val context = LocalContext.current
     var showRename by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<Wire.Artifact?>(null) }
+    // ---- 附件：待发图片、缩略图、编辑中的图、来源弹层 ----
+    var attachments by remember { mutableStateOf<List<AttachImage>>(emptyList()) }
+    var attachPreviews by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
+    var pendingEdit by remember { mutableStateOf<Bitmap?>(null) }
+    var showAttach by remember { mutableStateOf(false) }
+    var captureUri by remember { mutableStateOf<Uri?>(null) }
+    val attachScope = rememberCoroutineScope()
+    // 她跟着对话变脸：从最新一条回复里读情绪词
+    val lastReply = state.history.lastOrNull { it.who == Role.ASSISTANT }?.text
+    val chatMood = remember(lastReply) { lastReply?.let { WhaleMood.forText(it) } }
+
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val uri = captureUri
+        if (ok && uri != null) {
+            attachScope.launch { loadBitmap(context, uri)?.let { pendingEdit = it } }
+        }
+    }
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) attachScope.launch { loadBitmap(context, uri)?.let { pendingEdit = it } }
+    }
+    val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val mime = runCatching { context.contentResolver.getType(uri).orEmpty() }.getOrDefault("")
+            if (mime.startsWith("image/")) {
+                attachScope.launch { loadBitmap(context, uri)?.let { pendingEdit = it } }
+            } else {
+                repo.toast("暂时只能发图片：文件需要电脑端配合（下一版做）")
+            }
+        }
+    }
+    fun startCamera() {
+        runCatching {
+            val dir = File(context.cacheDir, "shared").apply { mkdirs() }
+            val file = File(dir, "capture-${System.currentTimeMillis()}.jpg")
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            captureUri = uri
+            cameraLauncher.launch(uri)
+        }.onFailure { repo.toast("打不开相机：${it.message ?: "未知原因"}") }
+    }
     // 任务完成提示：running 由 true 变 false 的那一刻浮出来，几秒后自己走
     var runningSeen by remember { mutableStateOf(state.running) }
     var doneLine by remember { mutableStateOf("") }
@@ -165,7 +212,10 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
+    // IME 内边距加在**最外层**：键盘弹起时整列（含对话列表）一起被抬起来，
+    // 列表可视区真的变矮，最后一条不会再被键盘压住。只给输入条加的话，
+    // 列表仍然铺到屏幕底部，底下那一段就"消失"在键盘后面了。
+    Column(Modifier.fillMaxSize().imePadding()) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -222,6 +272,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             WhalePerch(
                 size = 54.dp,
                 running = state.running,
+                mood = chatMood,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(end = 30.dp)
@@ -233,6 +284,22 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
                 onOpenModels = {
                     showModels = true
                     if (state.doc == null) repo.loadModels()
+                },
+                attachments = attachments,
+                previews = attachPreviews,
+                onRemoveAttachment = { index ->
+                    attachments = attachments.filterIndexed { i, _ -> i != index }
+                    attachPreviews = attachPreviews.filterIndexed { i, _ -> i != index }
+                },
+                onAddAttachment = { showAttach = true },
+                onSendWith = { text, images ->
+                    scope.launch {
+                        val ok = repo.sendWithImages(text, images)
+                        if (ok) {
+                            attachments = emptyList()
+                            attachPreviews = emptyList()
+                        }
+                    }
                 },
             )
         }
@@ -329,6 +396,39 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             },
         )
     }
+    if (showAttach) {
+        AttachmentSheet(
+            onDismiss = { showAttach = false },
+            onCamera = {
+                showAttach = false
+                startCamera()
+            },
+            onGallery = {
+                showAttach = false
+                galleryLauncher.launch("image/*")
+            },
+            onFile = {
+                showAttach = false
+                fileLauncher.launch(arrayOf("*/*"))
+            },
+        )
+    }
+
+    pendingEdit?.let { editing ->
+        PhotoEditor(
+            original = editing,
+            onCancel = { pendingEdit = null },
+            onDone = { edited ->
+                pendingEdit = null
+                attachScope.launch {
+                    val image = encodeForUpload(edited, "photo-${System.currentTimeMillis()}.jpg")
+                    attachments = attachments + image
+                    attachPreviews = attachPreviews + edited
+                }
+            },
+        )
+    }
+
 }
 
 @Composable
@@ -443,9 +543,11 @@ private fun MessageList(
     }
     LaunchedEffect(imeOpen) {
         if (imeOpen) {
-            delay(60)
+            delay(40)
             val total = listState.layoutInfo.totalItemsCount
-            if (total > 0) runCatching { listState.animateScrollToItem(total - 1) }
+            // 不用 animateScrollToItem：键盘本身在动画，再叠一个滚动动画既卡又晃，
+            // 直接定位到底部跟手得多
+            if (total > 0) runCatching { listState.scrollToItem(total - 1) }
         }
     }
     LaunchedEffect(itemCount, lastLiveLength) {
@@ -915,6 +1017,11 @@ private fun Composer(
     state: AppState,
     repo: BridgeRepository,
     onOpenModels: () -> Unit,
+    attachments: List<AttachImage>,
+    previews: List<Bitmap>,
+    onRemoveAttachment: (Int) -> Unit,
+    onAddAttachment: () -> Unit,
+    onSendWith: (String, List<AttachImage>) -> Unit,
 ) {
     val palette = LocalDsh.current
     var draft by rememberSaveable { mutableStateOf("") }
@@ -922,19 +1029,26 @@ private fun Composer(
     Row(
         Modifier
             .fillMaxWidth()
-            .imePadding()
             .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
-        Row(
+        Column(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(24.dp))
                 .background(palette.surface)
                 .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.Bottom,
         ) {
+            if (attachments.isNotEmpty()) {
+                AttachmentStrip(
+                    images = attachments,
+                    previews = previews,
+                    onRemove = onRemoveAttachment,
+                    onAdd = onAddAttachment,
+                )
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
             // 胶囊 = 36dp 高，输入框首行也是 36dp（6+24+6）——两边中线对齐，
             // 不会一个上一个下
             ModelChip(state = state, onClick = onOpenModels)
@@ -944,12 +1058,15 @@ private fun Composer(
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 36.dp, max = 140.dp)
+                    // 单行时把文字在 36dp 里居中；不加这句 BasicTextField 会把文字贴顶
+                    .wrapContentHeight(Alignment.CenterVertically)
                     .padding(horizontal = 6.dp, vertical = 6.dp),
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.textPrimary),
                 cursorBrush = SolidColor(palette.accent),
                 maxLines = 6,
                 decorationBox = { innerTextField ->
-                    Box {
+                    // 占位文字和真实文字同一个对齐基准（都居中），否则一个偏上一个偏下
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
                         if (draft.isEmpty()) {
                             Text(
                                 if (state.connected) "给电脑端发消息…" else "重连中…",
@@ -962,6 +1079,16 @@ private fun Composer(
                 },
             )
             Spacer(Modifier.width(4.dp))
+            // 加号：拍照 / 相册 / 文件（已经有附件时，缩略图条里自带一个加号）
+            if (attachments.isEmpty()) {
+                CircleAction(
+                    background = palette.surfaceHi,
+                    icon = Icons.Outlined.Add,
+                    tint = palette.textPrimary,
+                    contentDescription = "添加图片或文件",
+                    enabled = !state.sending,
+                ) { onAddAttachment() }
+            }
             if (state.running) {
                 CircleAction(
                     background = palette.surfaceHi,
@@ -971,13 +1098,14 @@ private fun Composer(
                     enabled = true,
                 ) { repo.cancelTurn() }
             } else {
+                val ready = draft.isNotBlank() || attachments.isNotEmpty()
                 val sendBg by animateColorAsState(
-                    targetValue = if (draft.isNotBlank()) palette.accent else palette.surfaceHi,
+                    targetValue = if (ready) palette.accent else palette.surfaceHi,
                     animationSpec = tween(200),
                     label = "sendBg",
                 )
                 val sendTint by animateColorAsState(
-                    targetValue = if (draft.isNotBlank()) palette.onAccent else palette.textSecondary,
+                    targetValue = if (ready) palette.onAccent else palette.textSecondary,
                     animationSpec = tween(200),
                     label = "sendTint",
                 )
@@ -986,17 +1114,22 @@ private fun Composer(
                     icon = Icons.Outlined.ArrowUpward,
                     tint = sendTint,
                     contentDescription = "发送",
-                    enabled = draft.isNotBlank() && !state.sending,
+                    enabled = ready && !state.sending,
                 ) {
                     val text = draft.trim()
-                    if (text.isNotEmpty()) {
+                    if (text.isNotEmpty() || attachments.isNotEmpty()) {
                         draft = ""
-                        scope.launch {
-                            val ok = repo.send(text)
-                            if (!ok) draft = text
+                        if (attachments.isEmpty()) {
+                            scope.launch {
+                                val ok = repo.send(text)
+                                if (!ok) draft = text
+                            }
+                        } else {
+                            onSendWith(text, attachments)
                         }
                     }
                 }
+            }
             }
         }
     }

@@ -168,6 +168,70 @@ enum class WhaleFace(val res: Int) {
     HAPPY(R.drawable.whale_face_happy),
     SHY(R.drawable.whale_face_shy),
     SLEEPY(R.drawable.whale_face_sleepy),
+    HAPPY_BIG(R.drawable.whale_face_happy_big),
+    ANGRY(R.drawable.whale_face_angry),
+    SAD(R.drawable.whale_face_sad),
+    CALM(R.drawable.whale_face_calm),
+    TSUNDERE(R.drawable.whale_face_tsundere),
+    DISDAIN(R.drawable.whale_face_disdain),
+    POUT(R.drawable.whale_face_pout),
+    SMUG(R.drawable.whale_face_smug),
+    BLUSH(R.drawable.whale_face_blush),
+    SURPRISED(R.drawable.whale_face_surprised),
+    AGGRIEVED(R.drawable.whale_face_aggrieved),
+    EAGER(R.drawable.whale_face_eager),
+    EXCITED(R.drawable.whale_face_excited),
+    DEADPAN(R.drawable.whale_face_deadpan),
+    THINKING(R.drawable.whale_face_thinking),
+    COQUETTISH(R.drawable.whale_face_coquettish),
+    SERIOUS(R.drawable.whale_face_serious),
+    NAUGHTY(R.drawable.whale_face_naughty),
+    SCARED(R.drawable.whale_face_scared),
+}
+
+/**
+ * 什么场合摆什么表情。
+ *
+ * 两条线索：
+ *  - **交互**：摸头第几次、任务开工/完工；
+ *  - **对话内容**：电脑端回的话里带什么情绪词（成功/失败/注意/疑问…）——她跟着对话变脸。
+ */
+object WhaleMood {
+
+    private fun hit(text: String, words: List<String>) = words.any { it in text }
+
+    /** 按一句回复挑表情；挑不到就 null（保持原样，不乱变）。 */
+    fun forText(text: String): WhaleFace? {
+        val t = text.takeLast(1500)
+        return when {
+            hit(t, listOf("失败", "错误", "报错", "异常", "无法", "不能", "不支持", "抱歉", "没有找到")) -> WhaleFace.AGGRIEVED
+            hit(t, listOf("注意", "警告", "危险", "小心", "务必", "重要")) -> WhaleFace.SERIOUS
+            hit(t, listOf("哈哈", "太好了", "太棒", "成功", "搞定", "完成", "搞定啦", "🎉", "✅")) -> WhaleFace.EXCITED
+            hit(t, listOf("？", "?")) -> WhaleFace.THINKING
+            hit(t, listOf("！", "!")) -> WhaleFace.SURPRISED
+            hit(t, listOf("好可爱", "谢谢你", "辛苦")) -> WhaleFace.BLUSH
+            else -> null
+        }
+    }
+
+    /** 摸头：一下一个反应，摸多了会傲娇。 */
+    fun forPat(count: Int): WhaleFace = when {
+        count <= 1 -> WhaleFace.HAPPY
+        count == 2 -> WhaleFace.SHY
+        count == 3 -> WhaleFace.BLUSH
+        count == 4 -> WhaleFace.COQUETTISH
+        count == 5 -> WhaleFace.TSUNDERE
+        count == 6 -> WhaleFace.POUT
+        else -> WhaleFace.DISDAIN
+    }
+
+    fun forStart(): WhaleFace =
+        listOf(WhaleFace.SERIOUS, WhaleFace.EAGER, WhaleFace.THINKING, WhaleFace.CALM).random()
+
+    fun forDone(): WhaleFace =
+        listOf(WhaleFace.SMUG, WhaleFace.EXCITED, WhaleFace.HAPPY_BIG, WhaleFace.COQUETTISH, WhaleFace.NAUGHTY).random()
+
+    fun forIdle(): WhaleFace = listOf(WhaleFace.CALM, WhaleFace.NORMAL, WhaleFace.SLEEPY, WhaleFace.DEADPAN).random()
 }
 
 /**
@@ -185,6 +249,8 @@ fun PettableWhale(
     base: WhaleFace = WhaleFace.NORMAL,
     lines: List<String> = WhaleLines.IDLE,
     externalLine: String? = null,
+    /** 对话/任务带来的临时表情：变一次、露几秒，然后回到 [base]。 */
+    externalMood: WhaleFace? = null,
     initialDelayMillis: Int = 420,
 ) {
     var face by remember { mutableStateOf(base) }
@@ -205,11 +271,19 @@ fun PettableWhale(
             delay(initialDelayMillis.toLong())
             return@LaunchedEffect
         }
-        face = if (pats % 2 == 1) WhaleFace.SHY else WhaleFace.HAPPY
+        face = WhaleMood.forPat(pats)
         line = lines.random()
         delay(1700)
         line = null
         delay(160)      // 先收气泡、再换脸：同一帧做两件事看着也是一次闪
+        face = base
+    }
+
+    // 对话内容带来的表情：露 4 秒就收（配合台词一起出现）
+    LaunchedEffect(externalMood) {
+        val mood = externalMood ?: return@LaunchedEffect
+        face = mood
+        delay(4000)
         face = base
     }
 
@@ -304,14 +378,19 @@ fun WhalePerch(
     size: Dp = 52.dp,
     running: Boolean = false,
     modifier: Modifier = Modifier,
+    /** 聊天内容带来的情绪（由 ChatScreen 从最新回复里推断）。 */
+    mood: WhaleFace? = null,
 ) {
     var lastRunning by remember { mutableStateOf<Boolean?>(null) }
     var autoLine by remember { mutableStateOf<String?>(null) }
+    var autoMood by remember { mutableStateOf<WhaleFace?>(null) }
 
     LaunchedEffect(running) {
         val prev = lastRunning
         lastRunning = running
         if (prev == null || prev == running) return@LaunchedEffect
+        // 开工认真、完工得意：表情和台词一起换
+        autoMood = if (running) WhaleMood.forStart() else WhaleMood.forDone()
         autoLine = if (running) WhaleLines.START.random() else WhaleLines.DONE.random()
         delay(2800)
         autoLine = null
@@ -322,6 +401,7 @@ fun WhalePerch(
             size = size,
             lines = if (running) WhaleLines.RUNNING else WhaleLines.IDLE,
             externalLine = autoLine,
+            externalMood = autoMood ?: mood,
             modifier = Modifier.offset(y = 3.dp),
         )
     }

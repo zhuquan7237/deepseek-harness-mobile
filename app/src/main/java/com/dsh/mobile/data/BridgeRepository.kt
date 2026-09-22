@@ -458,6 +458,49 @@ class BridgeRepository(context: Context) {
     }
 
     /** Send a prompt; returns false when the send failed (draft should return). */
+    /** 带图（或纯图）发送：content 里 text + image 混排，引擎原生支持。 */
+    suspend fun sendWithImages(text: String, images: List<com.dsh.mobile.ui.AttachImage>): Boolean {
+        val s = _state.value
+        val sid = s.sessionId ?: return false
+        val token = s.token ?: return false
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() && images.isEmpty()) return false
+        val label = trimmed.ifEmpty { "（图片 ×${images.size}）" }
+        _state.update {
+            it.copy(history = it.history + ChatRow(Role.USER, label), running = true, sending = true)
+        }
+        return try {
+            val content = org.json.JSONArray()
+            if (trimmed.isNotEmpty()) {
+                content.put(JSONObject().put("type", "text").put("text", trimmed))
+            }
+            images.forEach { image ->
+                content.put(
+                    JSONObject()
+                        .put("type", "image")
+                        .put("mediaType", image.mediaType)
+                        .put("data", image.base64)
+                        .put("name", image.name),
+                )
+            }
+            api.promptRich(token, sid, content)
+            _state.update {
+                it.copy(
+                    sending = false,
+                    running = true,
+                    thinking = true,
+                    thinkingSince = System.currentTimeMillis(),
+                )
+            }
+            true
+        } catch (error: Exception) {
+            _state.update { it.copy(history = it.history.dropLast(1), running = false, sending = false) }
+            if (error is BridgeException) handleApiError(error, "发送失败")
+            else toast("发送失败：${error.message ?: "网络错误"}")
+            false
+        }
+    }
+
     suspend fun send(text: String): Boolean {
         val s = _state.value
         val sid = s.sessionId ?: return false
