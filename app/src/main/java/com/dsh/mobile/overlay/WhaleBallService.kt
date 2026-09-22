@@ -122,6 +122,13 @@ class WhaleBallService : Service() {
             stopSelf()
             return
         }
+        // 先判偏好：用户关掉之后被 START_STICKY 拉起时，绝不能先把球画出来再收
+        //（那样就会出现"显示已关闭、球却闪一下甚至赖着"的真机反馈）
+        if (!((application as? DshApp)?.repo?.overlayEnabled() ?: true)) {
+            stopSelf()
+            return
+        }
+        alive = true
         startForegroundCompat()
         addBall()
         startBob()
@@ -162,6 +169,7 @@ class WhaleBallService : Service() {
         bubble?.let { runCatching { window.removeView(it) } }
         bubble = null
         if (::ball.isInitialized) runCatching { window.removeView(ball) }
+        alive = false
         super.onDestroy()
     }
 
@@ -299,6 +307,8 @@ class WhaleBallService : Service() {
             }
             // 不用 elevation：非 Activity 的悬浮窗上它容易在出现/消失时闪一下
             setPadding(0, dp(6), 0, dp(6))
+            // 属性动画（alpha/scale）期间走硬件层，避免边动画边重绘导致的关闭闪烁
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
             alpha = 0f
             scaleX = 0.86f
             scaleY = 0.86f
@@ -370,7 +380,8 @@ class WhaleBallService : Service() {
         lastHideAt = android.os.SystemClock.uptimeMillis()
         panel.animate().alpha(0f).scaleX(0.94f).scaleY(0.94f)
             .setDuration(130)
-            .withEndAction { runCatching { window.removeView(panel) } }
+            // 移除放到下一帧：动画最后一帧还在合成里，这一帧就撤窗口会闪一下
+            .withEndAction { panel.post { runCatching { window.removeView(panel) } } }
             .start()
         bob?.resume()
         if (handler.hasCallbacks(backToNormal).not()) setFace(faceNormal)
@@ -480,8 +491,12 @@ class WhaleBallService : Service() {
 
     private fun statusBar(): Int = dp(28)
 
-    private companion object {
+    companion object {
         const val CHANNEL = "whale-ball"
         const val NOTIFICATION_ID = 0x5A1
+
+        /** 服务是否真的活着。仓库层用它核对"开关说开了、球到底有没有出来"。 */
+        @Volatile
+        var alive = false
     }
 }

@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -82,9 +84,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -128,6 +132,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
     var showActions by remember { mutableStateOf(false) }
     var showModels by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var showRename by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<Wire.Artifact?>(null) }
 
@@ -165,6 +170,11 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             onRegenerate = { repo.regenerate() },
             onPreview = { preview = it },
             onQuickSend = { line -> scope.launch { repo.send(line) } },
+            onSaveCode = { lang, code ->
+                val where = saveTextToDownloads(context, codeFileName(lang), code)
+                if (where != null) repo.toast("已保存到 $where") else repo.toast("保存失败，已复制到剪贴板")
+                if (where == null) clipboard.setText(AnnotatedString(code))
+            },
             modifier = Modifier.weight(1f),
         )
         // 她浮在输入框上沿：Box + align + offset 不占布局空间（原来独占一行，输入框
@@ -290,6 +300,7 @@ private fun MessageList(
     onRegenerate: () -> Unit,
     onPreview: (Wire.Artifact) -> Unit,
     onQuickSend: (String) -> Unit,
+    onSaveCode: (String, String) -> Unit,
     modifier: Modifier,
 ) {
     val palette = LocalDsh.current
@@ -306,6 +317,7 @@ private fun MessageList(
             Box(Modifier.animateItem()) {
                 MessageRow(
                     row = row,
+                    onSaveCode = onSaveCode,
                     showActions = showActions,
                     reveal = index == state.revealRow,
                     onCopy = onCopy,
@@ -372,6 +384,14 @@ private fun MessageList(
 
     val itemCount = rows.size + (if (live.isEmpty()) 0 else live.size)
     val lastLiveLength = live.lastOrNull()?.text?.length ?: 0
+    // 键盘弹起时可视高度被压小，不滚到底的话最新内容正好被输入框盖在下面
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    LaunchedEffect(imeBottom, itemCount) {
+        if (imeBottom > 0 && itemCount > 0) {
+            delay(80)
+            runCatching { listState.animateScrollToItem(itemCount - 1) }
+        }
+    }
     LaunchedEffect(itemCount, lastLiveLength) {
         // `layoutInfo` can still describe the *previous* (empty) layout on the first
         // frame after the screen opens: totalItemsCount would be 0 and
@@ -400,6 +420,7 @@ private fun SpeakerSemantics(content: @Composable () -> Unit) {
 @Composable
 private fun MessageRow(
     row: ChatRow,
+    onSaveCode: (String, String) -> Unit,
     showActions: Boolean = false,
     reveal: Boolean = false,
     onCopy: (String) -> Unit = {},
@@ -455,7 +476,23 @@ private fun MessageRow(
                     .fillMaxWidth()
                     .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
             ) {
-                Text(body, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
+                // 正文与代码块分开排：代码单独装进卡片（等宽、横向滚动、可复制/保存），
+                // 不再和正文混在一起看着像乱码
+                val segments = remember(row.text) { splitCodeBlocks(body) }
+                segments.forEach { seg ->
+                    when (seg) {
+                        is MsgSegment.Body -> Text(
+                            seg.text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = palette.textPrimary,
+                            modifier = Modifier.padding(bottom = 6.dp),
+                        )
+                        is MsgSegment.Code -> {
+                            CodeCard(lang = seg.lang, code = seg.code, onCopy = onCopy, onSave = onSaveCode)
+                            Spacer(Modifier.height(8.dp))
+                        }
+                    }
+                }
                 val artifact = if (done) remember(row.text) { Wire.findArtifact(row.text) } else null
                 if (artifact != null) {
                     Spacer(Modifier.height(10.dp))

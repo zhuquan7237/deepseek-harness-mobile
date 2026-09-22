@@ -590,11 +590,21 @@ class BridgeRepository(context: Context) {
     private fun syncOverlayService() {
         val want = _state.value.overlayBall && canOverlay()
         val intent = android.content.Intent(appContext, com.dsh.mobile.overlay.WhaleBallService::class.java)
+        if (!want) {
+            runCatching { appContext.stopService(intent) }
+            return
+        }
         runCatching {
-            if (want) {
-                if (android.os.Build.VERSION.SDK_INT >= 26) appContext.startForegroundService(intent) else appContext.startService(intent)
-            } else {
-                appContext.stopService(intent)
+            if (android.os.Build.VERSION.SDK_INT >= 26) appContext.startForegroundService(intent) else appContext.startService(intent)
+        }
+        // 真起来了没有？MIUI 这类系统会在"后台弹出界面"受限时静默拒绝启动，于是开关
+        // 显示已开启、球却没出现（真机反馈）。等一下核对，没起来就把开关退回关闭并说原因。
+        scope.launch {
+            kotlinx.coroutines.delay(900)
+            if (!com.dsh.mobile.overlay.WhaleBallService.alive) {
+                _state.update { it.copy(overlayBall = false) }
+                store.saveOverlay(false)
+                toast("系统阻止了悬浮球启动：请在本机设置里允许本应用「后台弹出界面/自启动」")
             }
         }
     }

@@ -248,7 +248,11 @@ fun PettableWhale(
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(14.dp),
-                shadowElevation = 2.dp,
+                // 不用阴影：消失动画期间阴影会重画，看着就是"关的时候闪一下"
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f),
+                ),
             ) {
                 Text(
                     text = line.orEmpty(),

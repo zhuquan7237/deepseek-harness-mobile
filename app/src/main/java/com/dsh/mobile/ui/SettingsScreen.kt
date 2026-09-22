@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import android.content.Intent
@@ -109,28 +110,47 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
             }
 
             SectionHeader("鲸鱼娘", Modifier.padding(start = 0.dp))
-            SettingsAction(
-                label = "悬浮球（显示在其他应用上层）",
-                value = when {
-                    state.overlayBall -> "已开启"
-                    !state.overlayPermission -> "未授权"
-                    else -> "已关闭"
-                },
+            // 胶囊开关：一眼能看出开还是关（原来是一行文字，容易看错）
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                when {
-                    state.overlayBall -> repo.setOverlayBall(false)
-                    repo.canOverlay() -> repo.setOverlayBall(true)
-                    else -> runCatching {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:" + context.packageName),
-                            ),
-                        )
-                    }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "悬浮球",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = palette.textPrimary,
+                    )
+                    Text(
+                        when {
+                            state.overlayBall -> "已开启 · 点她开新对话、看任务，可拖动"
+                            !state.overlayPermission -> "需要「显示在其他应用上层」权限"
+                            else -> "已关闭 · 打开后她会贴在桌面最上层"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textSecondary,
+                    )
                 }
+                Switch(
+                    checked = state.overlayBall,
+                    onCheckedChange = { want ->
+                        when {
+                            !want -> repo.setOverlayBall(false)
+                            repo.canOverlay() -> repo.setOverlayBall(true)
+                            else -> runCatching {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:" + context.packageName),
+                                    ),
+                                )
+                            }
+                        }
+                    },
+                )
             }
-            SettingsValue("说明", "贴在其他应用上层的鲸鱼娘：点她开新对话、看任务，可拖动")
 
             SectionHeader("关于", Modifier.padding(start = 0.dp))
             SettingsValue("手机端", state.version.ifBlank { "—" })
