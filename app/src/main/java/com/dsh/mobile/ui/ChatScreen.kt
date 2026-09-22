@@ -560,25 +560,9 @@ private fun MessageList(
     // 重组一遍，再加上滚动动画被反复取消重建，看起来就是"上移的时候卡顿掉帧"。
     // derivedStateOf：只在"键盘是否可见"这个布尔值翻转时才通知重组，
     // 键盘动画期间每帧变化的高度不会穿进来（用 isImeVisible 要 OptIn 实验 API）
-    val density = LocalDensity.current
-    val imeInsets = WindowInsets.ime
-    val imeOpen by remember(imeInsets, density) {
-        derivedStateOf { imeInsets.getBottom(density) > 0 }
-    }
-    LaunchedEffect(imeOpen) {
-        if (imeOpen) {
-            delay(40)
-            val total = listState.layoutInfo.totalItemsCount
-            // 一开始用硬跳，是因为 onFocusChanged 那种 key 会让这个 effect 每帧重建、
-            // 滚动动画被反复取消重建（"掉帧"）。现在 key 是布尔量、只翻转一次，
-            // 所以改成平滑跟随——键盘上升带动画、列表同步滑过去，衔接才顺，不会"闪"。
-            if (total > 0) {
-                runCatching {
-                    listState.animateScrollToItem(total - 1, -listState.layoutInfo.viewportEndOffset / 6)
-                }
-            }
-        }
-    }
+    // 键盘弹起**不**做任何滚动同步：用户明确说"对话不用跟着一起上去"，
+    // 快速滑到底那一下看着就是在闪（原来是 scrollToItem/animateScrollToItem 都把内容整体挪走）。
+    // 现在键盘弹起只让输入栏自己被顶上去，列表原地不动。
     LaunchedEffect(itemCount, lastLiveLength) {
         // `layoutInfo` can still describe the *previous* (empty) layout on the first
         // frame after the screen opens: totalItemsCount would be 0 and
@@ -635,6 +619,16 @@ private fun MessageRow(
     val body = if (done) row.text else row.text.substring(0, shown.coerceIn(0, row.text.length))
     val palette = LocalDsh.current
     when (row.who) {
+        Role.NOTICE -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Text(
+                row.text,
+                style = MaterialTheme.typography.labelMedium,
+                color = palette.textTertiary,
+                maxLines = 1,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+            )
+        }
         Role.USER -> Column(
             Modifier
                 .fillMaxWidth()

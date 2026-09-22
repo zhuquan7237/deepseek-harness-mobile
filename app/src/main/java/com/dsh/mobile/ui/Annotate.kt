@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,7 +28,8 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Crop
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Redo
-import androidx.compose.material.icons.outlined.Rotate90DegreesCcw
+import androidx.compose.material.icons.outlined.RotateLeft
+import androidx.compose.material.icons.outlined.RotateRight
 import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -37,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -102,11 +105,27 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
     var draft by remember { mutableStateOf<PenStroke?>(null) }
     var crop by remember { mutableStateOf<Rect?>(null) }
     var canvasSize by remember { mutableStateOf(Size.Zero) }
+    // 裁剪手势：0=没在拖 1=整体移动 2=拖角缩放 3=重新拉一个新框
+    var cropGrab by remember { mutableStateOf(0) }
+    var cropAnchor by remember { mutableStateOf(Offset.Zero) }
+    var cropTouch by remember { mutableStateOf(Offset.Zero) }
+
+    // 一进裁剪模式就给出一个框（用户："一开始就有那个框框，选取想要的部分，其他部分就不要了"）
+    LaunchedEffect(tool, canvasSize) {
+        if (tool == AnnoTool.CROP && crop == null && canvasSize.width > 0f && canvasSize.height > 0f) {
+            crop = Rect(
+                Offset(canvasSize.width * 0.06f, canvasSize.height * 0.06f),
+                Offset(canvasSize.width * 0.94f, canvasSize.height * 0.94f),
+            )
+        }
+    }
 
     val base = remember(original, rotation) { rotateBitmap(original, rotation) }
     val ratio = base.width.toFloat() / base.height.toFloat()
 
-    Column(Modifier.fillMaxSize().background(palette.bg)) {
+    // safeDrawingPadding：不吃掉状态栏/挖孔/导航条区域，否则顶栏的 ✕ 和"完成"
+    // 会被系统状态栏盖住点不到（用户在手机上实测到的）
+    Column(Modifier.fillMaxSize().background(palette.bg).safeDrawingPadding()) {
         // ---- 顶栏 ----
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
@@ -140,13 +159,43 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
                     .aspectRatio(ratio)
                     .clip(RoundedCornerShape(12.dp))
                     .background(palette.surfaceHi)
-                    .pointerInput(tool, color, strokeWidth) {
+                    .pointerInput(tool, color, strokeWidth, canvasSize) {
                         detectDragGestures(
                             onDragStart = { start ->
                                 if (tool == AnnoTool.PEN) {
                                     draft = PenStroke(listOf(start), color.toArgb(), strokeWidth)
                                 } else {
-                                    crop = Rect(start, start)
+                                    val r = crop ?: Rect(0f, 0f, canvasSize.width, canvasSize.height)
+                                    val touch = 48f
+                                    val corners = listOf(
+                                        r.topLeft, r.topRight, r.bottomLeft, r.bottomRight,
+                                    )
+                                    val hit = corners.firstOrNull { (it - start).getDistance() < touch }
+                                    cropGrab = when {
+                                        hit != null -> {
+                                            cropAnchor = hit
+                                            2
+                                        }
+                                        r.contains(start) -> {
+                                            cropTouch = start
+                                            1
+                                        }
+                                        else -> 3
+                                    }
+                                    if (cropGrab == 2) {
+                                        // 锚点 = 被拖角的对角，拖动时以它为准重算矩形
+                                        cropAnchor = when (hit) {
+                                            r.topLeft -> r.bottomRight
+                                            r.topRight -> r.bottomLeft
+                                            r.bottomLeft -> r.topRight
+                                            else -> r.topLeft
+                                        }
+                                    }
+                                    if (cropGrab == 1) cropTouch = start
+                                    if (cropGrab == 3) {
+                                        cropAnchor = start
+                                        crop = Rect(start, start)
+                                    }
                                 }
                             },
                             onDrag = { change, _ ->
@@ -154,20 +203,33 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
                                 if (tool == AnnoTool.PEN) {
                                     val d = draft ?: return@detectDragGestures
                                     draft = d.copy(points = d.points + p)
-                                } else {
-                                    crop = crop?.let {
-                                        Rect(
-                                            Offset(minOf(it.left, p.x), minOf(it.top, p.y)),
-                                            Offset(maxOf(it.right, p.x), maxOf(it.bottom, p.y)),
-                                        )
+                                } else when (cropGrab) {
+                                    1 -> {
+                                        val d = p - cropTouch
+                                        crop = crop?.let {
+                                            Rect(it.left + d.x, it.top + d.y, it.right + d.x, it.bottom + d.y)
+                                        }
+                                        cropTouch = p
                                     }
+                                    2, 3 -> crop = Rect(
+                                        Offset(minOf(cropAnchor.x, p.x), minOf(cropAnchor.y, p.y)),
+                                        Offset(maxOf(cropAnchor.x, p.x), maxOf(cropAnchor.y, p.y)),
+                                    )
                                 }
                             },
                             onDragEnd = {
                                 draft?.let { if (it.points.size > 1) { strokes.add(it); undone.clear() } }
                                 draft = null
+                                cropGrab = 0
+                                // 框不能拖出图片外
+                                crop = crop?.let {
+                                    Rect(
+                                        Offset(it.left.coerceIn(0f, canvasSize.width), it.top.coerceIn(0f, canvasSize.height)),
+                                        Offset(it.right.coerceIn(0f, canvasSize.width), it.bottom.coerceIn(0f, canvasSize.height)),
+                                    )
+                                }
                             },
-                            onDragCancel = { draft = null },
+                            onDragCancel = { draft = null; cropGrab = 0 },
                         )
                     },
             ) {
@@ -190,13 +252,32 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
                         )
                     }
                     crop?.let { rect ->
-                        drawRect(Color.White.copy(alpha = 0.22f), rect.topLeft, rect.size)
-                        drawRect(Color.White, rect.topLeft, rect.size, style = Stroke(2f))
+                        // 要裁掉的部分压暗（而不是给保留区蒙一层白）：这样白框在浅色图上也有对比
+                        val dim = Color.Black.copy(alpha = 0.55f)
+                        drawRect(dim, Offset(0f, 0f), Size(size.width, rect.top))
+                        drawRect(dim, Offset(0f, rect.bottom), Size(size.width, size.height - rect.bottom))
+                        drawRect(dim, Offset(0f, rect.top), Size(rect.left, rect.height))
+                        drawRect(dim, Offset(rect.right, rect.top), Size(size.width - rect.right, rect.height))
+                        // 边框：纯白不透明 + 3.5f 粗
+                        drawRect(Color.White, rect.topLeft, rect.size, style = Stroke(3.5f))
+                        // 四角粗括号，一眼能看出"这是可以拖的角"
+                        val arm = minOf(rect.width, rect.height) * 0.12f
+                        val t = 6f
+                        for ((corner, dx, dy) in listOf(
+                            Triple(rect.topLeft, 1f, 1f),
+                            Triple(Offset(rect.right, rect.top), -1f, 1f),
+                            Triple(Offset(rect.left, rect.bottom), 1f, -1f),
+                            Triple(Offset(rect.right, rect.bottom), -1f, -1f),
+                        )) {
+                            drawLine(Color.White, corner, Offset(corner.x + arm * dx, corner.y), t)
+                            drawLine(Color.White, corner, Offset(corner.x, corner.y + arm * dy), t)
+                        }
+                        // 三分线保持细、半透明
                         for (i in 1..2) {
                             val x = rect.left + rect.width * i / 3f
                             val y = rect.top + rect.height * i / 3f
-                            drawLine(Color.White.copy(alpha = 0.5f), Offset(x, rect.top), Offset(x, rect.bottom), 1f)
-                            drawLine(Color.White.copy(alpha = 0.5f), Offset(rect.left, y), Offset(rect.right, y), 1f)
+                            drawLine(Color.White.copy(alpha = 0.45f), Offset(x, rect.top), Offset(x, rect.bottom), 1.5f)
+                            drawLine(Color.White.copy(alpha = 0.45f), Offset(rect.left, y), Offset(rect.right, y), 1.5f)
                         }
                     }
                 }
@@ -207,7 +288,7 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
         Text(
             when (tool) {
                 AnnoTool.PEN -> "直接在图上画，画错了点撤销"
-                AnnoTool.CROP -> if (crop == null) "拖出要保留的范围（点完成时生效）" else "范围选好了就点右上角完成"
+                AnnoTool.CROP -> "拖四角缩放、拖框内移动；框外会被裁掉，点完成生效"
             },
             style = MaterialTheme.typography.labelSmall,
             color = palette.textTertiary,
@@ -222,7 +303,11 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
         ) {
             ToolButton("画笔", Icons.Outlined.Edit, tool == AnnoTool.PEN, palette) { tool = AnnoTool.PEN }
             ToolButton("裁剪", Icons.Outlined.Crop, tool == AnnoTool.CROP, palette) { tool = AnnoTool.CROP }
-            ToolButton("旋转", Icons.Outlined.Rotate90DegreesCcw, false, palette) {
+            // 正反两个方向都要能转（用户："只给一个方向很不方便"）
+            SmallButton(Icons.Outlined.RotateLeft, "左转 90°", palette, true) {
+                rotation = (rotation + 270) % 360
+            }
+            SmallButton(Icons.Outlined.RotateRight, "右转 90°", palette, true) {
                 rotation = (rotation + 90) % 360
             }
             Spacer(Modifier.weight(1f))
