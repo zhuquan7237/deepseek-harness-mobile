@@ -58,6 +58,21 @@ class BridgeRepository(context: Context) {
     private var lastSeq: Long = 0L
     private var searchJob: Job? = null
 
+    /** The bridge's counter lifetime; when it changes the desktop restarted. */
+    private var bridgeEpoch = ""
+
+    /** One history reload at a time — a turn fires a dozen trigger events. */
+    private var reloadRunning = false
+    private var reloadPending = false
+
+    /** A scanned pairing payload waiting for the pairing form to pick it up. */
+    @Volatile
+    var scanned: Wire.ScanPayload? = null
+
+    /** The pairing form's edits, so the scanner can pair with the same intent. */
+    @Volatile
+    var pairingDraft: PairingDraft? = null
+
     init {
         stream.onFrame = { frame -> handleFrame(frame) }
         stream.onUnauthorized = { handleUnauthorized() }
@@ -91,6 +106,7 @@ class BridgeRepository(context: Context) {
             )
         }
         lastSeq = stored.seq
+        bridgeEpoch = stored.epoch
         autoCheckUpdate()
         val ok = refreshMeta(quiet = false)
         if (!ok && _state.value.token == null) return // meta said the token is gone
@@ -204,6 +220,24 @@ class BridgeRepository(context: Context) {
         val s = _state.value
         if (s.token == null || s.connected) return
         connect()
+    }
+
+    /**
+     * Foreground, with the link already up: refresh once, quietly.
+     *
+     * A turn that ran while the phone was asleep — or any frame the bridge could
+     * not deliver — leaves the open conversation stale. Re-reading it here is
+     * what stops "手机端看不到新内容，得重新进去" from ever being the fix.
+     */
+    fun onResumed() {
+        val s = _state.value
+        if (s.token == null) return
+        if (!s.connected) {
+            connect()
+            return
+        }
+        loadSessions()
+        s.sessionId?.let { sid -> scope.launch { fetchHistory(sid, quiet = true) } }
     }
 
     private suspend fun refreshMeta(quiet: Boolean): Boolean {
@@ -330,48 +364,53 @@ class BridgeRepository(context: Context) {
                 history = emptyList(),
                 live = emptyList(),
                 running = false,
+                thinking = false,
+                thinkingSince = 0L,
             )
         }
     }
 
     fun loadHistory(sessionId: String? = _state.value.sessionId, quiet: Boolean = false) {
         val sid = sessionId ?: return
+        scope.launch { fetchHistory(sid, quiet) }
+    }
+
+    /** The awaitable half of [loadHistory], so reloads can be serialised. */
+    private suspend fun fetchHistory(sid: String, quiet: Boolean = false) {
         val token = _state.value.token ?: return
-        scope.launch {
-            if (!quiet) _state.update { it.copy(historyLoading = true) }
-            try {
-                val json = api.history(token, sid, 100)
-                val parsed = Wire.parseHistory(json)
-                val selection = Wire.parseModelSelection(json)
-                _state.update { current ->
-                    if (current.sessionId != sid) {
-                        current
-                    } else {
-                        val last = parsed.rows.lastOrNull()
-                        val fresh = last != null && last.who == Role.ASSISTANT &&
-                            current.history.lastOrNull()?.text != last.text
-                        current.copy(
-                            history = parsed.rows,
-                            running = parsed.running,
-                            historyLoading = false,
-                            revealRow = if (fresh) parsed.rows.lastIndex else -1,
-                            modelProvider = selection?.first ?: current.modelProvider,
-                            modelId = selection?.second ?: current.modelId,
-                            modelLabel = if (current.modelLabel.isBlank() && selection != null) {
-                                selection.second
-                            } else {
-                                current.modelLabel
-                            },
-                        )
-                    }
+        if (!quiet) _state.update { it.copy(historyLoading = true) }
+        try {
+            val json = api.history(token, sid, 100)
+            val parsed = Wire.parseHistory(json)
+            val selection = Wire.parseModelSelection(json)
+            _state.update { current ->
+                if (current.sessionId != sid) {
+                    current
+                } else {
+                    val last = parsed.rows.lastOrNull()
+                    val fresh = last != null && last.who == Role.ASSISTANT &&
+                        current.history.lastOrNull()?.text != last.text
+                    current.copy(
+                        history = parsed.rows,
+                        running = parsed.running,
+                        historyLoading = false,
+                        revealRow = if (fresh) parsed.rows.lastIndex else -1,
+                        modelProvider = selection?.first ?: current.modelProvider,
+                        modelId = selection?.second ?: current.modelId,
+                        modelLabel = if (current.modelLabel.isBlank() && selection != null) {
+                            selection.second
+                        } else {
+                            current.modelLabel
+                        },
+                    )
                 }
-            } catch (error: BridgeException) {
-                _state.update { it.copy(historyLoading = false) }
-                if (!quiet) handleApiError(error, "读取历史失败")
-            } catch (error: Exception) {
-                _state.update { it.copy(historyLoading = false) }
-                if (!quiet) toast("读取历史失败：${error.message ?: "网络错误"}")
             }
+        } catch (error: BridgeException) {
+            _state.update { it.copy(historyLoading = false) }
+            if (!quiet) handleApiError(error, "读取历史失败")
+        } catch (error: Exception) {
+            _state.update { it.copy(historyLoading = false) }
+            if (!quiet) toast("读取历史失败：${error.message ?: "网络错误"}")
         }
     }
 
@@ -387,7 +426,17 @@ class BridgeRepository(context: Context) {
         }
         return try {
             api.prompt(token, sid, trimmed, "queue")
-            _state.update { it.copy(sending = false) }
+            // The "desktop is working" row has to be there the moment the
+            // request lands — `turn/start` can take a beat, and a blank screen
+            // after sending is exactly what "手机端没有任何反馈" looked like.
+            _state.update {
+                it.copy(
+                    sending = false,
+                    running = true,
+                    thinking = true,
+                    thinkingSince = System.currentTimeMillis(),
+                )
+            }
             true
         } catch (error: Exception) {
             _state.update { it.copy(history = it.history.dropLast(1), running = false, sending = false) }
@@ -473,6 +522,14 @@ class BridgeRepository(context: Context) {
         _state.update { it.copy(view = View.SETTINGS) }
     }
 
+    fun openScan() {
+        _state.update { it.copy(view = View.SCAN) }
+    }
+
+    fun closeScan() {
+        if (_state.value.view == View.SCAN) _state.update { it.copy(view = View.PAIRING) }
+    }
+
     fun closeSettings() {
         _state.update { it.copy(view = View.SESSIONS) }
     }
@@ -487,7 +544,11 @@ class BridgeRepository(context: Context) {
     private fun handleFrame(frame: JSONObject) {
         val kind = frame.optString("kind")
         val seq = frame.optLong("seq", 0L)
-        if (kind != "hello" && seq > lastSeq) {
+        if (kind == "hello") {
+            handleHello(frame)
+            return
+        }
+        if (seq > lastSeq) {
             // Deliberately NOT part of the UI state: an event stream that bumps a
             // StateFlow for every frame drags the entire screen through
             // recomposition dozens of times per turn — which is jank you can see
@@ -502,9 +563,43 @@ class BridgeRepository(context: Context) {
                 // phone in popups; the list refresh plus the header pill carry the
                 // same information without stealing the screen.
                 if (_state.value.view == View.SESSIONS) loadSessions()
+                // A turn that ends in an error has no assistant/message to reload
+                // on; without this the failure text only shows up after re-entering
+                // the conversation.
+                if (_state.value.view == View.CHAT) scheduleHistoryReload()
             }
             "event" -> handleEvent(frame)
         }
+    }
+
+    /**
+     * The bridge's opening frame, and the only place the app learns that its own
+     * bookkeeping belongs to another lifetime.
+     *
+     * Every frame carries a `seq` from a counter that restarts with the engine,
+     * while this app keeps its watermark on disk. After a desktop restart those
+     * two disagree: a stored `seq = 900` against a fresh counter of `12` used to
+     * mean "I have seen everything up to 900", so the bridge sent nothing at all
+     * — the socket still read 已连接, no `turn/start` arrived (no 正在思考 row),
+     * no `assistant/message` arrived (no reload), and the answer only appeared
+     * after leaving and re-entering the conversation. The bridge now clamps a
+     * stale watermark, and this is the other half: notice the new epoch, drop the
+     * watermark, and re-read once so nothing that happened meanwhile is lost.
+     */
+    private fun handleHello(frame: JSONObject) {
+        val data = frame.optJSONObject("data") ?: return
+        val epoch = data.optJSONObject("server")?.optString("epoch").orEmpty()
+        if (epoch.isNotEmpty() && epoch != bridgeEpoch) {
+            bridgeEpoch = epoch
+            lastSeq = 0L
+            scope.launch {
+                store.saveEpoch(epoch)
+                store.saveSeq(0L)
+            }
+            onReconnected()
+            return
+        }
+        if (data.optBoolean("gap", false)) onReconnected()
     }
 
     private fun handleEvent(frame: JSONObject) {
@@ -550,7 +645,33 @@ class BridgeRepository(context: Context) {
         reloadJob?.cancel()
         reloadJob = scope.launch {
             delay(250)
-            loadHistory(sid, quiet = true)
+            reloadHistoryNow(sid)
+        }
+    }
+
+    /**
+     * One reload in flight at a time. A single turn emits a dozen history-worthy
+     * events (each tool call, each result, the message), and every reload is a
+     * full page over the tunnel — without this they queue up behind each other
+     * and the transcript crawls in behind the desktop.
+     */
+    private suspend fun reloadHistoryNow(sid: String) {
+        if (reloadRunning) {
+            reloadPending = true
+            return
+        }
+        reloadRunning = true
+        try {
+            fetchHistory(sid, quiet = true)
+        } finally {
+            reloadRunning = false
+            if (reloadPending) {
+                reloadPending = false
+                reloadJob = scope.launch {
+                    delay(250)
+                    reloadHistoryNow(sid)
+                }
+            }
         }
     }
 

@@ -17,6 +17,8 @@ data class StoredSession(
     val token: String = "",
     val device: JSONObject? = null,
     val seq: Long = 0L,
+    /** The bridge counter this [seq] belongs to; see [BridgeRepository.handleHello]. */
+    val epoch: String = "",
     val theme: String = "auto",
 )
 
@@ -31,6 +33,7 @@ class SettingsStore(context: Context) {
         val TOKEN = stringPreferencesKey("token")
         val DEVICE = stringPreferencesKey("device")
         val SEQ = longPreferencesKey("seq")
+        val EPOCH = stringPreferencesKey("epoch")
         val THEME = stringPreferencesKey("theme")
         val UPDATE_CHECK = longPreferencesKey("update_check")
         val UPDATE_SKIP = stringPreferencesKey("update_skip")
@@ -50,6 +53,7 @@ class SettingsStore(context: Context) {
             token = prefs[Keys.TOKEN].orEmpty(),
             device = device,
             seq = prefs[Keys.SEQ] ?: 0L,
+            epoch = prefs[Keys.EPOCH].orEmpty(),
             theme = prefs[Keys.THEME] ?: "auto",
         )
     }
@@ -64,6 +68,10 @@ class SettingsStore(context: Context) {
 
     suspend fun saveSeq(seq: Long) {
         context.dshStore.edit { prefs -> prefs[Keys.SEQ] = seq }
+    }
+
+    suspend fun saveEpoch(epoch: String) {
+        context.dshStore.edit { prefs -> prefs[Keys.EPOCH] = epoch }
     }
 
     suspend fun saveTheme(theme: String) {
@@ -89,6 +97,7 @@ class SettingsStore(context: Context) {
             prefs.remove(Keys.TOKEN)
             prefs.remove(Keys.DEVICE)
             prefs.remove(Keys.SEQ)
+            prefs.remove(Keys.EPOCH)
         }
     }
 }

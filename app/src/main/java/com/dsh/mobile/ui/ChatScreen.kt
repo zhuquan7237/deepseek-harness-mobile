@@ -85,6 +85,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -900,8 +901,8 @@ private fun ModelMenu(state: AppState, onPick: (String, String, String) -> Unit)
                     item.modelId == state.modelId && (state.modelProvider.isEmpty() || item.provider == state.modelProvider)
                 }
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp),
-                    contentPadding = PaddingValues(bottom = 14.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+                    contentPadding = PaddingValues(bottom = 18.dp),
                 ) {
                     if (active != null) {
                         item(key = "active") {
@@ -933,15 +934,41 @@ private fun ModelMenu(state: AppState, onPick: (String, String, String) -> Unit)
                         }
                         item(key = "active-gap") { Hairline(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp)) }
                     }
-                    groups.forEach { (provider, rows) ->
+                    groups.forEachIndexed { groupIndex, (provider, rows) ->
                         val title = doc.providers.firstOrNull { it.id == provider }?.name?.ifBlank { provider } ?: provider
                         item(key = "h:$provider") {
-                            Text(
-                                title,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = palette.textSecondary,
-                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 3.dp),
-                            )
+                            // A tinted bar, not one more line of the list: the block
+                            // below it then reads as "these models belong together"
+                            // without the user having to compare font sizes.
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(
+                                        start = 12.dp,
+                                        end = 12.dp,
+                                        top = if (groupIndex > 0) 20.dp else 6.dp,
+                                    )
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(palette.surfaceHi)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    title,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = palette.textPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    "${rows.size} 个",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = palette.textSecondary,
+                                )
+                            }
                         }
                         items(rows, key = { it.id }) { item ->
                             val current = item.modelId == state.modelId &&

@@ -3,7 +3,7 @@ package com.dsh.mobile.data
 import androidx.compose.runtime.Immutable
 
 /** Which screen the shell is showing. */
-enum class View { PAIRING, SESSIONS, CHAT, SETTINGS, MODELS }
+enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS }
 
 /**
  * The live link to the desktop bridge, as the user sees it:
@@ -99,6 +99,13 @@ data class ModelDoc(
 
 @Immutable
 data class ToastMsg(val message: String, val seq: Int)
+
+/**
+ * The pairing form's live edits. The scanner is a screen of its own and pairs
+ * on the user's behalf, so it has to carry the address, device name and
+ * permission choice the form was holding.
+ */
+data class PairingDraft(val base: String = "", val deviceName: String = "", val withConfig: Boolean = true)
 
 data class AppState(
     val ready: Boolean = false,

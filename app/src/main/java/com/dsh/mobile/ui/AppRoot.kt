@@ -33,6 +33,7 @@ import com.dsh.mobile.ui.theme.LocalDsh
 private enum class Screen(val depth: Int) {
     LOADING(0),
     PAIRING(0),
+    SCAN(1),
     SESSIONS(1),
     CHAT(2),
     SETTINGS(2),
@@ -41,6 +42,9 @@ private enum class Screen(val depth: Int) {
 
 private fun screenOf(state: AppState): Screen = when {
     !state.ready -> Screen.LOADING
+    // Checked before the token test: the scanner exists precisely because the
+    // phone is not paired yet.
+    state.view == View.SCAN -> Screen.SCAN
     state.token == null || state.repairing -> Screen.PAIRING
     state.view == View.MODELS -> Screen.MODELS
     state.view == View.SETTINGS -> Screen.SETTINGS
@@ -110,6 +114,7 @@ fun AppRoot(repo: BridgeRepository) {
                             CircularProgressIndicator(color = palette.accent, strokeWidth = 2.dp)
                         }
                         Screen.PAIRING -> PairingScreen(state, repo)
+                        Screen.SCAN -> ScanScreen(repo)
                         Screen.SETTINGS -> SettingsScreen(state, repo)
                         Screen.MODELS -> ModelsScreen(state, repo)
                         Screen.CHAT -> ChatScreen(state, repo)

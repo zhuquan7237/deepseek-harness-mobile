@@ -1,8 +1,7 @@
 # Keep default rules; minification is off for now.
 
 # --- DSH Mobile -------------------------------------------------------------
-# zxing-embedded ships Activities referenced from the manifest.
--keep class com.journeyapps.barcodescanner.** { *; }
+# zxing decodes QR frames directly (the embedded activity is gone).
 -keep class com.google.zxing.** { *; }
 # OkHttp/Okio: only the optional JVM integrations are missing on Android.
 -dontwarn okhttp3.internal.platform.**

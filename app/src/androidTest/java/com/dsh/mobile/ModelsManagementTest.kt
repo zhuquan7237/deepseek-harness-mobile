@@ -5,6 +5,10 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.printToString
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
@@ -177,32 +181,70 @@ class ModelsManagementTest {
         composeRule.waitUntil(30_000) { anyText(providerLabel) }
         check(anyText(providerLabel)) { "the provider never showed up after saving" }
 
-        // it really landed on the desktop, not just in the phone's memory
+        // it really landed on the desktop, not just in the phone's memory.
+        // Poll: the phone's list updates as soon as it is told the write went
+        // through, and a single read can still race the next revision.
         val token = deviceToken()
         checkNotNull(token) { "could not read the device token" }
-        val doc = JSONObject(raw("GET", "/mobile/models", token)!!).optJSONObject("doc")!!
-        val items = doc.optJSONArray("items")!!
-        var found = 0
-        for (i in 0 until items.length()) {
-            val item = items.optJSONObject(i) ?: continue
-            if (item.optString("provider") == providerId) found += 1
-        }
+        val found = waitForProviderItems(token!!, providerId, expected = 1)
         check(found == 1) { "expected exactly one model on the desktop, found $found" }
 
-        // and deleting it removes it from both sides
-        composeRule.onAllNodesWithText(providerLabel)[0].performClick()
-        composeRule.waitUntil(15_000) { anyText("删除提供商") }
+        // and deleting it removes it from both sides.
+        // The new provider sits at the bottom of a list that is now long enough
+        // to push it below the fold, where a click lands on whatever is on
+        // screen instead of the row — scroll it into view first.
+        composeRule.onAllNodesWithText(providerLabel)[0].performScrollTo().performClick()
+        // Diagnose rather than guess: if the sheet does not appear, the failure
+        // says what was actually on screen.
+        val sheetDeadline = System.currentTimeMillis() + 15_000
+        while (!anyText("删除提供商") && System.currentTimeMillis() < sheetDeadline) {
+            Thread.sleep(250)
+        }
+        if (!anyText("删除提供商")) {
+            val labels = composeRule.onAllNodesWithText(providerLabel).fetchSemanticsNodes().size
+            val windows = composeRule.onAllNodes(isRoot()).fetchSemanticsNodes().size
+            val trees = (0 until windows).joinToString("\n--- next window ---\n") { index ->
+                runCatching { composeRule.onAllNodes(isRoot())[index].printToString(maxDepth = 16) }
+                    .getOrElse { "（读不到：$it）" }
+            }
+            error("tapping «$providerLabel» ($labels nodes with that text, $windows windows) did not open the provider block.\n$trees")
+        }
         composeRule.onAllNodesWithText("删除提供商")[0].performClick()
         composeRule.waitUntil(15_000) { anyText("删除提供商 " + providerLabel + "？") }
         composeRule.onAllNodesWithText("删除")[0].performClick()
         composeRule.waitUntil(30_000) { !anyText(providerLabel) }
 
-        val after = JSONObject(raw("GET", "/mobile/models", token)!!).optJSONObject("doc")!!
-        val items2 = after.optJSONArray("items")!!
-        var remaining = 0
-        for (i in 0 until items2.length()) {
-            if (items2.optJSONObject(i)?.optString("provider") == providerId) remaining += 1
-        }
+        val remaining = waitForProviderItems(token, providerId, expected = 0)
         check(remaining == 0) { "the provider survived the delete on the desktop" }
+    }
+
+    /**
+     * Wait until the desktop reports exactly [expected] models for [providerId],
+     * then return what it settled on (or the last count seen when the deadline
+     * passes).
+     *
+     * The write is a round-trip and a single read can catch the revision just
+     * before the PUT lands — the phone already shows the provider at that point,
+     * so reading once used to turn a slow write into a fake failure.
+     */
+    private fun waitForProviderItems(token: String, providerId: String, expected: Int): Int {
+        val deadline = System.currentTimeMillis() + 15_000
+        var seen = 0
+        while (true) {
+            seen = countProviderItems(token, providerId)
+            if (seen == expected || System.currentTimeMillis() >= deadline) return seen
+            Thread.sleep(400)
+        }
+    }
+
+    /** How many models the desktop currently reports for one provider. */
+    private fun countProviderItems(token: String, providerId: String): Int {
+        val doc = JSONObject(raw("GET", "/mobile/models", token)!!).optJSONObject("doc")
+        val items = doc?.optJSONArray("items") ?: return 0
+        var found = 0
+        for (i in 0 until items.length()) {
+            if (items.optJSONObject(i)?.optString("provider") == providerId) found += 1
+        }
+        return found
     }
 }

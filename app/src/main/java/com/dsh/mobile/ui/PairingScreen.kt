@@ -34,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -51,10 +52,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
+import com.dsh.mobile.data.PairingDraft
 import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 
 /** Where a fresh install points before anyone types anything. */
 private const val DEFAULT_BASE = "https://m.zhuquan.xyz"
@@ -73,29 +73,43 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
     // config lets the phone edit models and write API keys; on by default
     var withConfig by rememberSaveable { mutableStateOf(true) }
 
-    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        val contents = result.contents
-        if (!contents.isNullOrBlank()) {
-            val payload = Wire.parsePairPayload(contents)
-            if (payload == null) {
-                repo.toast("无法识别的二维码")
-            } else {
-                if (!payload.base.isNullOrBlank()) base = payload.base
-                code = Wire.formatCode(payload.code)
-                repo.pair(payload.base ?: base, payload.code, deviceName, withConfig)
-            }
-        }
+    // The scanner is its own screen (ScanScreen) and pairs on this form's
+    // behalf, so it needs to know what the form currently holds.
+    fun handOverDraft() {
+        repo.pairingDraft = PairingDraft(base, deviceName, withConfig)
     }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) scanLauncher.launch(scanOptions()) else repo.toast("需要相机权限才能扫码")
+        if (granted) {
+            handOverDraft()
+            repo.openScan()
+        } else {
+            repo.toast("需要相机权限才能扫码")
+        }
     }
 
     fun launchScan() {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
-        if (granted) scanLauncher.launch(scanOptions()) else permissionLauncher.launch(Manifest.permission.CAMERA)
+        if (granted) {
+            handOverDraft()
+            repo.openScan()
+        } else {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    // A scan that could not pair lands the user back here; fill in what it read
+    // so the retry is one tap instead of typing a code they cannot see.
+    LaunchedEffect(Unit) {
+        repo.scanned?.let { payload ->
+            repo.scanned = null
+            val scannedBase = payload.base
+            if (scannedBase != null && scannedBase.isNotBlank()) base = scannedBase
+            code = Wire.formatCode(payload.code)
+        }
     }
 
     Column(
@@ -280,14 +294,7 @@ private fun DshField(
     }
 }
 
-private fun scanOptions(): ScanOptions = ScanOptions().apply {
-    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-    setPrompt("对准电脑端显示的配对二维码")
-    setBeepEnabled(false)
-    setOrientationLocked(false)
-}
-
-private fun defaultDeviceName(): String {
+fun defaultDeviceName(): String {
     val model = Build.MODEL.orEmpty()
     return if (model.isBlank() || model == Build.UNKNOWN) "Android 手机" else model
 }
