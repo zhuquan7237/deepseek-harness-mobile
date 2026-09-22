@@ -167,23 +167,27 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             onQuickSend = { line -> scope.launch { repo.send(line) } },
             modifier = Modifier.weight(1f),
         )
-        // 趴在输入框上沿的鲸鱼娘：先画她、后画输入框，所以她的下半身被输入框盖住
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+        // 她浮在输入框上沿：Box + align + offset 不占布局空间（原来独占一行，输入框
+        // 上面会空出一整条）；先画她、后画输入框，所以下半身被输入框盖住 = 趴在框沿上。
+        // 她的说话气泡允许压过下面的对话内容——再点一下就会消失。
+        Box(Modifier.fillMaxWidth()) {
             WhalePerch(
                 size = 54.dp,
+                running = state.running,
                 modifier = Modifier
+                    .align(Alignment.TopEnd)
                     .padding(end = 30.dp)
-                    .offset(y = 13.dp),
+                    .offset(y = (-34).dp),
+            )
+            Composer(
+                state = state,
+                repo = repo,
+                onOpenModels = {
+                    showModels = true
+                    if (state.doc == null) repo.loadModels()
+                },
             )
         }
-        Composer(
-            state = state,
-            repo = repo,
-            onOpenModels = {
-                showModels = true
-                if (state.doc == null) repo.loadModels()
-            },
-        )
     }
 
     AnimatedVisibility(

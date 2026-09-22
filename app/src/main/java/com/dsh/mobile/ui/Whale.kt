@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -28,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -35,6 +38,75 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.dsh.mobile.R
 import kotlinx.coroutines.delay
+
+/**
+ * 鲸鱼娘的台词库。全是字符串常量：不占内存、不耗电，所以按场合分开写多写点。
+ */
+object WhaleLines {
+
+    /** 闲着的时候被摸头 / 随意搭话。 */
+    val IDLE = listOf(
+        "呜哇，别、别摸头啦…",
+        "诶嘿…再摸一下也不是不行",
+        "头、头发要乱了啦！",
+        "唔…好舒服，就一下下哦",
+        "摸头加好感度 +1",
+        "再看我，我就把你吃掉（骗你的）",
+        "今天也请多指教啦",
+        "诶？你还在看我吗",
+        "忙里偷闲一下下～",
+        "我什么都没有偷懒哦，真的",
+        "陪你说说话也不错",
+        "唔…要不要喝点茶？",
+        "嘿嘿，被你发现了",
+        "我可是很能干的鲸鱼哦",
+    )
+
+    /** 任务刚开工。 */
+    val START = listOf(
+        "开工！",
+        "交给我…啊不，交给电脑端啦",
+        "收到，马上开始！",
+        "好嘞，这就去办",
+        "又要忙起来啦～",
+        "冲！这次也要一次成功",
+    )
+
+    /** 电脑端正在干活。 */
+    val RUNNING = listOf(
+        "电脑端正在拼命干活…",
+        "我盯着屏幕呢，别急～",
+        "要不要我去催催它？",
+        "任务进行中…偷偷打个哈欠",
+        "它敲键盘好快啊",
+        "再等等嘛，马上就好",
+        "我在这里陪你等",
+        "进度条在动了！",
+        "嗯…这活儿看着不轻松",
+        "别催啦，它已经很努力了",
+        "要是卡住了，我就去戳它一下",
+        "好想喝茶…不行，要看着",
+        "屏幕上滚的东西我一个字都看不懂",
+        "快了快了，别走开哦",
+    )
+
+    /** 任务结束。 */
+    val DONE = listOf(
+        "干完啦！夸夸我嘛",
+        "搞定！给个好脸色看看",
+        "任务结束～我做得还不错吧",
+        "呼…终于干完了",
+        "哼哼，这活儿不难嘛",
+        "成了成了！要不要再来一个",
+        "看吧，交给我们准没错",
+        "叮～任务完成",
+        "该歇一会儿了吧",
+        "要不要接着下一个？我随时都在",
+        "干得漂亮（夸你也是夸我）",
+        "报告，活干完了！",
+        "收工！要不要摸摸头奖励一下",
+    )
+}
 
 /**
  * 鲸鱼娘吉祥物。
@@ -89,22 +161,21 @@ enum class WhaleFace(val res: Int) {
     SLEEPY(R.drawable.whale_face_sleepy),
 }
 
-private val PET_LINES = listOf(
-    "唔…被摸头了",
-    "嘿嘿，再摸一下嘛",
-    "痒痒的～",
-    "今天也一起干活吧",
-)
-
 /**
- * 可以摸头的鲸鱼娘：点一下换表情、冒一句话、轻轻弹一下，1.6 秒后自己恢复。
- * 全程一次性动画（没有循环），所以仪器测试照样能等到 idle。
+ * 可以摸头的鲸鱼娘：点一下换表情、冒一句话、轻轻弹一下，随后自己恢复。
+ * [lines] 是当前场合的台词表（闲着 / 任务在跑…），[externalLine] 让外面把
+ * "任务开始 / 任务结束"这类自动招呼塞进来。
+ *
+ * 气泡必须用 `wrapContentSize(unbounded = true)`：她要在一个几十 dp 的方格里渲染，
+ * 不解开父级约束的话气泡会被按这个宽度挤成竖排、还被裁掉——真机上就是这个 bug。
  */
 @Composable
 fun PettableWhale(
     size: Dp,
     modifier: Modifier = Modifier,
     base: WhaleFace = WhaleFace.NORMAL,
+    lines: List<String> = WhaleLines.IDLE,
+    externalLine: String? = null,
     initialDelayMillis: Int = 420,
 ) {
     var face by remember { mutableStateOf(base) }
@@ -118,8 +189,18 @@ fun PettableWhale(
             return@LaunchedEffect
         }
         face = if (pats % 2 == 1) WhaleFace.SHY else WhaleFace.HAPPY
-        line = PET_LINES[(pats - 1) % PET_LINES.size]
-        delay(1600)
+        line = lines.random()
+        delay(1800)
+        face = base
+        line = null
+    }
+
+    // 外面塞进来的自动台词（任务开始 / 任务结束）
+    LaunchedEffect(externalLine) {
+        if (externalLine == null) return@LaunchedEffect
+        face = WhaleFace.HAPPY
+        line = externalLine
+        delay(2600)
         face = base
         line = null
     }
@@ -149,10 +230,19 @@ fun PettableWhale(
         )
         AnimatedVisibility(
             visible = line != null,
-            enter = fadeIn(tween(140)) + scaleIn(tween(180), initialScale = 0.9f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.1f, 1f)),
+            enter = fadeIn(tween(140)) + scaleIn(
+                tween(180),
+                initialScale = 0.9f,
+                transformOrigin = TransformOrigin(1f, 1f),
+            ),
             exit = fadeOut(tween(140)) + scaleOut(tween(160), targetScale = 0.95f),
+            // 关键：wrapContentWidth(unbounded = true, align = Alignment.End)。
+            // 她要在一个 54dp 宽的容器里渲染，气泡比容器宽是常态；wrapContentSize 的
+            // 默认对齐是**居中**，于是气泡被居中撑出容器、右端直接顶到屏幕边缘被切掉
+            //（真机上就是这个现象）。指定 align = End 才会以"她这一侧"为基准向左长。
             modifier = Modifier
-                .align(Alignment.TopCenter)
+                .align(Alignment.TopEnd)
+                .wrapContentWidth(unbounded = true, align = Alignment.End)
                 .offset(y = (-26).dp),
         ) {
             Surface(
@@ -164,7 +254,10 @@ fun PettableWhale(
                     text = line.orEmpty(),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                    maxLines = 2,
+                    modifier = Modifier
+                        .widthIn(max = 236.dp)
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
                 )
             }
         }
@@ -172,17 +265,37 @@ fun PettableWhale(
 }
 
 /**
- * 趴在输入框上沿的鲸鱼娘：只露上半身，下半身被输入框裁掉，看起来就是"趴在那儿"。
- * 整体是一个小 hit 区域，不挡输入框本体（放在输入框上方独立一行）。
+ * 趴在输入框上沿的鲸鱼娘：下半身被**随后绘制的输入框**（同一个父级里的后一个兄弟）
+ * 盖住，看起来就是趴在那儿；[running] 变化时自动冒一句"开工/干完了"。
+ *
+ * 两个坑：
+ *  1. 不要给她自己的容器加 clipToBounds——头顶的气泡会被一起裁掉；
+ *  2. 用 Box + align + offset 让她浮着，别让她独占一行——否则输入框上面会空出一整条。
  */
 @Composable
 fun WhalePerch(
     size: Dp = 52.dp,
+    running: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    // 刻意**不裁剪**：她的下半身由随后绘制的输入框（同一个父级里的后一个兄弟）盖住，
-    // 看上去就是趴在框沿上；如果这里自己裁，头顶的说话气泡也会一起被切掉（踩过）。
+    var lastRunning by remember { mutableStateOf<Boolean?>(null) }
+    var autoLine by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(running) {
+        val prev = lastRunning
+        lastRunning = running
+        if (prev == null || prev == running) return@LaunchedEffect
+        autoLine = if (running) WhaleLines.START.random() else WhaleLines.DONE.random()
+        delay(2800)
+        autoLine = null
+    }
+
     Box(modifier = modifier.size(size), contentAlignment = Alignment.TopCenter) {
-        PettableWhale(size = size)
+        PettableWhale(
+            size = size,
+            lines = if (running) WhaleLines.RUNNING else WhaleLines.IDLE,
+            externalLine = autoLine,
+            modifier = Modifier.offset(y = 3.dp),
+        )
     }
 }

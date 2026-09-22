@@ -26,6 +26,11 @@ import androidx.core.app.NotificationCompat
 import com.dsh.mobile.DshApp
 import com.dsh.mobile.MainActivity
 import com.dsh.mobile.R
+import com.dsh.mobile.ui.WhaleLines
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -59,6 +64,18 @@ class WhaleBallService : Service() {
     private var side = 0 // -1 左，1 右
     private var pats = 0
     private var lastTapAt = 0L
+
+    /**
+     * 刚收起菜单的时间戳。真机上"点球 → 关不掉、再点又开"的根因：一次点击会被派发
+     * 两次——菜单窗口通过 FLAG_WATCH_OUTSIDE_TOUCH 先收到"点在窗口外"于是收起，紧接着
+     * 手指下面那只球也收到这次点击，它看到菜单已经没了就又开一次（同一帧关了又开，
+     * 屏幕上就是闪一下）。所以刚收起后的这一下必须丢掉。
+     */
+    private var lastHideAt = 0L
+
+    /** 只听一个 StateFlow 的 running 变化，任务结束冒一句话。 */
+    private val scope = CoroutineScope(Dispatchers.Main.immediate)
+    private var wasRunning = false
     private val faceNormal by lazy { R.drawable.whale_face_normal }
     private val faceHappy by lazy { R.drawable.whale_face_happy }
     private val faceShy by lazy { R.drawable.whale_face_shy }
@@ -109,6 +126,16 @@ class WhaleBallService : Service() {
         addBall()
         startBob()
         handler.postDelayed(blink, 2600)
+        scope.launch {
+            val repo = (application as? DshApp)?.repo ?: return@launch
+            repo.state.collect { st ->
+                if (wasRunning && !st.running && ::ball.isInitialized) {
+                    setFace(faceHappy)
+                    showBubble(WhaleLines.DONE.random())
+                }
+                wasRunning = st.running
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -128,6 +155,7 @@ class WhaleBallService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        scope.cancel()
         bob?.cancel()
         menu?.let { runCatching { window.removeView(it) } }
         menu = null
@@ -258,6 +286,8 @@ class WhaleBallService : Service() {
 
     private fun toggleMenu() {
         if (menu != null) { hideMenu(); return }
+        // 刚收起来的那一下点击已经在上面处理过了，别再开（否则就是"关不掉"）
+        if (android.os.SystemClock.uptimeMillis() - lastHideAt < 400) return
         bob?.pause()
         setFace(faceHappy)
         val panel = LinearLayout(this).apply {
@@ -267,7 +297,7 @@ class WhaleBallService : Service() {
                 setColor(Color.parseColor("#2B3036"))
                 setStroke(dp(1), Color.parseColor("#33FFFFFF"))
             }
-            elevation = dp(8).toFloat()
+            // 不用 elevation：非 Activity 的悬浮窗上它容易在出现/消失时闪一下
             setPadding(0, dp(6), 0, dp(6))
             alpha = 0f
             scaleX = 0.86f
@@ -286,6 +316,13 @@ class WhaleBallService : Service() {
             panel.addView(menuRow(label, action))
         }
         val screen = resources.displayMetrics
+        // 先量一次真实高度，再决定往哪摆：否则要先以估计位置加进窗口、下一帧再挪走，
+        // 屏幕上就是"跳一下"（这也是闪屏的来源之一）
+        panel.measure(
+            View.MeasureSpec.makeMeasureSpec(menuWidth, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val menuHeight = panel.measuredHeight
         val params = WindowManager.LayoutParams(
             menuWidth, WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -299,20 +336,16 @@ class WhaleBallService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = (if (side > 0) ballParams.x + ballSize - menuWidth else ballParams.x)
                 .coerceIn(dp(8), screen.widthPixels - menuWidth - dp(8))
-            // 先给个大概位置，量到真实高度后再挪到球的斜上方（留 10dp 间距，不遮住她）
-            y = (ballParams.y - dp(150)).coerceAtLeast(statusBar() + dp(8))
+            // 摆在她的斜上方，留 10dp 间距，绝不遮住她
+            y = (ballParams.y - menuHeight - dp(10)).coerceAtLeast(statusBar() + dp(8))
         }
+        // 以她那一侧为轴心展开（像从她身上长出来），比默认从中心缩放自然得多
+        panel.pivotX = if (side > 0) (menuWidth - dp(22)).toFloat() else dp(22).toFloat()
+        panel.pivotY = menuHeight.toFloat()
         window.addView(panel, params)
         menu = panel
-        panel.post {
-            val h = panel.height
-            if (h > 0) {
-                params.y = (ballParams.y - h - dp(10)).coerceAtLeast(statusBar() + dp(8))
-                runCatching { window.updateViewLayout(panel, params) }
-            }
-        }
         panel.animate().alpha(1f).scaleX(1f).scaleY(1f)
-            .setDuration(190)
+            .setDuration(170)
             .setInterpolator(android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f))
             .start()
         handler.postDelayed(menuHide, 6000)
@@ -334,6 +367,7 @@ class WhaleBallService : Service() {
         handler.removeCallbacks(menuHide)
         val panel = menu ?: return
         menu = null
+        lastHideAt = android.os.SystemClock.uptimeMillis()
         panel.animate().alpha(0f).scaleX(0.94f).scaleY(0.94f)
             .setDuration(130)
             .withEndAction { runCatching { window.removeView(panel) } }
