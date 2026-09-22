@@ -25,6 +25,10 @@ data class StoredSession(
     val overlayBall: Boolean = false,
     /** 上次读到的模型文档（原样缓存）：重开 App 不该再显示"未读取"。 */
     val modelsJson: String = "",
+    /** 新对话默认模型（用户设置的；空 = 跟随电脑端当前模型）。 */
+    val defaultProvider: String = "",
+    val defaultModel: String = "",
+    val defaultLabel: String = "",
 )
 
 /** Everything that must survive a restart: where the desktop is, the device
@@ -44,6 +48,9 @@ class SettingsStore(context: Context) {
         val UPDATE_SKIP = stringPreferencesKey("update_skip")
         val OVERLAY = booleanPreferencesKey("overlay_ball")
         val MODELS = stringPreferencesKey("models_json")
+        val DEFAULT_PROVIDER = stringPreferencesKey("default_provider")
+        val DEFAULT_MODEL = stringPreferencesKey("default_model")
+        val DEFAULT_LABEL = stringPreferencesKey("default_label")
     }
 
     suspend fun load(): StoredSession {
@@ -64,6 +71,9 @@ class SettingsStore(context: Context) {
             theme = prefs[Keys.THEME] ?: "auto",
             overlayBall = prefs[Keys.OVERLAY] ?: false,
             modelsJson = prefs[Keys.MODELS].orEmpty(),
+            defaultProvider = prefs[Keys.DEFAULT_PROVIDER].orEmpty(),
+            defaultModel = prefs[Keys.DEFAULT_MODEL].orEmpty(),
+            defaultLabel = prefs[Keys.DEFAULT_LABEL].orEmpty(),
         )
     }
 
@@ -116,6 +126,15 @@ class SettingsStore(context: Context) {
             prefs.remove(Keys.DEVICE)
             prefs.remove(Keys.SEQ)
             prefs.remove(Keys.EPOCH)
+        }
+    }
+
+    /** 新对话默认模型：provider/model 空字符串表示"跟随电脑端"。 */
+    suspend fun saveDefaultModel(provider: String, model: String, label: String) {
+        context.dshStore.edit { prefs ->
+            prefs[Keys.DEFAULT_PROVIDER] = provider
+            prefs[Keys.DEFAULT_MODEL] = model
+            prefs[Keys.DEFAULT_LABEL] = label
         }
     }
 }

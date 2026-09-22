@@ -45,6 +45,9 @@ class BridgeRepository(context: Context) {
 
     private val api = BridgeApi(client)
     private val store = SettingsStore(context)
+
+    /** 新对话默认模型（用户设置）；null = 跟随电脑端当前模型。 */
+    private var defaultModel: Triple<String, String, String>? = null
     private val stream = EventStream(client, scope)
 
     private val _state = MutableStateFlow(AppState())
@@ -94,6 +97,9 @@ class BridgeRepository(context: Context) {
 
     private suspend fun boot() {
         val stored = store.load()
+        defaultModel = stored.defaultModel.takeIf { it.isNotBlank() }?.let {
+            Triple(stored.defaultProvider, it, stored.defaultLabel.ifBlank { it })
+        }
         // 先把上次缓存的模型文档放回内存：设置页/模型页一打开就有内容，不再"未读取"
         val cachedDoc = stored.modelsJson.takeIf { it.isNotBlank() }?.let { raw ->
             runCatching { Wire.parseModelDoc(org.json.JSONObject(raw)) }.getOrNull()
@@ -333,8 +339,19 @@ class BridgeRepository(context: Context) {
                     toast("新建会话没有返回 id")
                     return@launch
                 }
+                // 用户设了"新对话默认模型"就套上：这样新会话不用每次手选模型
+                val wanted = defaultModel
+                if (wanted != null) {
+                    runCatching { api.selectModel(token, id, wanted.first, wanted.second) }
+                        .onFailure { toast("默认模型没套上：${it.message ?: "网络错误"}") }
+                }
                 loadSessions()
                 openSession(id)
+                if (wanted != null) {
+                    _state.update {
+                        it.copy(modelProvider = wanted.first, modelId = wanted.second, modelLabel = wanted.third)
+                    }
+                }
             } catch (error: BridgeException) {
                 handleApiError(error, "新建会话失败")
             } catch (error: Exception) {
@@ -342,6 +359,24 @@ class BridgeRepository(context: Context) {
             }
         }
     }
+
+    /** 设为"新对话默认模型"（在模型菜单里点）。 */
+    fun setDefaultModel(provider: String, model: String, label: String) {
+        val pretty = label.ifBlank { model }
+        defaultModel = Triple(provider, model, pretty)
+        scope.launch { store.saveDefaultModel(provider, model, pretty) }
+        toast("新对话默认模型：$pretty")
+    }
+
+    /** 清除默认：回到"跟随电脑端"。 */
+    fun clearDefaultModel() {
+        defaultModel = null
+        scope.launch { store.saveDefaultModel("", "", "") }
+        toast("新对话跟随电脑端模型")
+    }
+
+    /** 现在有没有设默认模型（界面用来显示勾）。 */
+    fun currentDefaultModel(): Triple<String, String, String>? = defaultModel
 
     /** 只改思考强度：拿当前模型再选一次，只是把 reasoningEffort 换个值。 */
     fun setEffort(effort: String) {

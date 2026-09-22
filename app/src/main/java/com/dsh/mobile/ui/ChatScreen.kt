@@ -135,6 +135,7 @@ import androidx.compose.foundation.horizontalScroll
 import com.dsh.mobile.data.effortLabel
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Close
 import com.dsh.mobile.data.filterModels
 import androidx.compose.animation.animateContentSize
@@ -389,7 +390,9 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 color = palette.surface,
                 shadowElevation = 10.dp,
             ) {
-                ModelMenu(state = state, onPick = { provider, model, label ->
+                ModelMenu(state = state, defaultTriple = repo.currentDefaultModel(), onSetDefault = {
+                    repo.setDefaultModel(state.modelProvider, state.modelId, state.modelLabel)
+                }, onPick = { provider, model, label ->
                     repo.selectModel(provider, model, label)
                     showModels = false
                 },
@@ -1388,8 +1391,10 @@ private fun contextLabel(raw: String): String? {
 @Composable
 private fun ModelMenu(
     state: AppState,
+    defaultTriple: Triple<String, String, String>? = null,
     onPick: (String, String, String) -> Unit,
     onEffort: (String) -> Unit,
+    onSetDefault: () -> Unit,
 ) {
     val palette = LocalDsh.current
     val doc = state.doc
@@ -1641,6 +1646,31 @@ private fun ModelMenu(
             }
         }
     }
+        // 底部：把"当前这个模型"设成新对话默认（用户要求：新开对话不用再手选）
+        if (state.modelId.isNotBlank()) {
+            val already = state.modelProvider == defaultTriple?.first && state.modelId == defaultTriple?.second
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, end = 16.dp).padding(bottom = 4.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onSetDefault)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    if (already) Icons.Outlined.Check else Icons.Outlined.BookmarkBorder,
+                    "设为新对话默认",
+                    tint = if (already) palette.accent else palette.textSecondary,
+                    modifier = Modifier.size(17.dp),
+                )
+                Text(
+                    if (already) "新对话默认就是它" else "把「" + state.modelLabel.ifBlank { state.modelId } + "」设为新对话默认",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (already) palette.accent else palette.textSecondary,
+                )
+            }
+        }
+
 }
 
 /** 附件大图预览：能重新编辑、能移除（用户："上传图片之后，在输入框上方要能点开预览图片"）。 */
