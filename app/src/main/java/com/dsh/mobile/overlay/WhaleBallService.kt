@@ -71,6 +71,15 @@ class WhaleBallService : Service() {
     private var lastTapAt = 0L
 
     /**
+     * 双击判定窗口。原来是 300ms：真机上手指双击常常慢一点点，
+     * 结果第一下立刻把菜单（第一项就是"开启新对话"）弹了出来——
+     * 用户要的是"双击只摸摸头，不要弹那个窗口"。所以：
+     * 单击先等这个窗口，确认第二下不来才开菜单；窗口也给宽一点。
+     */
+    private val doubleTapMs = 400L   // 系统默认是 300ms，手指双击常常慢一点，给点余量
+    private val openMenuTask = Runnable { toggleMenu() }
+
+    /**
      * 刚收起菜单的时间戳。真机上"点球 → 关不掉、再点又开"的根因：一次点击会被派发
      * 两次——菜单窗口通过 FLAG_WATCH_OUTSIDE_TOUCH 先收到"点在窗口外"于是收起，紧接着
      * 手指下面那只球也收到这次点击，它看到菜单已经没了就又开一次（同一帧关了又开，
@@ -262,6 +271,7 @@ class WhaleBallService : Service() {
                     val dy = e.rawY - downY
                     if (abs(dx) + abs(dy) > dp(6)) moved = true
                     if (moved) {
+                        handler.removeCallbacks(openMenuTask)
                         hideMenu()
                         ballParams.x = (startX + dx).toInt().coerceIn(dp(4), screen.widthPixels - ballSize - dp(4))
                         ballParams.y = (startY + dy).toInt().coerceIn(statusBar(), screen.heightPixels - ballSize - dp(24))
@@ -277,14 +287,17 @@ class WhaleBallService : Service() {
                         snapToEdge()
                     } else {
                         val now = e.eventTime
-                        // 双击 = 摸摸头（顺带把菜单收掉）；单击 = 开/关菜单，立刻响应不等 300ms
-                        if (now - lastTapAt < 300) {   // 平台默认的双击间隔
+                        // 双击 = 摸摸头（只摸摸头，不弹菜单）；单击 = 开/关菜单。
+                        // 单击要等一个双击窗口再决定，否则双击的第一下就把菜单弹出来了。
+                        if (now - lastTapAt < doubleTapMs) {
                             lastTapAt = 0L
+                            handler.removeCallbacks(openMenuTask)
                             hideMenu()
                             pat()
                         } else {
                             lastTapAt = now
-                            toggleMenu()
+                            handler.removeCallbacks(openMenuTask)
+                            handler.postDelayed(openMenuTask, doubleTapMs)
                         }
                     }
                     bob?.resume()
@@ -395,6 +408,7 @@ class WhaleBallService : Service() {
 
     /** 收起菜单：先做动效再移除（观感不生硬），重复调用安全。 */
     private fun hideMenu() {
+        handler.removeCallbacks(openMenuTask)
         handler.removeCallbacks(menuHide)
         val panel = menu ?: return
         menu = null
