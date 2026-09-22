@@ -50,6 +50,8 @@ import com.dsh.mobile.data.Conn
 import com.dsh.mobile.data.ToastMsg
 import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.delay
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.Icons
 
 /**
  * The ChatGPT-mobile component set: round surface-filled icon buttons, context
@@ -127,7 +129,10 @@ fun ContextPill(
     metaIcon: ImageVector? = null,
     metaDot: Boolean = true,
     metaConn: Conn = Conn.ONLINE,
+    /** 第二行右侧的小箭头：表示这行本身可点（模型选择就放这儿）。 */
+    metaChevron: Boolean = false,
     onClick: (() -> Unit)? = null,
+    onMetaClick: (() -> Unit)? = null,
 ) {
     val palette = LocalDsh.current
     val shape = RoundedCornerShape(22.dp)
@@ -146,7 +151,18 @@ fun ContextPill(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(
+            Modifier
+                .then(
+                    if (onMetaClick != null) {
+                        Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onMetaClick)
+                    } else {
+                        Modifier
+                    },
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
             if (metaIcon != null) {
                 Icon(metaIcon, contentDescription = null, tint = palette.textSecondary, modifier = Modifier.size(12.dp))
             }
@@ -158,6 +174,14 @@ fun ContextPill(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (metaChevron) {
+                Icon(
+                    Icons.Outlined.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = palette.textSecondary,
+                    modifier = Modifier.size(12.dp),
+                )
+            }
         }
     }
 }

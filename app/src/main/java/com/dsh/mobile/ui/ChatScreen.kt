@@ -233,17 +233,17 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             CircleButton(Icons.AutoMirrored.Outlined.ArrowBack, "返回") { repo.closeSession() }
+            // 模型选择照 ChatGPT 放在顶栏（不占输入条地方）：点第二行直接开模型菜单，
+            // 连接状态由前面的小圆点表示，标题区仍然点开更多菜单
             ContextPill(
                 title = state.sessionTitle.ifEmpty { "会话" },
-                meta = when (state.conn) {
-                    Conn.ONLINE -> "电脑端 · 已连接"
-                    Conn.CONNECTING -> "电脑端 · 正在连接"
-                    Conn.OFFLINE -> "电脑端 · 未连接，重连中"
-                },
-                metaIcon = Icons.Outlined.Computer,
+                meta = shortModelLabel(state.modelLabel.ifBlank { "模型" }),
+                metaDot = true,
                 metaConn = state.conn,
+                metaChevron = true,
                 modifier = Modifier.weight(1f),
                 onClick = { showActions = true },
+                onMetaClick = { showModels = true },
             )
             CircleButton(Icons.Outlined.MoreVert, "更多") { showActions = true }
         }
@@ -1144,8 +1144,6 @@ private fun Composer(
                     enabled = true,
                 ) { repo.cancelTurn() }
             } else {
-                ModelLabel(state = state, onClick = onOpenModels)
-                Spacer(Modifier.width(6.dp))
                 val ready = draft.isNotBlank() || attachments.isNotEmpty()
                 val sendBg by animateColorAsState(
                     targetValue = if (ready) palette.accent else palette.surfaceHi,
