@@ -1192,7 +1192,7 @@ private fun Composer(
                 exit = fadeOut(tween(100)) + shrinkVertically(tween(150)),
             ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(end = 4.dp).padding(bottom = 2.dp),
+                    Modifier.fillMaxWidth().padding(end = 10.dp).padding(bottom = 3.dp),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1210,14 +1210,13 @@ private fun Composer(
 @Composable
 private fun ComposerModelChip(state: AppState, onClick: () -> Unit) {
     val palette = LocalDsh.current
+    // 不带框：加了描边反而和右边发送键那个圆圈挤在一起，纯文字 + 下拉箭头就够了
     Row(
         Modifier
             .height(26.dp)
             .clip(RoundedCornerShape(999.dp))
-            .background(palette.surfaceHi.copy(alpha = 0.6f))
-            .border(1.dp, palette.textTertiary.copy(alpha = 0.22f), RoundedCornerShape(999.dp))
             .clickable(onClick = onClick)
-            .padding(start = 10.dp, end = 6.dp),
+            .padding(start = 10.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
