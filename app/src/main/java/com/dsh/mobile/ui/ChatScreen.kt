@@ -122,6 +122,9 @@ import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.ui.focus.onFocusChanged
 
 /** 空会话时的开场白：点一下就把这句话发给电脑端。 */
 private val OPENERS = listOf(
@@ -1043,6 +1046,9 @@ private fun Composer(
     // 再把它挪到正中间——不管用哪个字体都自己校准。
     var inkShift by remember { mutableStateOf(0f) }
     val density = LocalDensity.current
+    // 照 ChatGPT：空着的时候是干净一行；一旦开始打字（或点进输入框拉起键盘），
+    // 输入框右下角就出现模型切换入口
+    var fieldFocused by remember { mutableStateOf(false) }
     Row(
         Modifier
             .fillMaxWidth()
@@ -1096,6 +1102,7 @@ private fun Composer(
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 36.dp, max = 140.dp)
+                    .onFocusChanged { fieldFocused = it.isFocused }
                     .padding(horizontal = 6.dp, vertical = 6.dp),
                 textStyle = inputStyle,
                 cursorBrush = SolidColor(palette.accent),
@@ -1177,7 +1184,57 @@ private fun Composer(
                 }
             }
             }
+
+            // 右下角的模型切换：有内容/聚焦时滑入，带细框方便看清是"可点的控件"
+            AnimatedVisibility(
+                visible = draft.isNotBlank() || fieldFocused || attachments.isNotEmpty(),
+                enter = fadeIn(tween(140)) + expandVertically(tween(180)),
+                exit = fadeOut(tween(100)) + shrinkVertically(tween(150)),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(end = 4.dp).padding(bottom = 2.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ComposerModelChip(state = state, onClick = onOpenModels)
+                }
+            }
         }
+    }
+}
+
+/**
+ * 输入框右下角的模型入口。文案走 [shortModelLabel]（超长收头），
+ * 外面套一层极细描边——纯文字太容易被当成普通说明文字，看不出能点。
+ */
+@Composable
+private fun ComposerModelChip(state: AppState, onClick: () -> Unit) {
+    val palette = LocalDsh.current
+    Row(
+        Modifier
+            .height(26.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(palette.surfaceHi.copy(alpha = 0.6f))
+            .border(1.dp, palette.textTertiary.copy(alpha = 0.22f), RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(start = 10.dp, end = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            shortModelLabel(state.modelLabel.ifBlank { "模型" }),
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.textSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 132.dp),
+        )
+        Icon(
+            Icons.Outlined.KeyboardArrowDown,
+            contentDescription = "选择模型",
+            tint = palette.textTertiary,
+            modifier = Modifier.size(14.dp),
+        )
     }
 }
 
