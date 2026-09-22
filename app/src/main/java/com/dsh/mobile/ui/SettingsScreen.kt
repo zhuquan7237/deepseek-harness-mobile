@@ -24,6 +24,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,6 +52,7 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
     BackHandler { repo.closeSettings() }
     var confirmUnpair by remember { mutableStateOf(false) }
     var showUpdate by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -102,6 +107,30 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
                 ModeChip("浅色", state.theme == "light") { repo.setTheme("light") }
                 ModeChip("深色", state.theme == "dark") { repo.setTheme("dark") }
             }
+
+            SectionHeader("鲸鱼娘", Modifier.padding(start = 0.dp))
+            SettingsAction(
+                label = "悬浮球（显示在其他应用上层）",
+                value = when {
+                    state.overlayBall -> "已开启"
+                    !state.overlayPermission -> "未授权"
+                    else -> "已关闭"
+                },
+            ) {
+                when {
+                    state.overlayBall -> repo.setOverlayBall(false)
+                    repo.canOverlay() -> repo.setOverlayBall(true)
+                    else -> runCatching {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:" + context.packageName),
+                            ),
+                        )
+                    }
+                }
+            }
+            SettingsValue("说明", "贴在其他应用上层的鲸鱼娘：点她开新对话、看任务，可拖动")
 
             SectionHeader("关于", Modifier.padding(start = 0.dp))
             SettingsValue("手机端", state.version.ifBlank { "—" })

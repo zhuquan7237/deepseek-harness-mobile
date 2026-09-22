@@ -54,6 +54,7 @@ import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.PairingDraft
 import com.dsh.mobile.data.Wire
+import com.dsh.mobile.R
 import com.dsh.mobile.ui.theme.LocalDsh
 
 /** Where a fresh install points before anyone types anything. */
@@ -120,7 +121,14 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             .padding(horizontal = 24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Spacer(Modifier.height(44.dp))
+        Spacer(Modifier.height(26.dp))
+        WhaleMascot(
+            resId = R.drawable.whale_wave,
+            size = 148.dp,
+            contentDescription = null,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
+        Spacer(Modifier.height(4.dp))
         Text(
             "DeepSeek Harness",
             fontSize = 27.sp,

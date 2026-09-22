@@ -8,6 +8,11 @@
     <!-- The app updates itself: it downloads its own APK and hands it to the
          system installer (same signing key, so it installs over the old one). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 鲸鱼娘悬浮球：贴在其他应用上层 + 前台服务 + 一条最低优先级的常驻通知 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -36,6 +41,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 应用外的鲸鱼娘悬浮球（用户开关控制，不额外开进程） -->
+        <service
+            android:name=".overlay.WhaleBallService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="鲸鱼娘悬浮球：在其他应用上层显示可拖动的吉祥物，点按可开新对话或查看任务" />
+        </service>
 
         <!-- Only the downloaded update APK is exposed, and only for the install intent. -->
         <provider

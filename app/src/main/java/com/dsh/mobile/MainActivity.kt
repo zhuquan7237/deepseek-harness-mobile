@@ -1,5 +1,6 @@
 package com.dsh.mobile
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,6 +17,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val repo = (application as DshApp).repo
+        handleWhaleIntent(intent, repo)
         setContent {
             val lifecycleOwner = LocalLifecycleOwner.current
             DisposableEffect(lifecycleOwner) {
@@ -27,5 +29,17 @@ class MainActivity : ComponentActivity() {
             }
             AppRoot(repo)
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleWhaleIntent(intent, (application as DshApp).repo)
+    }
+
+    /** 从悬浮球进来：开启对话 / 查看任务。仓库会在配对信息就绪后再执行。 */
+    private fun handleWhaleIntent(intent: Intent?, repo: com.dsh.mobile.data.BridgeRepository) {
+        val action = intent?.getStringExtra("whale_action") ?: return
+        intent.removeExtra("whale_action")
+        repo.whaleAction(action)
     }
 }

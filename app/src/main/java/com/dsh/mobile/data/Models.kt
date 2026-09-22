@@ -122,6 +122,9 @@ data class AppState(
     val sessions: List<SessionSummary> = emptyList(),
     val sessionsLoading: Boolean = false,
     val search: String = "",
+    // 鲸鱼娘悬浮球（应用外）：开关 + 系统「显示在其他应用上层」权限
+    val overlayBall: Boolean = false,
+    val overlayPermission: Boolean = false,
     // one session
     val sessionId: String? = null,
     val sessionTitle: String = "",

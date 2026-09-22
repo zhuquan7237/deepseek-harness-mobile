@@ -64,6 +64,7 @@ import com.dsh.mobile.data.Conn
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.SessionSummary
 import com.dsh.mobile.data.Wire
+import com.dsh.mobile.R
 import com.dsh.mobile.ui.theme.LocalDsh
 import java.time.Instant
 import java.time.LocalDate
@@ -220,6 +221,11 @@ private fun EmptyState(searching: Boolean) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.padding(horizontal = 32.dp),
     ) {
+        WhaleMascot(
+            resId = if (searching) R.drawable.whale_wave else R.drawable.whale_sleep,
+            size = if (searching) 132.dp else 168.dp,
+            contentDescription = null,
+        )
         Text(
             if (searching) "没有匹配的会话" else "开始一个新会话",
             style = MaterialTheme.typography.titleLarge,

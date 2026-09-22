@@ -94,7 +94,14 @@ class BridgeRepository(context: Context) {
 
     private suspend fun boot() {
         val stored = store.load()
-        _state.update { it.copy(theme = stored.theme, version = BuildConfig.VERSION_NAME) }
+        _state.update {
+            it.copy(
+                theme = stored.theme,
+                overlayBall = stored.overlayBall,
+                overlayPermission = canOverlay(),
+                version = BuildConfig.VERSION_NAME,
+            )
+        }
         if (stored.token.isBlank() || stored.base.isBlank()) {
             _state.update { it.copy(ready = true, view = View.PAIRING, base = stored.base) }
             return
@@ -108,6 +115,11 @@ class BridgeRepository(context: Context) {
                 device = Wire.parseDevice(stored.device),
                 view = View.SESSIONS,
             )
+        }
+        // 悬浮球点了「开启对话 / 查看任务」时应用可能还没启动完，这里补上
+        pendingWhaleAction?.let { action ->
+            pendingWhaleAction = null
+            whaleAction(action)
         }
         lastSeq = stored.seq
         bridgeEpoch = stored.epoch
@@ -234,6 +246,11 @@ class BridgeRepository(context: Context) {
      * what stops "手机端看不到新内容，得重新进去" from ever being the fix.
      */
     fun onResumed() {
+        // 悬浮球是应用外的窗口：用户去系统页授权、或在球上点了「关闭」之后
+        // 回到应用，这里把状态和实际运行中的服务对齐一次。
+        val allowed = canOverlay()
+        if (_state.value.overlayPermission != allowed) _state.update { it.copy(overlayPermission = allowed) }
+        syncOverlayService()
         val s = _state.value
         if (s.token == null) return
         if (!s.connected) {
@@ -536,6 +553,50 @@ class BridgeRepository(context: Context) {
 
     fun closeSettings() {
         _state.update { it.copy(view = View.SESSIONS) }
+    }
+
+    // ----------------------------------------------------------- 鲸鱼娘悬浮球
+
+    /** 是否已获得「显示在其他应用上层」权限。 */
+    fun canOverlay(): Boolean = android.provider.Settings.canDrawOverlays(appContext)
+
+    /** 供服务在被系统拉起时读取：用户关了就不再出现。 */
+    fun overlayEnabled(): Boolean = _state.value.overlayBall
+
+    fun setOverlayBall(on: Boolean) {
+        if (on && !canOverlay()) {
+            _state.update { it.copy(overlayPermission = false, overlayBall = false) }
+            return
+        }
+        _state.update { it.copy(overlayBall = on, overlayPermission = canOverlay()) }
+        scope.launch { store.saveOverlay(on) }
+        syncOverlayService()
+    }
+
+    /** 悬浮球里的动作：开启对话 / 查看任务。冷启动时挂起，配对读完再执行。 */
+    fun whaleAction(action: String) {
+        if (_state.value.token == null) {
+            pendingWhaleAction = action
+            return
+        }
+        when (action) {
+            "new" -> createSession()
+            else -> loadSessions()
+        }
+    }
+
+    private var pendingWhaleAction: String? = null
+
+    private fun syncOverlayService() {
+        val want = _state.value.overlayBall && canOverlay()
+        val intent = android.content.Intent(appContext, com.dsh.mobile.overlay.WhaleBallService::class.java)
+        runCatching {
+            if (want) {
+                if (android.os.Build.VERSION.SDK_INT >= 26) appContext.startForegroundService(intent) else appContext.startService(intent)
+            } else {
+                appContext.stopService(intent)
+            }
+        }
     }
 
     fun setTheme(mode: String) {

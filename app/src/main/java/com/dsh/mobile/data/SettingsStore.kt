@@ -3,6 +3,7 @@ package com.dsh.mobile.data
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -20,6 +21,8 @@ data class StoredSession(
     /** The bridge counter this [seq] belongs to; see [BridgeRepository.handleHello]. */
     val epoch: String = "",
     val theme: String = "auto",
+    /** 鲸鱼娘悬浮球：用户自己的开关，默认关。 */
+    val overlayBall: Boolean = false,
 )
 
 /** Everything that must survive a restart: where the desktop is, the device
@@ -37,6 +40,7 @@ class SettingsStore(context: Context) {
         val THEME = stringPreferencesKey("theme")
         val UPDATE_CHECK = longPreferencesKey("update_check")
         val UPDATE_SKIP = stringPreferencesKey("update_skip")
+        val OVERLAY = booleanPreferencesKey("overlay_ball")
     }
 
     suspend fun load(): StoredSession {
@@ -55,6 +59,7 @@ class SettingsStore(context: Context) {
             seq = prefs[Keys.SEQ] ?: 0L,
             epoch = prefs[Keys.EPOCH].orEmpty(),
             theme = prefs[Keys.THEME] ?: "auto",
+            overlayBall = prefs[Keys.OVERLAY] ?: false,
         )
     }
 
@@ -72,6 +77,10 @@ class SettingsStore(context: Context) {
 
     suspend fun saveEpoch(epoch: String) {
         context.dshStore.edit { prefs -> prefs[Keys.EPOCH] = epoch }
+    }
+
+    suspend fun saveOverlay(on: Boolean) {
+        context.dshStore.edit { prefs -> prefs[Keys.OVERLAY] = on }
     }
 
     suspend fun saveTheme(theme: String) {
