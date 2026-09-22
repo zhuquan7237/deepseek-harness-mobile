@@ -485,6 +485,8 @@ class WhaleBallService : Service() {
         }
         placeBubble(tv)
         tv.animate().cancel()
+        tv.visibility = View.VISIBLE
+        tv.isClickable = true
         tv.alpha = 0f
         tv.scaleX = 0.92f
         tv.scaleY = 0.92f
@@ -528,8 +530,12 @@ class WhaleBallService : Service() {
             .setDuration(520)
             .setInterpolator(LinearInterpolator())
             .withEndAction {
-                runCatching { window.removeView(tv) }
-                if (bubble === tv) bubble = null
+                // 最后一帧闪一下的元凶就是这句 removeView：淡完立刻销毁窗口，
+                // 系统要重画一次（而且下次冒泡还得重新 addView，新窗口第一帧必闪）。
+                // 改成只把 View 藏起来、窗口留着复用，并把点击关掉避免透明气泡吃触摸。
+                tv.alpha = 0f
+                tv.visibility = View.INVISIBLE
+                tv.isClickable = false
             }
             .start()
     }

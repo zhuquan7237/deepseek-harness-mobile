@@ -179,3 +179,15 @@ fun effortLabel(effort: String): String = when (effort.lowercase()) {
     "ultra" -> "Ultra"
     else -> effort
 }
+
+/** 模型搜索：名称 / 供应商 / 原始 id 任一命中即可（大小写不敏感）。 */
+fun filterModels(items: List<ModelItem>, query: String): List<ModelItem> {
+    val q = query.trim().lowercase()
+    if (q.isEmpty()) return items
+    return items.filter { item ->
+        item.modelId.lowercase().contains(q) ||
+            item.name.lowercase().contains(q) ||
+            item.provider.lowercase().contains(q) ||
+            item.providerName.lowercase().contains(q)
+    }
+}

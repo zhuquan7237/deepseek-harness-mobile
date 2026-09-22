@@ -127,6 +127,9 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.horizontalScroll
 import com.dsh.mobile.data.effortLabel
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Close
+import com.dsh.mobile.data.filterModels
 
 /** 空会话时的开场白：点一下就把这句话发给电脑端。 */
 private val OPENERS = listOf(
@@ -1316,7 +1319,50 @@ private fun ModelMenu(
 ) {
     val palette = LocalDsh.current
     val doc = state.doc
+    // 模型一多就得能搜：输入关键词快速定位（名称/供应商都能匹配）
+    var query by remember { mutableStateOf("") }
     Column(Modifier.fillMaxWidth()) {
+        if (!doc?.items.isNullOrEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(palette.surfaceHi)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Search, contentDescription = null,
+                    tint = palette.textTertiary, modifier = Modifier.size(16.dp),
+                )
+                Box(Modifier.weight(1f)) {
+                    if (query.isEmpty()) {
+                        Text(
+                            "搜索模型（名称 / 供应商）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.textTertiary,
+                        )
+                    }
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.labelMedium.copy(color = palette.textPrimary),
+                        cursorBrush = SolidColor(palette.accent),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (query.isNotEmpty()) {
+                    Icon(
+                        Icons.Outlined.Close, contentDescription = "清空搜索",
+                        tint = palette.textTertiary,
+                        modifier = Modifier.size(16.dp).clickable { query = "" },
+                    )
+                }
+            }
+        }
         // 当前模型支持的思考强度（照 ChatGPT：强度在上、模型在下）
         val activeItem = doc?.items?.firstOrNull { item ->
             item.modelId == state.modelId && (state.modelProvider.isEmpty() || item.provider == state.modelProvider)
@@ -1385,8 +1431,10 @@ private fun ModelMenu(
                 val providerRank = remember(doc) {
                     doc.providers.withIndex().associate { (index, provider) -> provider.id to index }
                 }
-                val groups = remember(doc) {
-                    doc.items
+                val q = query.trim().lowercase()
+                val visibleItems = remember(doc, q) { filterModels(doc.items, q) }
+                val groups = remember(doc, visibleItems) {
+                    visibleItems
                         .groupBy { it.provider }
                         .entries
                         .sortedBy { providerRank[it.key] ?: Int.MAX_VALUE }
@@ -1428,6 +1476,16 @@ private fun ModelMenu(
                             }
                         }
                         item(key = "active-gap") { Hairline(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp)) }
+                    }
+                    if (q.isNotEmpty() && visibleItems.isEmpty()) {
+                        item(key = "no-match") {
+                            Text(
+                                "没有匹配「$query」的模型",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = palette.textSecondary,
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
                     }
                     groups.forEachIndexed { groupIndex, (provider, rows) ->
                         val title = doc.providers.firstOrNull { it.id == provider }?.name?.ifBlank { provider } ?: provider
