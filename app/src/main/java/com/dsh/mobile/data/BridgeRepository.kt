@@ -48,6 +48,24 @@ class BridgeRepository(context: Context) {
 
     /** 新对话默认模型（用户设置）；null = 跟随电脑端当前模型。 */
     private var defaultModel: Triple<String, String, String>? = null
+
+    /**
+     * 任务完成提醒的状态：任务跑完置 true，用户"确认"过（双击摸摸头 / 回到 App）置 false。
+     * 悬浮球只在 true 的时候冒完成气泡——以前只看 running 的跳变，
+     * 兜底轮询每 15 秒就把"刚完成"重判一次，于是没完没了地提醒。
+     */
+    private var completionPending = false
+
+    fun completionPending(): Boolean = completionPending
+
+    fun acknowledgeCompletion() {
+        completionPending = false
+    }
+
+    /** 兜底轮询发现"刚跑完"时也要能把它标成未读（App 在后台时收不到 turn/end）。 */
+    fun markCompletionPending() {
+        completionPending = true
+    }
     private val stream = EventStream(client, scope)
 
     private val _state = MutableStateFlow(AppState())
@@ -259,6 +277,8 @@ class BridgeRepository(context: Context) {
     fun onResumed() {
         // 悬浮球是应用外的窗口：用户去系统页授权、或在球上点了「关闭」之后
         // 回到应用，这里把状态和实际运行中的服务对齐一次。
+        // 用户回到 App（大概率就是来看结果的）= 这条完成提醒已经送达
+        completionPending = false
         val allowed = canOverlay()
         if (_state.value.overlayPermission != allowed) _state.update { it.copy(overlayPermission = allowed) }
         syncOverlayService()
@@ -516,6 +536,7 @@ class BridgeRepository(context: Context) {
     /** Send a prompt; returns false when the send failed (draft should return). */
     /** 带图（或纯图）发送：content 里 text + image 混排，引擎原生支持。 */
     suspend fun sendWithImages(text: String, images: List<com.dsh.mobile.ui.AttachImage>): Boolean {
+        completionPending = false
         val s = _state.value
         val sid = s.sessionId ?: return false
         val token = s.token ?: return false
@@ -523,7 +544,7 @@ class BridgeRepository(context: Context) {
         if (trimmed.isEmpty() && images.isEmpty()) return false
         val label = trimmed.ifEmpty { "（图片 ×${images.size}）" }
         _state.update {
-            it.copy(history = it.history + ChatRow(Role.USER, label), running = true, sending = true)
+            it.copy(history = it.history + ChatRow(Role.USER, label), running = true, sending = true, )
         }
         return try {
             val content = org.json.JSONArray()
@@ -558,13 +579,14 @@ class BridgeRepository(context: Context) {
     }
 
     suspend fun send(text: String): Boolean {
+        completionPending = false
         val s = _state.value
         val sid = s.sessionId ?: return false
         val token = s.token ?: return false
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
         _state.update {
-            it.copy(history = it.history + ChatRow(Role.USER, trimmed), running = true, sending = true)
+            it.copy(history = it.history + ChatRow(Role.USER, trimmed), running = true, sending = true, )
         }
         return try {
             api.prompt(token, sid, trimmed, "queue")
@@ -820,8 +842,11 @@ class BridgeRepository(context: Context) {
             "turn/start" -> _state.update {
                 it.copy(running = true, live = emptyList(), thinking = true, thinkingSince = System.currentTimeMillis())
             }
-            "turn/end" -> _state.update {
-                it.copy(running = false, live = emptyList(), thinking = false, thinkingSince = 0L)
+            "turn/end" -> {
+                completionPending = true
+                _state.update {
+                    it.copy(running = false, live = emptyList(), thinking = false, thinkingSince = 0L)
+            }
             }
             "assistant/chunk" -> {
                 // A streaming adapter may send thinking first; it belongs in the

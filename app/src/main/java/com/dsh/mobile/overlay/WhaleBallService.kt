@@ -139,7 +139,7 @@ class WhaleBallService : Service() {
         scope.launch {
             val repo = (application as? DshApp)?.repo ?: return@launch
             repo.state.collect { st ->
-                if (wasRunning && !st.running) celebrate()
+                if (wasRunning && !st.running) celebrate()   // celebrate() 内部会看"未读"标记
                 wasRunning = st.running
             }
         }
@@ -151,8 +151,15 @@ class WhaleBallService : Service() {
                 delay(15_000)
                 runCatching { repo.loadSessions() }
                 val now = repo.state.value.sessions.count { it.running }
-                if (prevRunning > 0 && now == 0) celebrate()
-                if (now > 0 || prevRunning == 0) prevRunning = now
+                if (prevRunning > 0 && now == 0) {
+                    // App 在后台收不到 turn/end，这里补记"未读"，celebrate 才放行
+                    repo.markCompletionPending()
+                    celebrate()
+                }
+                // 这里原来写的是 `if (now > 0 || prevRunning == 0) prevRunning = now`——
+                // 从 1 掉到 0 之后 prevRunning 卡在 1 不动，于是每 15 秒都重判一次
+                // "刚完成"，完成气泡没完没了地弹。必须无条件跟进。
+                prevRunning = now
             }
         }
     }
@@ -404,6 +411,8 @@ class WhaleBallService : Service() {
     // ------------------------------------------------------------------ 表情
 
     private fun pat() {
+        // 双击摸摸头 = "我知道了"：任务完成提醒到此为止（用户要求）
+        (application as? DshApp)?.repo?.acknowledgeCompletion()
         pats++
         setFace(WhaleMood.forPat(pats).res)
         showBubble(patLines[(pats - 1) % patLines.size])
@@ -422,6 +431,9 @@ class WhaleBallService : Service() {
      */
     private fun celebrate() {
         if (!::ball.isInitialized) return
+        // 用户已经确认过（摸了摸头 / 回过 App）就别再提醒了
+        val repo = (application as? DshApp)?.repo
+        if (repo != null && !repo.completionPending()) return
         val now = System.currentTimeMillis()
         if (now - lastCelebrate < 6_000) return
         lastCelebrate = now
