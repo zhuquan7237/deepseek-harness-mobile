@@ -29,11 +29,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -96,7 +96,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CircleButton(Icons.Filled.Settings, "设置") { repo.openSettings() }
+            CircleButton(Icons.Outlined.Settings, "设置") { repo.openSettings() }
             Spacer(Modifier.width(10.dp))
             StatusPill(
                 text = buildString {
@@ -192,7 +192,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                 )
                 Spacer(Modifier.width(10.dp))
                 PrimaryCta(
-                    icon = Icons.Filled.Edit,
+                    icon = Icons.Outlined.Edit,
                     text = "新建",
                     label = "新建会话",
                     onClick = { repo.createSession() },
@@ -313,7 +313,7 @@ private fun SearchPill(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Icon(
-            Icons.Filled.Search,
+            Icons.Outlined.Search,
             contentDescription = "搜索会话",
             tint = palette.textSecondary,
             modifier = Modifier.size(19.dp),
@@ -348,7 +348,7 @@ private fun SearchPill(
                     .padding(2.dp),
             ) {
                 Icon(
-                    Icons.Filled.Close,
+                    Icons.Outlined.Close,
                     contentDescription = "清除搜索",
                     tint = palette.textSecondary,
                     modifier = Modifier.size(18.dp),

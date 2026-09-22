@@ -26,7 +26,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -236,7 +236,7 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                Icons.Filled.QrCodeScanner,
+                Icons.Outlined.QrCodeScanner,
                 contentDescription = null,
                 tint = palette.textPrimary,
                 modifier = Modifier.size(20.dp),

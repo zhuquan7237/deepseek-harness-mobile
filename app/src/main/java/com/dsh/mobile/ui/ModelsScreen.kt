@@ -25,14 +25,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -89,7 +89,7 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            CircleButton(Icons.AutoMirrored.Filled.ArrowBack, "返回") { repo.closeModels() }
+            CircleButton(Icons.AutoMirrored.Outlined.ArrowBack, "返回") { repo.closeModels() }
             Text(
                 "模型",
                 style = MaterialTheme.typography.titleMedium,
@@ -100,7 +100,7 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                 CircularProgressIndicator(color = palette.accent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
             }
-            CircleButton(Icons.Filled.Refresh, "重新读取") { repo.loadModels() }
+            CircleButton(Icons.Outlined.Refresh, "重新读取") { repo.loadModels() }
         }
 
         when {
@@ -161,7 +161,7 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                             .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
                         horizontalArrangement = Arrangement.Center,
                     ) {
-                        PrimaryCta(Icons.Filled.Add, "添加提供商") { addProvider = true }
+                        PrimaryCta(Icons.Outlined.Add, "添加提供商") { addProvider = true }
                     }
                 }
             }
@@ -350,7 +350,7 @@ private fun ProviderBlock(
                 Spacer(Modifier.width(8.dp))
             }
             Icon(
-                if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                if (open) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
                 contentDescription = if (open) "收起" else "展开",
                 tint = palette.textSecondary,
                 modifier = Modifier.size(20.dp),
@@ -395,7 +395,7 @@ private fun ProviderBlock(
                         ),
                     )
                     Icon(
-                        Icons.Filled.Delete,
+                        Icons.Outlined.Delete,
                         contentDescription = "删除 ${item.name}",
                         tint = palette.textTertiary,
                         modifier = Modifier
@@ -522,7 +522,7 @@ private fun AddProviderSheet(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(
-                                if (modelId in picked) Icons.Filled.Check else Icons.Filled.Close,
+                                if (modelId in picked) Icons.Outlined.Check else Icons.Outlined.Close,
                                 contentDescription = null,
                                 tint = if (modelId in picked) palette.accent else palette.textTertiary,
                                 modifier = Modifier.size(16.dp),

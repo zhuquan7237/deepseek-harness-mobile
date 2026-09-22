@@ -45,20 +45,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -68,6 +68,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -106,6 +107,8 @@ import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.animation.slideInVertically
+import androidx.compose.material.icons.outlined.CheckCircle
 
 /** 空会话时的开场白：点一下就把这句话发给电脑端。 */
 private val OPENERS = listOf(
@@ -135,6 +138,23 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
     val context = LocalContext.current
     var showRename by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<Wire.Artifact?>(null) }
+    // 任务完成提示：running 由 true 变 false 的那一刻浮出来，几秒后自己走
+    var runningSeen by remember { mutableStateOf(state.running) }
+    var doneLine by remember { mutableStateOf("") }
+    var doneVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(state.running) {
+        if (runningSeen && !state.running) {
+            doneLine = WhaleLines.DONE.random()
+            doneVisible = true
+        }
+        runningSeen = state.running
+    }
+    LaunchedEffect(doneVisible) {
+        if (doneVisible) {
+            delay(5200)
+            doneVisible = false
+        }
+    }
 
     // 打字机是一次性的：动画约 0.7 秒，标记最多活 1.6 秒。列表项被回收重建、
     // 键盘顶起/收起、切换主题都不该让一条旧消息重新"流式输出"一遍。
@@ -155,7 +175,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            CircleButton(Icons.AutoMirrored.Filled.ArrowBack, "返回") { repo.closeSession() }
+            CircleButton(Icons.AutoMirrored.Outlined.ArrowBack, "返回") { repo.closeSession() }
             ContextPill(
                 title = state.sessionTitle.ifEmpty { "会话" },
                 meta = when (state.conn) {
@@ -163,12 +183,12 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
                     Conn.CONNECTING -> "电脑端 · 正在连接"
                     Conn.OFFLINE -> "电脑端 · 未连接，重连中"
                 },
-                metaIcon = Icons.Filled.Computer,
+                metaIcon = Icons.Outlined.Computer,
                 metaConn = state.conn,
                 modifier = Modifier.weight(1f),
                 onClick = { showActions = true },
             )
-            CircleButton(Icons.Filled.MoreVert, "更多") { showActions = true }
+            CircleButton(Icons.Outlined.MoreVert, "更多") { showActions = true }
         }
         MessageList(
             state = state,
@@ -188,6 +208,13 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             },
             modifier = Modifier.weight(1f),
         )
+        AnimatedVisibility(
+            visible = doneVisible,
+            enter = fadeIn(tween(200)) + slideInVertically(tween(260, easing = MenuEasing)) { it / 3 },
+            exit = fadeOut(tween(300)),
+        ) {
+            CompletionCard(line = doneLine) { doneVisible = false }
+        }
         // 她浮在输入框上沿：Box + align + offset 不占布局空间（原来独占一行，输入框
         // 上面会空出一整条）；先画她、后画输入框，所以下半身被输入框盖住 = 趴在框沿上。
         // 她的说话气泡允许压过下面的对话内容——再点一下就会消失。
@@ -404,12 +431,19 @@ private fun MessageList(
     val itemCount = rows.size + (if (live.isEmpty()) 0 else live.size)
     val lastLiveLength = live.lastOrNull()?.text?.length ?: 0
     // 键盘弹起时可视高度被压小，不滚到底的话最新内容正好被输入框盖在下面
-    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
-    // 只在"键盘刚弹起"这一刻跟随到底；不要挂在 itemCount 上——否则打字中途每来一条
-    // 事件都会把正在翻历史的你拽回底部，手感就是"滑着滑着卡住又不听话"。
-    LaunchedEffect(imeBottom) {
-        if (imeBottom > 0) {
-            delay(80)
+    // 键盘是否弹起用 Boolean（只在开关那一刻变一次）。原来读的是
+    // WindowInsets.ime.getBottom()——键盘动画期间这个值每帧都在变，于是整个列表每帧
+    // 重组一遍，再加上滚动动画被反复取消重建，看起来就是"上移的时候卡顿掉帧"。
+    // derivedStateOf：只在"键盘是否可见"这个布尔值翻转时才通知重组，
+    // 键盘动画期间每帧变化的高度不会穿进来（用 isImeVisible 要 OptIn 实验 API）
+    val density = LocalDensity.current
+    val imeInsets = WindowInsets.ime
+    val imeOpen by remember(imeInsets, density) {
+        derivedStateOf { imeInsets.getBottom(density) > 0 }
+    }
+    LaunchedEffect(imeOpen) {
+        if (imeOpen) {
+            delay(60)
             val total = listState.layoutInfo.totalItemsCount
             if (total > 0) runCatching { listState.animateScrollToItem(total - 1) }
         }
@@ -541,8 +575,8 @@ private fun MessageRow(
                 if (showActions && done) {
                     Spacer(Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        MessageAction(Icons.Filled.ContentCopy, "复制") { onCopy(row.text) }
-                        MessageAction(Icons.Filled.Refresh, "重新生成", onRegenerate)
+                        MessageAction(Icons.Outlined.ContentCopy, "复制") { onCopy(row.text) }
+                        MessageAction(Icons.Outlined.Refresh, "重新生成", onRegenerate)
                     }
                 }
             }
@@ -574,7 +608,7 @@ private fun ReasoningRow(row: ChatRow) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Icon(
-                Icons.Filled.AutoAwesome,
+                Icons.Outlined.AutoAwesome,
                 contentDescription = null,
                 tint = palette.textTertiary,
                 modifier = Modifier.size(14.dp),
@@ -585,7 +619,7 @@ private fun ReasoningRow(row: ChatRow) {
                 color = palette.textSecondary,
             )
             Icon(
-                if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                if (open) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
                 contentDescription = if (open) "收起思考过程" else "展开思考过程",
                 tint = palette.textTertiary,
                 modifier = Modifier.size(18.dp),
@@ -631,7 +665,7 @@ private fun ToolRow(row: ChatRow, onPreview: (Wire.Artifact) -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Icon(
-            Icons.Filled.Build,
+            Icons.Outlined.Build,
             contentDescription = null,
             tint = palette.textTertiary,
             modifier = Modifier.size(13.dp),
@@ -671,7 +705,7 @@ private fun PreviewChip(kind: String, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Icon(
-            Icons.Filled.Image,
+            Icons.Outlined.Image,
             contentDescription = null,
             tint = palette.accent,
             modifier = Modifier.size(13.dp),
@@ -684,18 +718,52 @@ private fun PreviewChip(kind: String, onClick: () -> Unit) {
     }
 }
 
-/** One 22dp grey glyph in a 36dp touch target, ChatGPT's message action row. */
+/**
+ * 任务完成时的一条小提示。比系统 Toast 好看、也不挡内容：点一下就走，
+ * 5 秒后自己淡出。
+ */
+@Composable
+private fun CompletionCard(line: String, onDismiss: () -> Unit) {
+    val palette = LocalDsh.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(palette.surface)
+            .border(1.dp, palette.accent.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+            .clickable(onClick = onDismiss)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Icon(
+            Icons.Outlined.CheckCircle,
+            contentDescription = null,
+            tint = palette.accent,
+            modifier = Modifier.size(17.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text("任务已完成", style = MaterialTheme.typography.labelLarge, color = palette.textPrimary)
+            if (line.isNotBlank()) {
+                Text(line, style = MaterialTheme.typography.bodySmall, color = palette.textTertiary, maxLines = 1)
+            }
+        }
+    }
+}
+
+/** 消息下方的操作图标：32dp 触控区 + 17dp 线性图标。 */
 @Composable
 private fun MessageAction(icon: ImageVector, label: String, onClick: () -> Unit) {
     val palette = LocalDsh.current
     Box(
         Modifier
-            .size(36.dp)
+            .size(32.dp)
             .clip(CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = palette.textSecondary, modifier = Modifier.size(20.dp))
+        Icon(icon, contentDescription = label, tint = palette.textTertiary, modifier = Modifier.size(17.dp))
     }
 }
 
@@ -862,19 +930,21 @@ private fun Composer(
         Row(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(26.dp))
+                .clip(RoundedCornerShape(24.dp))
                 .background(palette.surface)
-                .padding(start = 8.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
+            // 胶囊 = 36dp 高，输入框首行也是 36dp（6+24+6）——两边中线对齐，
+            // 不会一个上一个下
             ModelChip(state = state, onClick = onOpenModels)
             BasicTextField(
                 value = draft,
                 onValueChange = { draft = it },
                 modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 34.dp, max = 140.dp)
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .heightIn(min = 36.dp, max = 140.dp)
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.textPrimary),
                 cursorBrush = SolidColor(palette.accent),
                 maxLines = 6,
@@ -891,11 +961,11 @@ private fun Composer(
                     }
                 },
             )
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(4.dp))
             if (state.running) {
                 CircleAction(
                     background = palette.surfaceHi,
-                    icon = Icons.Filled.Stop,
+                    icon = Icons.Outlined.Stop,
                     tint = palette.textPrimary,
                     contentDescription = "停止生成",
                     enabled = true,
@@ -913,7 +983,7 @@ private fun Composer(
                 )
                 CircleAction(
                     background = sendBg,
-                    icon = Icons.Filled.ArrowUpward,
+                    icon = Icons.Outlined.ArrowUpward,
                     tint = sendTint,
                     contentDescription = "发送",
                     enabled = draft.isNotBlank() && !state.sending,
@@ -939,25 +1009,28 @@ private fun ModelChip(state: AppState, onClick: () -> Unit) {
     val label = state.modelLabel.ifBlank { "模型" }
     Row(
         Modifier
+            .height(36.dp)
+            // 有底色的小胶囊：不然"模型"和右边的提示文字会连成一句话
             .clip(RoundedCornerShape(999.dp))
+            .background(palette.surfaceHi)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp),
+            .padding(start = 11.dp, end = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
     ) {
         Text(
             label,
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.labelLarge,
             color = palette.textSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = 86.dp),
+            modifier = Modifier.widthIn(max = 84.dp),
         )
         Icon(
-            Icons.Filled.ArrowDropDown,
+            Icons.Outlined.KeyboardArrowDown,
             contentDescription = "选择模型",
-            tint = palette.textSecondary,
-            modifier = Modifier.size(18.dp),
+            tint = palette.textTertiary,
+            modifier = Modifier.size(16.dp),
         )
     }
 }
@@ -1066,7 +1139,7 @@ private fun ModelMenu(state: AppState, onPick: (String, String, String) -> Unit)
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f),
                                 )
-                                Icon(Icons.Filled.Check, contentDescription = "当前模型", tint = palette.accent, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Outlined.Check, contentDescription = "当前模型", tint = palette.accent, modifier = Modifier.size(18.dp))
                             }
                         }
                         item(key = "active-gap") { Hairline(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp)) }
@@ -1142,7 +1215,7 @@ private fun ModelMenu(state: AppState, onPick: (String, String, String) -> Unit)
                                 }
                                 when {
                                     !item.enabled -> MiniTag("已停用", palette.textTertiary)
-                                    current -> Icon(Icons.Filled.Check, contentDescription = "当前模型", tint = palette.accent, modifier = Modifier.size(18.dp))
+                                    current -> Icon(Icons.Outlined.Check, contentDescription = "当前模型", tint = palette.accent, modifier = Modifier.size(18.dp))
                                 }
                             }
                         }

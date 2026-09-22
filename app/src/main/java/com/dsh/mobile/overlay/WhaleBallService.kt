@@ -21,6 +21,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.view.animation.LinearInterpolator
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import com.dsh.mobile.DshApp
@@ -138,7 +139,16 @@ class WhaleBallService : Service() {
             repo.state.collect { st ->
                 if (wasRunning && !st.running && ::ball.isInitialized) {
                     setFace(faceHappy)
-                    showBubble(WhaleLines.DONE.random())
+                    // 完成：先蹦两下，再报一句 —— 比单纯冒字更像"干完了"
+                    ball.animate().translationY(-dp(12).toFloat()).setDuration(130).withEndAction {
+                        ball.animate().translationY(0f).setDuration(150).withEndAction {
+                            ball.animate().translationY(-dp(6).toFloat()).setDuration(100).withEndAction {
+                                ball.animate().translationY(0f).setDuration(130).start()
+                                startBob()
+                            }.start()
+                        }.start()
+                    }.start()
+                    showBubble(WhaleLines.DONE.random(), done = true)
                 }
                 wasRunning = st.running
             }
@@ -402,42 +412,77 @@ class WhaleBallService : Service() {
         }.start()
     }
 
-    /** 头顶冒一句话，1.5 秒后自己消失。只有摸头时才会创建这个 View。 */
-    private fun showBubble(text: String) {
-        bubble?.let { runCatching { window.removeView(it) } }
-        val tv = TextView(this).apply {
-            this.text = text
-            setTextColor(Color.parseColor("#EDEFF2"))
-            textSize = 13f
-            background = GradientDrawable().apply {
-                cornerRadius = dp(13).toFloat()
-                setColor(Color.parseColor("#E62B3036"))
+    /** 淡出任务：换一句话时不重复排队。 */
+    private val fadeBubbleTask = Runnable { fadeBubbleOut() }
+
+    /**
+     * 头顶冒一句话。
+     *
+     * 两个要点（都是"闪一下"的来源）：
+     *  1. 淡出给足 520ms 线性，而不是 200ms 的"啪一下没了"——和对话窗口里那只一致；
+     *  2. 换下一句时**复用同一个 View**，不再"先 removeView 再 addView"——旧气泡
+     *     瞬间消失、新气泡从 0 淡入，中间那一帧就是用户看到的闪烁。
+     * 另外用硬件层跑 alpha，避免边动画边重绘。
+     */
+    private fun showBubble(text: String, done: Boolean = false) {
+        val tv = bubble ?: run {
+            val view = TextView(this).apply {
+                setTextColor(Color.parseColor("#EDEFF2"))
+                textSize = 13f
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                isClickable = true
+                setOnClickListener {
+                    fadeBubbleOut()
+                    openApp("tasks")
+                }
             }
-            setPadding(dp(11), dp(7), dp(11), dp(7))
-            alpha = 0f
-            scaleX = 0.9f
-            scaleY = 0.9f
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT,
+            )
+            runCatching { window.addView(view, params) }.onFailure { return }
+            bubble = view
+            view
         }
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = (ballParams.x + ballSize / 2 - dp(40)).coerceAtLeast(dp(6))
-            y = (ballParams.y - dp(34)).coerceAtLeast(statusBar() + dp(2))
+        tv.text = if (done) "✓ $text" else text
+        tv.background = GradientDrawable().apply {
+            cornerRadius = dp(13).toFloat()
+            setColor(if (done) Color.parseColor("#E62E4A3A") else Color.parseColor("#E62B3036"))
+            if (done) setStroke(dp(1), Color.parseColor("#804BE07A"))
         }
-        window.addView(tv, params)
-        bubble = tv
-        tv.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(150).start()
-        handler.postDelayed({
-            tv.animate().alpha(0f).setDuration(200).withEndAction {
+        // 球可能被拖过：每次都把气泡重新对到她头顶
+        (tv.layoutParams as? WindowManager.LayoutParams)?.let { params ->
+            params.x = (ballParams.x + ballSize / 2 - dp(40)).coerceAtLeast(dp(6))
+            params.y = (ballParams.y - dp(34)).coerceAtLeast(statusBar() + dp(2))
+            runCatching { window.updateViewLayout(tv, params) }
+        }
+        tv.animate().cancel()
+        tv.alpha = 0f
+        tv.scaleX = 0.92f
+        tv.scaleY = 0.92f
+        tv.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start()
+        handler.removeCallbacks(fadeBubbleTask)
+        handler.postDelayed(fadeBubbleTask, if (done) 2900L else 1900L)
+    }
+
+    /** 慢慢淡下去，再撤掉。 */
+    private fun fadeBubbleOut() {
+        val tv = bubble ?: return
+        handler.removeCallbacks(fadeBubbleTask)
+        tv.animate().cancel()
+        tv.animate()
+            .alpha(0f)
+            .setDuration(520)
+            .setInterpolator(LinearInterpolator())
+            .withEndAction {
                 runCatching { window.removeView(tv) }
                 if (bubble === tv) bubble = null
-            }.start()
-        }, 1500)
+            }
+            .start()
     }
 
     // ------------------------------------------------------------------ 动作

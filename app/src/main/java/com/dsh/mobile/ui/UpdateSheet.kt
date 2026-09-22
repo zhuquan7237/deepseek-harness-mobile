@@ -17,8 +17,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -55,7 +55,7 @@ fun UpdateBanner(info: UpdateInfo, onOpen: () -> Unit, onDismiss: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon(Icons.Filled.ArrowUpward, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
+        Icon(Icons.Outlined.ArrowUpward, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text("有新版本 ${info.version}", style = MaterialTheme.typography.bodyMedium, color = palette.textPrimary)
             Text("点这里查看并更新", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
@@ -150,7 +150,7 @@ fun UpdateSheet(state: AppState, repo: BridgeRepository, onDismiss: () -> Unit) 
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Icon(Icons.Filled.OpenInNew, contentDescription = null, tint = palette.textPrimary, modifier = Modifier.size(15.dp))
+                    Icon(Icons.Outlined.OpenInNew, contentDescription = null, tint = palette.textPrimary, modifier = Modifier.size(15.dp))
                     Text("用浏览器打开", style = MaterialTheme.typography.bodySmall, color = palette.textPrimary)
                 }
                 if (state.updateProgress < 0) {

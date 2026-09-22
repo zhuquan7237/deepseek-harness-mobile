@@ -29,9 +29,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.FlashOff
-import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.FlashOff
+import androidx.compose.material.icons.outlined.FlashOn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -176,7 +176,7 @@ fun ScanScreen(repo: BridgeRepository) {
         ) {
             Spacer(Modifier.height(10.dp))
             CircleButton(
-                icon = Icons.AutoMirrored.Filled.ArrowBack,
+                icon = Icons.AutoMirrored.Outlined.ArrowBack,
                 label = "返回",
                 onClick = { repo.closeScan() },
             )
@@ -278,7 +278,7 @@ private fun BoxScope.TorchToggle(
     modifier: Modifier = Modifier,
 ) {
     CircleButton(
-        icon = if (on) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
+        icon = if (on) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
         label = if (on) "关闭闪光灯" else "打开闪光灯",
         onClick = onToggle,
         modifier = modifier,

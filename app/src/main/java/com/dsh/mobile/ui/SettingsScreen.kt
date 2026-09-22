@@ -19,7 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -65,7 +65,7 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            CircleButton(Icons.AutoMirrored.Filled.ArrowBack, "返回") { repo.closeSettings() }
+            CircleButton(Icons.AutoMirrored.Outlined.ArrowBack, "返回") { repo.closeSettings() }
             Text("设置", style = MaterialTheme.typography.titleLarge, color = palette.textPrimary)
         }
         Column(

@@ -7,8 +7,12 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,8 +22,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -38,8 +42,8 @@ import java.util.Locale
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.core.content.FileProvider
 import com.dsh.mobile.data.Wire
 
@@ -190,25 +194,25 @@ fun CodeCard(
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 2.dp),
+                .padding(start = 13.dp, end = 4.dp, top = 3.dp, bottom = 1.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = lang.ifBlank { "code" },
-                style = MaterialTheme.typography.labelMedium,
+                text = lang.ifBlank { "code" }.lowercase(),
+                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.6.sp),
                 color = palette.textTertiary,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // 图形/网页先给"预览"：在手机上看一眼结果，比读代码有用
                 if (previewKind != null && onPreview != null) {
-                    CodeAction(Icons.Filled.Visibility, "预览效果") { onPreview(Wire.Artifact(previewKind, code)) }
+                    CodeAction(Icons.Outlined.Visibility, "预览效果") { onPreview(Wire.Artifact(previewKind, code)) }
                 }
                 if (onOpenExternal != null) {
-                    CodeAction(Icons.AutoMirrored.Filled.OpenInNew, "在外部打开") { onOpenExternal(lang, code) }
+                    CodeAction(Icons.AutoMirrored.Outlined.OpenInNew, "在外部打开") { onOpenExternal(lang, code) }
                 }
-                CodeAction(Icons.Filled.ContentCopy, "复制代码") { onCopy(code) }
-                CodeAction(Icons.Filled.Save, "保存为文件") { onSave(lang, code) }
+                CodeAction(Icons.Outlined.ContentCopy, "复制代码") { onCopy(code) }
+                CodeAction(Icons.Outlined.Save, "保存为文件") { onSave(lang, code) }
             }
         }
         Column(
@@ -237,8 +241,15 @@ private fun CodeAction(
     onClick: () -> Unit,
 ) {
     val palette = LocalDsh.current
-    androidx.compose.material3.IconButton(onClick = onClick) {
-        Icon(icon, contentDescription = label, tint = palette.textSecondary, modifier = Modifier.padding(0.dp))
+    // 30dp 触控区 + 16dp 线性图标：卡片顶栏是一行辅助操作，不该比正文还抢眼
+    Box(
+        Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = palette.textTertiary, modifier = Modifier.size(16.dp))
     }
 }
 
