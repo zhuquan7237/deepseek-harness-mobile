@@ -638,7 +638,10 @@ class BridgeRepository(context: Context) {
     }
 
     fun closeSettings() {
-        _state.update { it.copy(view = View.SESSIONS) }
+        // 设置是从对话页（左侧抽屉）进去的，返回就该回到那个对话，
+        // 而不是把人丢回会话列表——新导航下列表已经不是"主页"了。
+        val back = if (_state.value.sessionId != null) View.CHAT else View.SESSIONS
+        _state.update { it.copy(view = back) }
     }
 
     // ----------------------------------------------------------- 鲸鱼娘悬浮球
