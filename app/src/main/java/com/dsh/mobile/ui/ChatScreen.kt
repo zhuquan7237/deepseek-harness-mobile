@@ -1709,7 +1709,11 @@ private fun SessionDrawer(state: AppState, repo: BridgeRepository, onPicked: () 
             Text("会话", style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
             Spacer(Modifier.weight(1f))
             Box(
-                Modifier.size(36.dp).clip(CircleShape).clickable { onPicked() },
+                // 之前这里错接成 onPicked()（只关抽屉），设置页根本打不开——手机上实测的 bug
+                Modifier.size(36.dp).clip(CircleShape).clickable {
+                    repo.openSettings()
+                    onPicked()
+                },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.Outlined.Settings, "设置", tint = palette.textSecondary, modifier = Modifier.size(19.dp))
