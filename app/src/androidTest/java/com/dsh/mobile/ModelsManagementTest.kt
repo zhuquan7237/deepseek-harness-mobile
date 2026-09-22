@@ -114,6 +114,21 @@ class ModelsManagementTest {
 
     private fun isOnSessionsScreen(): Boolean = anyText("个会话", substring = true)
 
+    /** 现在进 App 直接落在新对话上。 */
+    private fun isOnChatScreen(): Boolean = anyText("给电脑端发消息…")
+
+    /** 已连上的两种形态：聊天页（新落地页）或会话页顶栏的「已连接」。 */
+    private fun isConnected(): Boolean = isOnChatScreen() || anyText("已连接", substring = true)
+
+    /** 设置入口：聊天页要先开左侧抽屉，会话页顶栏直接有。 */
+    private fun openSettings() {
+        if (anyContent("会话列表")) {
+            composeRule.onAllNodesWithContentDescription("会话列表")[0].performClick()
+            composeRule.waitUntil(15_000) { anyContent("设置") }
+        }
+        composeRule.onAllNodesWithContentDescription("设置")[0].performClick()
+    }
+
     private fun revokeByName(name: String) {
         val state = http("GET", "/mobile-local/state")
         val devices = state.optJSONArray("devices") ?: return
@@ -128,14 +143,14 @@ class ModelsManagementTest {
     private fun pairThroughUi() {
         val code = http("POST", "/mobile-local/rotate").optString("code")
         check(code.isNotBlank()) { "desktop did not hand out a pairing code" }
-        composeRule.waitUntil(40_000) { isOnPairingScreen() || isOnSessionsScreen() || anyContent("返回") }
-        if (anyContent("返回")) {
+        composeRule.waitUntil(40_000) { isOnPairingScreen() || isOnChatScreen() || isOnSessionsScreen() || anyContent("返回") }
+        if (!isOnChatScreen() && !isOnSessionsScreen() && anyContent("返回")) {
             composeRule.onAllNodesWithContentDescription("返回")[0].performClick()
-            composeRule.waitUntil(15_000) { isOnSessionsScreen() || isOnPairingScreen() }
+            composeRule.waitUntil(15_000) { isOnSessionsScreen() || isOnPairingScreen() || isOnChatScreen() }
         }
-        composeRule.waitUntil(30_000) { isOnPairingScreen() || anyText("已连接", substring = true) }
+        composeRule.waitUntil(30_000) { isOnPairingScreen() || isConnected() }
         if (!isOnPairingScreen()) {
-            composeRule.onAllNodesWithContentDescription("设置")[0].performClick()
+            openSettings()
             composeRule.waitUntil(15_000) { anyText("解除本机绑定") }
             composeRule.onAllNodesWithText("解除本机绑定")[0].performClick()
             composeRule.waitUntil(15_000) { anyText("解除本机绑定？") }
@@ -148,7 +163,7 @@ class ModelsManagementTest {
         fields[2].performTextReplacement("emulator-models-e2e")
         // config stays checked by default — that is the point of this test
         composeRule.onAllNodesWithText("用配对码配对")[0].performClick()
-        composeRule.waitUntil(60_000) { isOnSessionsScreen() }
+        composeRule.waitUntil(60_000) { isOnChatScreen() || isOnSessionsScreen() }
     }
 
     // -------------------------------------------------------------------- test
@@ -156,9 +171,9 @@ class ModelsManagementTest {
     @Test
     fun addAndDeleteProviderThroughTheModelsScreen() {
         pairThroughUi()
-        composeRule.waitUntil(30_000) { anyText("已连接", substring = true) }
+        composeRule.waitUntil(30_000) { isConnected() }
 
-        composeRule.onAllNodesWithContentDescription("设置")[0].performClick()
+        openSettings()
         composeRule.waitUntil(15_000) { anyText("模型配置") }
         composeRule.onAllNodesWithText("模型配置")[0].performClick()
 

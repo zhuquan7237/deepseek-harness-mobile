@@ -96,6 +96,9 @@ class EndToEndTest {
     /** 现在进 App 直接落在新对话上，所以"到家了"的判断要包括聊天页。 */
     private fun isOnChatScreen(): Boolean = anyText("给电脑端发消息…")
 
+    /** 已连上的两种形态：聊天页（新落地页）或会话页顶栏的「已连接」。 */
+    private fun isConnected(): Boolean = isOnChatScreen() || anyText("已连接", substring = true)
+
     private fun revokeByName(name: String) {
         val state = http("GET", "/mobile-local/state")
         val devices = state.optJSONArray("devices") ?: return
@@ -116,7 +119,7 @@ class EndToEndTest {
             isOnPairingScreen() || isOnChatScreen() || isOnSessionsScreen()
         }
         // Let the app settle: a stale (revoked) token flips to pairing by itself.
-        composeRule.waitUntil(30_000) { isOnPairingScreen() || anyText("已连接", substring = true) }
+        composeRule.waitUntil(30_000) { isOnPairingScreen() || isConnected() }
         if (!isOnPairingScreen()) {
             // 设置入口：聊天页在左侧抽屉里（顶栏现在是"会话列表"），会话页在顶栏
             if (!anyContent("设置")) {
@@ -144,7 +147,7 @@ class EndToEndTest {
     @Test
     fun pairListChatReplyAndStop() {
         pairThroughUi()
-        composeRule.waitUntil(30_000) { anyText("已连接", substring = true) }
+        composeRule.waitUntil(30_000) { isConnected() }
 
         // 进 App 直接就是新对话；万一是从会话页进来的旧路径，再点"新建会话"
         if (!isOnChatScreen()) {
@@ -181,7 +184,7 @@ class EndToEndTest {
     @Test
     fun reconnectAfterNetworkDrop() {
         pairThroughUi()
-        composeRule.waitUntil(30_000) { anyText("已连接", substring = true) }
+        composeRule.waitUntil(30_000) { isConnected() }
 
         // Drop the network: the app must admit it, and must come back on its
         // own once the network returns (hello-since replay included).
@@ -191,13 +194,13 @@ class EndToEndTest {
         } finally {
             shell("cmd connectivity airplane-mode disable")
         }
-        composeRule.waitUntil(120_000) { anyText("已连接", substring = true) }
+        composeRule.waitUntil(120_000) { isConnected() }
     }
 
     @Test
     fun revokedTokenSelfHealsToPairing() {
         pairThroughUi()
-        composeRule.waitUntil(30_000) { anyText("已连接", substring = true) }
+        composeRule.waitUntil(30_000) { isConnected() }
 
         // The desktop revokes this device. A live socket survives revocation
         // (auth happens at upgrade), so force a reconnect with a network drop;
