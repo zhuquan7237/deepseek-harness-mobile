@@ -1010,18 +1010,20 @@ private fun ModelChip(state: AppState, onClick: () -> Unit) {
     Row(
         Modifier
             .height(36.dp)
-            // 有底色的小胶囊：不然"模型"和右边的提示文字会连成一句话
+            // 有底色的小胶囊：不然"模型"和右边的提示文字会连成一句话。
+            // 再补一圈极细描边 + 稍宽的内边距，让它更像"可点的控件"而不是一段文字。
             .clip(RoundedCornerShape(999.dp))
             .background(palette.surfaceHi)
+            .border(1.dp, palette.textTertiary.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
             .clickable(onClick = onClick)
-            .padding(start = 11.dp, end = 7.dp),
+            .padding(start = 12.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(1.dp),
     ) {
         Text(
             label,
-            style = MaterialTheme.typography.labelLarge,
-            color = palette.textSecondary,
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
+            color = palette.textPrimary.copy(alpha = 0.92f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.widthIn(max = 84.dp),

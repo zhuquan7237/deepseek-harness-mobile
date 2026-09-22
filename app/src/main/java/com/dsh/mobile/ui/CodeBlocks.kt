@@ -215,11 +215,18 @@ fun CodeCard(
                 CodeAction(Icons.Outlined.Save, "保存为文件") { onSave(lang, code) }
             }
         }
+        // 顶栏与代码之间的分层：一条极淡的分割线
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(palette.textTertiary.copy(alpha = 0.14f)),
+        )
         Column(
             Modifier
                 .heightIn(max = 340.dp)
                 .verticalScroll(rememberScrollState())
-                .padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
         ) {
             Text(
                 text = code,
