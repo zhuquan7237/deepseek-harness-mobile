@@ -1677,7 +1677,7 @@ private fun AttachmentPeek(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 PeekAction("重新编辑", palette) { onEdit() }
-                PeekAction("移除", palette) { onRemove() }
+                PeekAction("移除", palette, danger = true) { onRemove() }
                 PeekAction("关闭", palette) { onClose() }
             }
         }
@@ -1685,11 +1685,16 @@ private fun AttachmentPeek(
 }
 
 @Composable
-private fun PeekAction(label: String, palette: com.dsh.mobile.ui.theme.DshPalette, onClick: () -> Unit) {
+private fun PeekAction(
+    label: String,
+    palette: com.dsh.mobile.ui.theme.DshPalette,
+    danger: Boolean = false,
+    onClick: () -> Unit,
+) {
     Text(
         label,
         style = MaterialTheme.typography.labelLarge,
-        color = Color.White,
+        color = if (danger) Color(0xFFFF6B6B) else Color.White,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
             .background(Color.White.copy(alpha = 0.16f))
