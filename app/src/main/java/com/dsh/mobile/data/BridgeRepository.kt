@@ -396,8 +396,24 @@ class BridgeRepository(context: Context) {
         scope.launch { fetchHistory(sid, quiet) }
     }
 
-    /** The awaitable half of [loadHistory], so reloads can be serialised. */
-    private suspend fun fetchHistory(sid: String, quiet: Boolean = false) {
+    /**
+     * The typewriter has played (or been outrun). Dropping the marker here is
+     * what makes it one-shot: a recycled list row, a keyboard resize or a
+     * theme change can then never play the same message a second time.
+     */
+    fun revealConsumed() {
+        _state.update { if (it.revealText != null) it.copy(revealText = null) else it }
+    }
+
+    /**
+     * The awaitable half of [loadHistory], so reloads can be serialised.
+     *
+     * [announce] is what arms the typewriter, and only a reload caused by a live
+     * event may set it. Opening a session, coming back from the background or
+     * reconnecting must never replay a message the user has already read —
+     * history is history.
+     */
+    private suspend fun fetchHistory(sid: String, quiet: Boolean = false, announce: Boolean = false) {
         val token = _state.value.token ?: return
         if (!quiet) _state.update { it.copy(historyLoading = true) }
         try {
@@ -409,13 +425,14 @@ class BridgeRepository(context: Context) {
                     current
                 } else {
                     val last = parsed.rows.lastOrNull()
-                    val fresh = last != null && last.who == Role.ASSISTANT &&
+                    val fresh = announce && last != null && last.who == Role.ASSISTANT &&
                         current.history.lastOrNull()?.text != last.text
+                    if (fresh) Log.i(TAG, "typewriter armed (${last?.text?.length ?: 0} chars)")
                     current.copy(
                         history = parsed.rows,
                         running = parsed.running,
                         historyLoading = false,
-                        revealRow = if (fresh) parsed.rows.lastIndex else -1,
+                        revealText = if (fresh) last?.text else current.revealText,
                         modelProvider = selection?.first ?: current.modelProvider,
                         modelId = selection?.second ?: current.modelId,
                         modelLabel = if (current.modelLabel.isBlank() && selection != null) {
@@ -739,7 +756,8 @@ class BridgeRepository(context: Context) {
         }
         reloadRunning = true
         try {
-            fetchHistory(sid, quiet = true)
+            // 事件驱动：这是"刚刚真的来了一条新回复"，允许放打字机
+            fetchHistory(sid, quiet = true, announce = true)
         } finally {
             reloadRunning = false
             if (reloadPending) {

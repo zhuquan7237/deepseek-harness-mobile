@@ -136,6 +136,15 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
     var showRename by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<Wire.Artifact?>(null) }
 
+    // 打字机是一次性的：动画约 0.7 秒，标记最多活 1.6 秒。列表项被回收重建、
+    // 键盘顶起/收起、切换主题都不该让一条旧消息重新"流式输出"一遍。
+    LaunchedEffect(state.revealText) {
+        if (state.revealText != null) {
+            delay(1600)
+            repo.revealConsumed()
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier
@@ -170,6 +179,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             onRegenerate = { repo.regenerate() },
             onPreview = { preview = it },
             onQuickSend = { line -> scope.launch { repo.send(line) } },
+            onRevealDone = { repo.revealConsumed() },
             onSaveCode = { lang, code ->
                 val where = saveTextToDownloads(context, codeFileName(lang), code)
                 if (where != null) repo.toast("已保存到 $where") else repo.toast("保存失败，已复制到剪贴板")
@@ -301,6 +311,7 @@ private fun MessageList(
     onPreview: (Wire.Artifact) -> Unit,
     onQuickSend: (String) -> Unit,
     onSaveCode: (String, String) -> Unit,
+    onRevealDone: () -> Unit,
     modifier: Modifier,
 ) {
     val palette = LocalDsh.current
@@ -319,7 +330,8 @@ private fun MessageList(
                     row = row,
                     onSaveCode = onSaveCode,
                     showActions = showActions,
-                    reveal = index == state.revealRow,
+                    reveal = state.revealText != null && row.text == state.revealText,
+                    onRevealDone = onRevealDone,
                     onCopy = onCopy,
                     onRegenerate = onRegenerate,
                     onPreview = onPreview,
@@ -423,6 +435,7 @@ private fun MessageRow(
     onSaveCode: (String, String) -> Unit,
     showActions: Boolean = false,
     reveal: Boolean = false,
+    onRevealDone: () -> Unit = {},
     onCopy: (String) -> Unit = {},
     onRegenerate: () -> Unit = {},
     onPreview: (Wire.Artifact) -> Unit = {},
@@ -438,6 +451,7 @@ private fun MessageRow(
             shown = minOf(row.text.length, shown + step)
             delay(16)
         }
+        onRevealDone()
     }
     val done = shown >= row.text.length
     val body = if (done) row.text else row.text.substring(0, shown.coerceIn(0, row.text.length))

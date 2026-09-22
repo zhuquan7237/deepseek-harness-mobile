@@ -134,7 +134,8 @@ data class AppState(
     val running: Boolean = false,
     val thinking: Boolean = false,
     val thinkingSince: Long = 0L,
-    val revealRow: Int = -1,
+    /** 刚到达、还没放完打字机的那条助手消息（用后即焚，见 revealConsumed）。 */
+    val revealText: String? = null,
     val sending: Boolean = false,
     val historyLoading: Boolean = false,
     // models
