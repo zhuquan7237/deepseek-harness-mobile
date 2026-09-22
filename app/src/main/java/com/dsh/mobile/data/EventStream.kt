@@ -1,5 +1,6 @@
 package com.dsh.mobile.data
 
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -74,6 +75,7 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (generationAtOpen != generation) return
                 retry = 0
+                Log.i(TAG, "ws open")
                 onConn?.invoke(Conn.ONLINE)
                 webSocket.send(JSONObject().put("type", "hello").put("since", lastSeq()).toString())
             }
@@ -84,6 +86,7 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
                 } catch (_: Exception) {
                     null
                 } ?: return
+                Log.i(TAG, "frame kind=${frame.optString("kind")} type=${frame.optString("type")} sid=${frame.optString("sessionId")} seq=${frame.optLong("seq")}")
                 onFrame?.invoke(frame)
             }
 
@@ -96,6 +99,7 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.w(TAG, "ws failure code=${response?.code} ${t.message}")
                 if (response?.code == 401 && generationAtOpen == generation && !stopped) {
                     stopInternal()
                     onUnauthorized?.invoke()
@@ -119,6 +123,8 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
     }
 
     companion object {
+        private const val TAG = "dsh-ws"
+
         /** `https://host` + token → `wss://host/mobile/events?token=…` */
         fun wsUrl(base: String, token: String): String {
             val root = base.trimEnd('/')

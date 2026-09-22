@@ -1,6 +1,7 @@
 package com.dsh.mobile.data
 
 import android.content.Context
+import android.util.Log
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -51,6 +52,9 @@ class BridgeRepository(context: Context) {
 
     private var toastCounter = 0
     private var lastSeqWrite = 0L
+
+    private val TAG = "dsh-repo"
+
     private var reloadJob: Job? = null
 
     /** Highest event seq seen; lives outside [AppState] so events never redraw the UI. */
@@ -543,6 +547,7 @@ class BridgeRepository(context: Context) {
 
     private fun handleFrame(frame: JSONObject) {
         val kind = frame.optString("kind")
+        Log.i(TAG, "handle kind=$kind type=${frame.optString("type")} view=${_state.value.view} sid=${_state.value.sessionId}")
         val seq = frame.optLong("seq", 0L)
         if (kind == "hello") {
             handleHello(frame)
@@ -642,6 +647,7 @@ class BridgeRepository(context: Context) {
 
     private fun scheduleHistoryReload() {
         val sid = _state.value.sessionId ?: return
+        Log.i(TAG, "schedule reload for $sid")
         reloadJob?.cancel()
         reloadJob = scope.launch {
             delay(250)
