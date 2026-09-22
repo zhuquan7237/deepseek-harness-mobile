@@ -1,6 +1,7 @@
 package com.dsh.mobile.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -56,6 +57,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -137,6 +140,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                         Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(bottom = 104.dp),
                     ) {
+                        item(key = "greeting") { GreetingCard(state) }
                         groups.forEach { group ->
                             item(key = "header:" + group.label) {
                                 SectionHeader(group.label, Modifier.padding(start = 20.dp))
@@ -210,6 +214,48 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                 renameTarget = null
             },
         )
+    }
+}
+
+/**
+ * 会话列表顶端的一张小卡片。原来列表直接从"今天"的分组标题开始，上面一片空；
+ * 这里放个打招呼 + 会话数，界面不至于那么单调。
+ */
+@Composable
+private fun GreetingCard(state: AppState) {
+    val palette = LocalDsh.current
+    val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+    val hello = when {
+        hour < 6 -> "夜深了"
+        hour < 12 -> "早上好呀"
+        hour < 18 -> "下午好呀"
+        else -> "晚上好呀"
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.whale_face_happy),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.size(44.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                hello,
+                style = MaterialTheme.typography.titleSmall,
+                color = palette.textPrimary,
+            )
+            Text(
+                if (state.sessions.isEmpty()) "还没有会话" else "${state.sessions.size} 个会话在等着你",
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.textSecondary,
+            )
+        }
     }
 }
 

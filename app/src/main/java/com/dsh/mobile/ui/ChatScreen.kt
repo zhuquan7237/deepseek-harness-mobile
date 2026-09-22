@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -90,6 +91,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.dsh.mobile.R
 import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.ChatRow
@@ -100,6 +102,13 @@ import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/** 空会话时的开场白：点一下就把这句话发给电脑端。 */
+private val OPENERS = listOf(
+    "你现在能做什么？",
+    "看看电脑端在跑什么",
+    "帮我总结一下今天的会话",
+)
 
 /** Material's push curve, reused for the popover's scale-in. */
 private val MenuEasing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
@@ -118,6 +127,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
     BackHandler { repo.closeSession() }
     var showActions by remember { mutableStateOf(false) }
     var showModels by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     var showRename by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<Wire.Artifact?>(null) }
 
@@ -154,8 +164,18 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             },
             onRegenerate = { repo.regenerate() },
             onPreview = { preview = it },
+            onQuickSend = { line -> scope.launch { repo.send(line) } },
             modifier = Modifier.weight(1f),
         )
+        // 趴在输入框上沿的鲸鱼娘：先画她、后画输入框，所以她的下半身被输入框盖住
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+            WhalePerch(
+                size = 54.dp,
+                modifier = Modifier
+                    .padding(end = 30.dp)
+                    .offset(y = 13.dp),
+            )
+        }
         Composer(
             state = state,
             repo = repo,
@@ -265,6 +285,7 @@ private fun MessageList(
     onCopy: (String) -> Unit,
     onRegenerate: () -> Unit,
     onPreview: (Wire.Artifact) -> Unit,
+    onQuickSend: (String) -> Unit,
     modifier: Modifier,
 ) {
     val palette = LocalDsh.current
@@ -299,12 +320,47 @@ private fun MessageList(
         }
         if (rows.isEmpty() && live.isEmpty() && !state.historyLoading) {
             item {
-                Box(Modifier.fillMaxWidth().padding(top = 72.dp), contentAlignment = Alignment.Center) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 28.dp, start = 16.dp, end = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    WhaleMascot(
+                        resId = R.drawable.whale_face_normal,
+                        size = 112.dp,
+                        contentDescription = "鲸鱼娘",
+                    )
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        "还没有消息。说点什么，电脑端就会开始干活。",
-                        style = MaterialTheme.typography.bodyMedium,
+                        "电脑端在待命",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.textPrimary,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "说点什么，它就会在电脑上开始干活。",
+                        style = MaterialTheme.typography.bodySmall,
                         color = palette.textSecondary,
                     )
+                    Spacer(Modifier.height(18.dp))
+                    OPENERS.forEach { line ->
+                        Surface(
+                            color = palette.surface,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .clickable { onQuickSend(line) },
+                        ) {
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = palette.textPrimary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
+                            )
+                        }
+                    }
                 }
             }
         }

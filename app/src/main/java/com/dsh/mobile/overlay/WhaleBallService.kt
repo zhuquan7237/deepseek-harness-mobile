@@ -33,11 +33,18 @@ import kotlin.math.min
  * 应用外的鲸鱼娘悬浮球。
  *
  * 省电与省内存的三条纪律：
- *  1. 只在一个进程里（没有 android:process），窗口只有一个 ImageView，菜单是点开才建；
- *  2. 动画全是 View 属性（translationY / rotation / scale）跑在合成线程上，不做逐帧
- *     重绘；拖动或展开菜单时立刻停下动画；
- *  3. 眨眼是 3.4 秒一次的 drawable 切换（两次 setImageResource），不常驻计时器；
+ *  1. 只在一个进程里（没有 android:process），窗口只有一个 ImageView，菜单和气泡都是
+ *     点开才建、用完就 remove；表情就是换一张已解码的 drawable（没有额外解码）；
+ *  2. 动画全是 View 属性（translationY / rotation / scale / alpha）跑在合成线程上，
+ *     不做逐帧重绘；拖动或展开菜单时立刻停下动画；
+ *  3. 眨眼是 3.4 秒一次的属性动画（不换图、不常驻计时器），发呆 40 秒才变一次困脸；
  *     服务被系统回收后 START_STICKY 拉起时会先读偏好——用户关了就绝不再出现。
+ *
+ * 交互（对着"点开就关不掉、一打开人就没了"改的）：
+ *  - 单击球 = 开/关菜单（菜单**放在球的斜上方留出间距**，绝不盖住她）；
+ *  - 再点一次球、点菜单外的任何地方、或选完菜单项，都会立刻收起菜单；
+ *  - 双击球 = 摸摸头：害羞脸 + 冒一句吐槽，1.5 秒后恢复；
+ *  - 长按拖动 = 换位置，松手贴边。
  */
 class WhaleBallService : Service() {
 
@@ -48,7 +55,30 @@ class WhaleBallService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var bob: ValueAnimator? = null
+    private var bubble: TextView? = null
     private var side = 0 // -1 左，1 右
+    private var pats = 0
+    private var lastTapAt = 0L
+    private val faceNormal by lazy { R.drawable.whale_face_normal }
+    private val faceHappy by lazy { R.drawable.whale_face_happy }
+    private val faceShy by lazy { R.drawable.whale_face_shy }
+    private val faceSleepy by lazy { R.drawable.whale_face_sleepy }
+
+    /** 恢复成普通脸（表情是临时的，都会自己回来）。 */
+    private val backToNormal = Runnable { setFace(faceNormal) }
+
+    /** 40 秒没人理就困了——只换一次图，不轮询。 */
+    private val getSleepy = Runnable { setFace(faceSleepy) }
+
+    private fun setFace(res: Int) {
+        if (::ball.isInitialized) ball.setImageResource(res)
+        handler.removeCallbacks(backToNormal)
+        handler.removeCallbacks(getSleepy)
+        if (res == faceNormal || res == faceSleepy) handler.postDelayed(getSleepy, 40_000)
+        if (res != faceNormal) handler.postDelayed(backToNormal, if (res == faceSleepy) 90_000 else 1500)
+    }
+
+    private val patLines = listOf("唔…被摸头了", "嘿嘿，再摸一下嘛", "痒痒的～", "今天也一起干活吧")
     private val ballSize by lazy { (72 * resources.displayMetrics.density).toInt() }
     private val menuWidth by lazy { (168 * resources.displayMetrics.density).toInt() }
 
@@ -101,6 +131,8 @@ class WhaleBallService : Service() {
         bob?.cancel()
         menu?.let { runCatching { window.removeView(it) } }
         menu = null
+        bubble?.let { runCatching { window.removeView(it) } }
+        bubble = null
         if (::ball.isInitialized) runCatching { window.removeView(ball) }
         super.onDestroy()
     }
@@ -111,7 +143,7 @@ class WhaleBallService : Service() {
 
     private fun addBall() {
         ball = ImageView(this).apply {
-            setImageResource(R.drawable.whale_ball)
+            setImageResource(faceNormal)
             scaleType = ImageView.ScaleType.FIT_CENTER
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
             contentDescription = "鲸鱼娘"
@@ -187,7 +219,16 @@ class WhaleBallService : Service() {
                     if (moved) {
                         snapToEdge()
                     } else {
-                        toggleMenu()
+                        val now = e.eventTime
+                        // 双击 = 摸摸头（顺带把菜单收掉）；单击 = 开/关菜单，立刻响应不等 300ms
+                        if (now - lastTapAt < 300) {   // 平台默认的双击间隔
+                            lastTapAt = 0L
+                            hideMenu()
+                            pat()
+                        } else {
+                            lastTapAt = now
+                            toggleMenu()
+                        }
                     }
                     bob?.resume()
                     return true
@@ -218,6 +259,7 @@ class WhaleBallService : Service() {
     private fun toggleMenu() {
         if (menu != null) { hideMenu(); return }
         bob?.pause()
+        setFace(faceHappy)
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
@@ -227,46 +269,130 @@ class WhaleBallService : Service() {
             }
             elevation = dp(8).toFloat()
             setPadding(0, dp(6), 0, dp(6))
+            alpha = 0f
+            scaleX = 0.86f
+            scaleY = 0.86f
+            // 不点菜单里的东西、点到别处，就当场收起来（不用干等计时器）
+            setOnTouchListener { _, e ->
+                if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) { hideMenu(); true } else false
+            }
         }
         val rows = listOf(
             Triple("开启对话", "new") { openApp("new") },
-            Triple("查看任务", "tasks") { openApp("tasks") },
+            Triple("看看状态", "tasks") { openApp("tasks") },
             Triple("关闭悬浮球", "off") { turnOff() },
         )
         rows.forEach { (label, _, action) ->
             panel.addView(menuRow(label, action))
         }
+        val screen = resources.displayMetrics
         val params = WindowManager.LayoutParams(
             menuWidth, WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                // 没有焦点也能收到"点在窗口外"，这是菜单能被点掉的关键
+                or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (if (side > 0) ballParams.x + ballSize - menuWidth else ballParams.x).coerceIn(dp(8), resources.displayMetrics.widthPixels - menuWidth - dp(8))
-            y = (ballParams.y - dp(56)).coerceAtLeast(statusBar() + dp(8))
+            x = (if (side > 0) ballParams.x + ballSize - menuWidth else ballParams.x)
+                .coerceIn(dp(8), screen.widthPixels - menuWidth - dp(8))
+            // 先给个大概位置，量到真实高度后再挪到球的斜上方（留 10dp 间距，不遮住她）
+            y = (ballParams.y - dp(150)).coerceAtLeast(statusBar() + dp(8))
         }
         window.addView(panel, params)
         menu = panel
-        handler.postDelayed(menuHide, 4200)
+        panel.post {
+            val h = panel.height
+            if (h > 0) {
+                params.y = (ballParams.y - h - dp(10)).coerceAtLeast(statusBar() + dp(8))
+                runCatching { window.updateViewLayout(panel, params) }
+            }
+        }
+        panel.animate().alpha(1f).scaleX(1f).scaleY(1f)
+            .setDuration(190)
+            .setInterpolator(android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f))
+            .start()
+        handler.postDelayed(menuHide, 6000)
     }
 
     private fun menuRow(label: String, action: () -> Unit): TextView = TextView(this).apply {
         text = label
         setTextColor(Color.parseColor("#EDEFF2"))
         textSize = 15f
-        setPadding(dp(16), dp(11), dp(16), dp(11))
+        setPadding(dp(16), dp(12), dp(16), dp(12))
         isClickable = true
         setOnClickListener { hideMenu(); action() }
     }
 
     private val menuHide = Runnable { hideMenu() }
 
+    /** 收起菜单：先做动效再移除（观感不生硬），重复调用安全。 */
     private fun hideMenu() {
         handler.removeCallbacks(menuHide)
-        menu?.let { runCatching { window.removeView(it) } }
+        val panel = menu ?: return
         menu = null
+        panel.animate().alpha(0f).scaleX(0.94f).scaleY(0.94f)
+            .setDuration(130)
+            .withEndAction { runCatching { window.removeView(panel) } }
+            .start()
         bob?.resume()
+        if (handler.hasCallbacks(backToNormal).not()) setFace(faceNormal)
+    }
+
+    // ------------------------------------------------------------------ 表情
+
+    private fun pat() {
+        pats++
+        setFace(if (pats % 2 == 1) faceShy else faceHappy)
+        showBubble(patLines[(pats - 1) % patLines.size])
+        handler.removeCallbacks(getSleepy)
+        bob?.cancel()
+        // 抖两下：先向上弹一点再落回，纯属性动画
+        ball.animate().translationY(-dp(9).toFloat()).setDuration(90).withEndAction {
+            ball.animate().translationY(0f).setDuration(160).start()
+            startBob()
+        }.start()
+    }
+
+    /** 头顶冒一句话，1.5 秒后自己消失。只有摸头时才会创建这个 View。 */
+    private fun showBubble(text: String) {
+        bubble?.let { runCatching { window.removeView(it) } }
+        val tv = TextView(this).apply {
+            this.text = text
+            setTextColor(Color.parseColor("#EDEFF2"))
+            textSize = 13f
+            background = GradientDrawable().apply {
+                cornerRadius = dp(13).toFloat()
+                setColor(Color.parseColor("#E62B3036"))
+            }
+            setPadding(dp(11), dp(7), dp(11), dp(7))
+            alpha = 0f
+            scaleX = 0.9f
+            scaleY = 0.9f
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = (ballParams.x + ballSize / 2 - dp(40)).coerceAtLeast(dp(6))
+            y = (ballParams.y - dp(34)).coerceAtLeast(statusBar() + dp(2))
+        }
+        window.addView(tv, params)
+        bubble = tv
+        tv.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(150).start()
+        handler.postDelayed({
+            tv.animate().alpha(0f).setDuration(200).withEndAction {
+                runCatching { window.removeView(tv) }
+                if (bubble === tv) bubble = null
+            }.start()
+        }, 1500)
     }
 
     // ------------------------------------------------------------------ 动作
