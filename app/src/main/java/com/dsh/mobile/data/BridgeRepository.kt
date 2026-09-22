@@ -370,6 +370,9 @@ class BridgeRepository(context: Context) {
 
     // ------------------------------------------------------------------- chat
 
+    /** 本次启动是否已经开过新对话（AppRoot 的一次性入场逻辑用）。 */
+    var launchedNewChat = false
+
     fun openSession(sessionId: String) {
         val listed = _state.value.sessions.firstOrNull { it.sessionId == sessionId }
         _state.update {

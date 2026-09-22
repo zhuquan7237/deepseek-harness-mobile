@@ -363,6 +363,7 @@ fun AttachmentStrip(
     previews: List<Bitmap>,
     onRemove: (Int) -> Unit,
     onAdd: () -> Unit,
+    onOpen: (Int) -> Unit = {},
 ) {
     val palette = LocalDsh.current
     Row(
@@ -370,7 +371,10 @@ fun AttachmentStrip(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         images.forEachIndexed { index, _ ->
-            Box(Modifier.size(58.dp)) {
+            Box(
+                Modifier.size(58.dp).clip(RoundedCornerShape(10.dp))
+                    .clickable { onOpen(index) },
+            ) {
                 val bmp = previews.getOrNull(index)
                 if (bmp != null) {
                     Image(

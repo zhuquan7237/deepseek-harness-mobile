@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -75,6 +76,11 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -92,6 +98,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -125,6 +133,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.horizontalScroll
 import com.dsh.mobile.data.effortLabel
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Close
 import com.dsh.mobile.data.filterModels
@@ -149,6 +158,24 @@ private val MenuEasing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTextApi::class)
 @Composable
 fun ChatScreen(state: AppState, repo: BridgeRepository) {
+    // 历史会话不再是"主页"：进 App 直接是新对话，会话列表收进左侧抽屉（用户要求）
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val drawerScope = rememberCoroutineScope()
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(modifier = Modifier.width(304.dp)) {
+                SessionDrawer(state, repo) { drawerScope.launch { drawerState.close() } }
+            }
+        },
+    ) {
+        ChatBody(state, repo, onOpenDrawer = { drawerScope.launch { drawerState.open() } })
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTextApi::class)
+@Composable
+private fun ChatBody(state: AppState, repo: BridgeRepository, onOpenDrawer: () -> Unit) {
     val palette = LocalDsh.current
     val clipboard = LocalClipboardManager.current
     BackHandler { repo.closeSession() }
@@ -161,6 +188,9 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
     // ---- 附件：待发图片、缩略图、编辑中的图、来源弹层 ----
     var attachments by remember { mutableStateOf<List<AttachImage>>(emptyList()) }
     var attachPreviews by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
+    // 点缩略图 → 大图预览；预览里可以"重新编辑"（用户要求）
+    var attachPeekAt by remember { mutableStateOf<Int?>(null) }
+    var reeditAt by remember { mutableStateOf<Int?>(null) }
     var pendingEdit by remember { mutableStateOf<Bitmap?>(null) }
     var showAttach by remember { mutableStateOf(false) }
     var captureUri by remember { mutableStateOf<Uri?>(null) }
@@ -239,7 +269,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            CircleButton(Icons.AutoMirrored.Outlined.ArrowBack, "返回") { repo.closeSession() }
+            CircleButton(Icons.Outlined.Menu, "会话列表") { onOpenDrawer() }
             // 模型选择照 ChatGPT 放在顶栏（不占输入条地方）：点第二行直接开模型菜单，
             // 连接状态由前面的小圆点表示，标题区仍然点开更多菜单
             ContextPill(
@@ -305,6 +335,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
                     attachments = attachments.filterIndexed { i, _ -> i != index }
                     attachPreviews = attachPreviews.filterIndexed { i, _ -> i != index }
                 },
+                onOpenAttachment = { attachPeekAt = it },
                 onAddAttachment = {
             // 先收键盘再弹面板，否则键盘把拍照/相册/文件挡掉一半
             keyboard?.hide()
@@ -437,6 +468,44 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             fileLauncher.launch(arrayOf("*/*"))
         },
     )
+
+    // 点缩略图 → 大图预览（底下三个键：重新编辑 / 移除 / 关闭）
+    attachPeekAt?.let { index ->
+        if (index in attachPreviews.indices) {
+            AttachmentPeek(
+                bitmap = attachPreviews[index],
+                onClose = { attachPeekAt = null },
+                onEdit = { attachPeekAt = null; reeditAt = index },
+                onRemove = {
+                    attachments = attachments.filterIndexed { i, _ -> i != index }
+                    attachPreviews = attachPreviews.filterIndexed { i, _ -> i != index }
+                    attachPeekAt = null
+                },
+            )
+        }
+    }
+
+    // 重新编辑已有的附件：编完替换掉原来那张
+    reeditAt?.let { index ->
+        if (index in attachPreviews.indices) {
+            AnnotateEditor(
+                original = attachPreviews[index],
+                onCancel = { reeditAt = null },
+                onDone = { edited ->
+                    reeditAt = null
+                    attachScope.launch {
+                        val image = encodeForUpload(edited, "photo-${System.currentTimeMillis()}.jpg")
+                        val list = attachments.toMutableList()
+                        if (index < list.size) list[index] = image
+                        attachments = list
+                        val shots = attachPreviews.toMutableList()
+                        if (index < shots.size) shots[index] = edited
+                        attachPreviews = shots
+                    }
+                },
+            )
+        }
+    }
 
     pendingEdit?.let { editing ->
         AnnotateEditor(
@@ -1043,6 +1112,7 @@ private fun Composer(
     attachments: List<AttachImage>,
     previews: List<Bitmap>,
     onRemoveAttachment: (Int) -> Unit,
+    onOpenAttachment: (Int) -> Unit,
     onAddAttachment: () -> Unit,
     onSendWith: (String, List<AttachImage>) -> Unit,
 ) {
@@ -1079,6 +1149,7 @@ private fun Composer(
                     previews = previews,
                     onRemove = onRemoveAttachment,
                     onAdd = onAddAttachment,
+                    onOpen = onOpenAttachment,
                 )
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1565,6 +1636,132 @@ private fun ModelMenu(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/** 附件大图预览：能重新编辑、能移除（用户："上传图片之后，在输入框上方要能点开预览图片"）。 */
+@Composable
+private fun AttachmentPeek(
+    bitmap: Bitmap,
+    onClose: () -> Unit,
+    onEdit: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val palette = LocalDsh.current
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.88f))
+            .clickable(onClick = onClose),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(20.dp),
+        ) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = "附件预览",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .clip(RoundedCornerShape(14.dp)),
+            )
+            Row(
+                Modifier.padding(top = 18.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                PeekAction("重新编辑", palette) { onEdit() }
+                PeekAction("移除", palette) { onRemove() }
+                PeekAction("关闭", palette) { onClose() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PeekAction(label: String, palette: com.dsh.mobile.ui.theme.DshPalette, onClick: () -> Unit) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelLarge,
+        color = Color.White,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color.White.copy(alpha = 0.16f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+    )
+}
+
+/** 左侧抽屉：进 App 是新对话，历史会话从这里翻（用户要求）。 */
+@Composable
+private fun SessionDrawer(state: AppState, repo: BridgeRepository, onPicked: () -> Unit) {
+    val palette = LocalDsh.current
+    Column(Modifier.fillMaxSize().background(palette.bg)) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 20.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("会话", style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
+            Spacer(Modifier.weight(1f))
+            Box(
+                Modifier.size(36.dp).clip(CircleShape).clickable { onPicked() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.Settings, "设置", tint = palette.textSecondary, modifier = Modifier.size(19.dp))
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(palette.surface)
+                    .clickable { repo.createSession(); onPicked() }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(Icons.Outlined.Add, "新对话", tint = palette.accent, modifier = Modifier.size(18.dp))
+                Text("新对话", style = MaterialTheme.typography.bodyMedium, color = palette.accent)
+            }
+        }
+        Text(
+            "最近",
+            style = MaterialTheme.typography.labelMedium,
+            color = palette.textTertiary,
+            modifier = Modifier.padding(start = 22.dp, top = 18.dp, bottom = 6.dp),
+        )
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(state.sessions) { session ->
+                val current = session.sessionId == state.sessionId
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (current) palette.surfaceHi else Color.Transparent)
+                        .clickable { repo.openSession(session.sessionId); onPicked() }
+                        .padding(horizontal = 12.dp, vertical = 11.dp),
+                ) {
+                    Text(
+                        session.title.ifBlank { "未命名会话" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.textPrimary,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        Wire.timeText(session.updatedAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textTertiary,
+                    )
                 }
             }
         }

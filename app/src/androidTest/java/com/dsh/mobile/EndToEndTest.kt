@@ -93,6 +93,9 @@ class EndToEndTest {
 
     private fun isOnSessionsScreen(): Boolean = anyText("个会话", substring = true)
 
+    /** 现在进 App 直接落在新对话上，所以"到家了"的判断要包括聊天页。 */
+    private fun isOnChatScreen(): Boolean = anyText("给电脑端发消息…")
+
     private fun revokeByName(name: String) {
         val state = http("GET", "/mobile-local/state")
         val devices = state.optJSONArray("devices") ?: return
@@ -109,15 +112,17 @@ class EndToEndTest {
         val code = http("POST", "/mobile-local/rotate").optString("code")
         check(code.isNotBlank()) { "desktop did not hand out a pairing code" }
 
-        composeRule.waitUntil(40_000) { isOnPairingScreen() || isOnSessionsScreen() || anyContent("返回") }
-        // A previous test may leave the app on a chat or the settings screen.
-        if (anyContent("返回")) {
-            composeRule.onAllNodesWithContentDescription("返回")[0].performClick()
-            composeRule.waitUntil(15_000) { isOnSessionsScreen() || isOnPairingScreen() }
+        composeRule.waitUntil(40_000) {
+            isOnPairingScreen() || isOnChatScreen() || isOnSessionsScreen()
         }
         // Let the app settle: a stale (revoked) token flips to pairing by itself.
         composeRule.waitUntil(30_000) { isOnPairingScreen() || anyText("已连接", substring = true) }
         if (!isOnPairingScreen()) {
+            // 设置入口：聊天页在左侧抽屉里（顶栏现在是"会话列表"），会话页在顶栏
+            if (!anyContent("设置")) {
+                composeRule.onAllNodesWithContentDescription("会话列表")[0].performClick()
+                composeRule.waitUntil(15_000) { anyContent("设置") }
+            }
             composeRule.onAllNodesWithContentDescription("设置")[0].performClick()
             composeRule.waitUntil(15_000) { anyText("解除本机绑定") }
             composeRule.onAllNodesWithText("解除本机绑定")[0].performClick()
@@ -131,7 +136,7 @@ class EndToEndTest {
         fields[1].performTextReplacement(code)
         fields[2].performTextReplacement("emulator-e2e")
         composeRule.onAllNodesWithText("用配对码配对")[0].performClick()
-        composeRule.waitUntil(60_000) { isOnSessionsScreen() }
+        composeRule.waitUntil(60_000) { isOnChatScreen() || isOnSessionsScreen() }
     }
 
     // ---------------------------------------------------------------- tests
@@ -141,8 +146,10 @@ class EndToEndTest {
         pairThroughUi()
         composeRule.waitUntil(30_000) { anyText("已连接", substring = true) }
 
-        // New session → chat.
-        composeRule.onAllNodesWithContentDescription("新建会话")[0].performClick()
+        // 进 App 直接就是新对话；万一是从会话页进来的旧路径，再点"新建会话"
+        if (!isOnChatScreen()) {
+            composeRule.onAllNodesWithContentDescription("新建会话")[0].performClick()
+        }
         composeRule.waitUntil(60_000) { anyText("给电脑端发消息…") }
 
         // Send a prompt: the bubble shows immediately, then the desktop's

@@ -96,7 +96,8 @@ private fun rotateBitmap(src: Bitmap, degrees: Int): Bitmap {
 @Composable
 fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> Unit) {
     val palette = LocalDsh.current
-    var tool by remember { mutableStateOf(AnnoTool.PEN) }
+    // 大多数人打开编辑器第一件事是裁剪，所以默认就停在裁剪上（用户要求）
+    var tool by remember { mutableStateOf(AnnoTool.CROP) }
     var color by remember { mutableStateOf(ANNO_COLORS.first()) }
     var strokeWidth by remember { mutableStateOf(ANNO_WIDTHS.first()) }
     var rotation by remember { mutableStateOf(0) }
@@ -113,10 +114,8 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
     // 一进裁剪模式就给出一个框（用户："一开始就有那个框框，选取想要的部分，其他部分就不要了"）
     LaunchedEffect(tool, canvasSize) {
         if (tool == AnnoTool.CROP && crop == null && canvasSize.width > 0f && canvasSize.height > 0f) {
-            crop = Rect(
-                Offset(canvasSize.width * 0.06f, canvasSize.height * 0.06f),
-                Offset(canvasSize.width * 0.94f, canvasSize.height * 0.94f),
-            )
+            // 初始框 = 整张图（用户："可以给它框满整个图片"），只留 2px 让描边可见
+            crop = Rect(2f, 2f, canvasSize.width - 2f, canvasSize.height - 2f)
         }
     }
 
@@ -260,9 +259,10 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
                         drawRect(dim, Offset(rect.right, rect.top), Size(size.width - rect.right, rect.height))
                         // 边框：纯白不透明 + 3.5f 粗
                         drawRect(Color.White, rect.topLeft, rect.size, style = Stroke(3.5f))
-                        // 四角粗括号，一眼能看出"这是可以拖的角"
-                        val arm = minOf(rect.width, rect.height) * 0.12f
-                        val t = 6f
+                        // 四角的把手：粗括号 + 实心方块，手指拉开裁剪范围时看得清
+                        val arm = minOf(rect.width, rect.height) * 0.16f
+                        val t = 9f
+                        val knob = 7f
                         for ((corner, dx, dy) in listOf(
                             Triple(rect.topLeft, 1f, 1f),
                             Triple(Offset(rect.right, rect.top), -1f, 1f),
@@ -271,6 +271,12 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
                         )) {
                             drawLine(Color.White, corner, Offset(corner.x + arm * dx, corner.y), t)
                             drawLine(Color.White, corner, Offset(corner.x, corner.y + arm * dy), t)
+                            // 角上的实心方块（用户："四个角那个部分一定要单独加粗"）
+                            drawRect(
+                                Color.White,
+                                Offset(corner.x - knob, corner.y - knob),
+                                Size(knob * 2, knob * 2),
+                            )
                         }
                         // 三分线保持细、半透明
                         for (i in 1..2) {
