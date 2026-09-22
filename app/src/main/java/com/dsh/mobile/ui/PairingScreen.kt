@@ -231,7 +231,7 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
         }
 
         Text(
-            "在电脑端打开 设置 → 通用 →「手机端（配对与设备）」卡片，配对码和二维码都在那里（5 分钟有效）。" +
+            "在电脑端打开引擎界面左下角的「设置」→「手机配对」，配对码和二维码都在那里（5 分钟有效）。" +
                 "配对后这台手机默认获得「查看会话 + 发消息」权限；模型配置等更敏感的操作需要电脑端重新授权。",
             style = MaterialTheme.typography.labelSmall,
             color = palette.textSecondary,
