@@ -312,11 +312,16 @@ private fun MessageList(
     val itemCount = rows.size + (if (live.isEmpty()) 0 else live.size)
     val lastLiveLength = live.lastOrNull()?.text?.length ?: 0
     LaunchedEffect(itemCount, lastLiveLength) {
+        // `layoutInfo` can still describe the *previous* (empty) layout on the first
+        // frame after the screen opens: totalItemsCount would be 0 and
+        // scrollToItem(-1) throws. Never scroll without a measured list.
         if (itemCount <= 0) return@LaunchedEffect
         val info = listState.layoutInfo
+        val total = info.totalItemsCount
+        if (total <= 0) return@LaunchedEffect
         val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-        if (lastVisible == -1 || lastVisible >= info.totalItemsCount - 3) {
-            listState.scrollToItem(info.totalItemsCount - 1)
+        if (lastVisible == -1 || lastVisible >= total - 3) {
+            listState.scrollToItem(total - 1)
         }
     }
 }
