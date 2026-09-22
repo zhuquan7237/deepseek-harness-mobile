@@ -427,7 +427,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
     }
 
     pendingEdit?.let { editing ->
-        PhotoEditor(
+        AnnotateEditor(
             original = editing,
             onCancel = { pendingEdit = null },
             onDone = { edited ->
@@ -1038,6 +1038,11 @@ private fun Composer(
     val palette = LocalDsh.current
     var draft by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    // 各家手机字体（小米 MiSans / Roboto / 思源）的 ascent/descent 差很多，
+    // 同一份"行框居中"在模拟器上对、到手机上就偏。这里量**实际渲染出来的字形外框**，
+    // 再把它挪到正中间——不管用哪个字体都自己校准。
+    var inkShift by remember { mutableStateOf(0f) }
+    val density = LocalDensity.current
     Row(
         Modifier
             .fillMaxWidth()
@@ -1060,10 +1065,19 @@ private fun Composer(
                     onAdd = onAddAttachment,
                 )
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-            // 胶囊 = 36dp 高，输入框首行也是 36dp（6+24+6）——两边中线对齐，
-            // 不会一个上一个下
-            ModelChip(state = state, onClick = onOpenModels)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            // 布局照你发的那套：左边「+」，中间输入区，右边模型名（纯文本，不抢地方），最后发送键。
+            // 整行垂直居中，长模型名不会再把它挤成两行。
+            if (attachments.isEmpty()) {
+                CircleAction(
+                    background = Color.Transparent,
+                    icon = Icons.Outlined.Add,
+                    tint = palette.textPrimary,
+                    contentDescription = "添加图片或文件",
+                    enabled = !state.sending,
+                ) { onAddAttachment() }
+            }
+            Spacer(Modifier.width(2.dp))
             // 输入文字居中：Compose 的 bodyLarge 行高 24sp 比字本身高，
             // 行框居中后字看着仍然偏上（CJK 字形落在基线上方）。用 LineHeightStyle
             // 把上下多余留白裁掉（Trim.Both），行框就等于字形本身，再居中才是真居中；
@@ -1086,6 +1100,14 @@ private fun Composer(
                 textStyle = inputStyle,
                 cursorBrush = SolidColor(palette.accent),
                 maxLines = 6,
+                // getBoundingBox 收的是**字符偏移**，空文本会越界崩溃——必须判空
+                onTextLayout = { result ->
+                    if (result.layoutInput.text.isNotEmpty() && result.lineCount > 0) {
+                        val box = result.getBoundingBox(0)
+                        val target = (result.size.height - box.top - box.bottom) / 2f
+                        if (kotlin.math.abs(target - inkShift) > 0.5f) inkShift = target
+                    }
+                },
                 decorationBox = { innerTextField ->
                     // 高度用"至少 24dp"（=36dp 减去上下 6dp 内边距）而不是 fillMaxSize：
                     // fillMaxSize 会吃满外层允许的最大高度（140dp），整个输入卡片被撑爆，
@@ -1098,23 +1120,21 @@ private fun Composer(
                             Text(
                                 if (state.connected) "给电脑端发消息…" else "重连中…",
                                 style = inputStyle.copy(color = palette.textTertiary),
+                                // 占位文字也按同一套实测校正，两种状态视觉位置一致
+                                onTextLayout = { result ->
+                                    if (result.layoutInput.text.isNotEmpty() && result.lineCount > 0) {
+                                        val box = result.getBoundingBox(0)
+                                        val target = (result.size.height - box.top - box.bottom) / 2f
+                                        if (kotlin.math.abs(target - inkShift) > 0.5f) inkShift = target
+                                    }
+                                },
                             )
                         }
-                        innerTextField()
+                        Box(Modifier.offset(y = with(density) { inkShift.toDp() })) { innerTextField() }
                     }
                 },
             )
             Spacer(Modifier.width(4.dp))
-            // 加号：拍照 / 相册 / 文件（已经有附件时，缩略图条里自带一个加号）
-            if (attachments.isEmpty()) {
-                CircleAction(
-                    background = palette.surfaceHi,
-                    icon = Icons.Outlined.Add,
-                    tint = palette.textPrimary,
-                    contentDescription = "添加图片或文件",
-                    enabled = !state.sending,
-                ) { onAddAttachment() }
-            }
             if (state.running) {
                 CircleAction(
                     background = palette.surfaceHi,
@@ -1124,6 +1144,8 @@ private fun Composer(
                     enabled = true,
                 ) { repo.cancelTurn() }
             } else {
+                ModelLabel(state = state, onClick = onOpenModels)
+                Spacer(Modifier.width(6.dp))
                 val ready = draft.isNotBlank() || attachments.isNotEmpty()
                 val sendBg by animateColorAsState(
                     targetValue = if (ready) palette.accent else palette.surfaceHi,
@@ -1163,37 +1185,30 @@ private fun Composer(
 
 /** The model chip inside the input card; opens the menu above the composer. */
 @Composable
-private fun ModelChip(state: AppState, onClick: () -> Unit) {
+private fun ModelLabel(state: AppState, onClick: () -> Unit) {
     val palette = LocalDsh.current
-    val label = state.modelLabel.ifBlank { "模型" }
-    Row(
-        Modifier
-            .height(36.dp)
-            // 有底色的小胶囊：不然"模型"和右边的提示文字会连成一句话。
-            // 再补一圈极细描边 + 稍宽的内边距，让它更像"可点的控件"而不是一段文字。
-            .clip(RoundedCornerShape(999.dp))
-            .background(palette.surfaceHi)
-            .border(1.dp, palette.textTertiary.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
+    Text(
+        shortModelLabel(state.modelLabel.ifBlank { "模型" }),
+        style = MaterialTheme.typography.labelMedium,
+        color = palette.textSecondary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .widthIn(max = 112.dp)
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(start = 12.dp, end = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(1.dp),
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
-            color = palette.textPrimary.copy(alpha = 0.92f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = 84.dp),
-        )
-        Icon(
-            Icons.Outlined.KeyboardArrowDown,
-            contentDescription = "选择模型",
-            tint = palette.textTertiary,
-            modifier = Modifier.size(16.dp),
-        )
-    }
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+    )
+}
+
+/**
+ * 模型名常是 `provider/vendor/model-长后缀`，整串塞进输入条会把布局挤爆。
+ * 模型名比供应商名重要，所以保留尾部、前面用省略号收掉。
+ */
+internal fun shortModelLabel(raw: String): String {
+    val s = raw.trim()
+    if (s.length <= 18) return s
+    return "…" + s.takeLast(17)
 }
 
 @Composable
