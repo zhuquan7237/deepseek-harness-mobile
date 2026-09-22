@@ -16,6 +16,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // 窗口背景必须等于应用自身的底色：键盘弹起会触发一次 relayout，
+        // 窗口背景（主题里那个）如果和工作区底色不一致，那一帧就会"闪一下"刺眼。
+        val dark = (resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        window.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(if (dark) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()),
+        )
         val repo = (application as DshApp).repo
         handleWhaleIntent(intent, repo)
         setContent {

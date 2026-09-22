@@ -122,14 +122,13 @@ import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.horizontalScroll
 import com.dsh.mobile.data.effortLabel
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Close
 import com.dsh.mobile.data.filterModels
+import androidx.compose.animation.animateContentSize
 
 /** 空会话时的开场白：点一下就把这句话发给电脑端。 */
 private val OPENERS = listOf(
@@ -245,7 +244,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             // 连接状态由前面的小圆点表示，标题区仍然点开更多菜单
             ContextPill(
                 title = state.sessionTitle.ifEmpty { "会话" },
-                meta = shortModelLabel(state.modelLabel.ifBlank { "模型" }),
+                meta = state.modelLabel.ifBlank { "模型" },
                 metaDot = true,
                 metaConn = state.conn,
                 metaChevron = true,
@@ -570,9 +569,14 @@ private fun MessageList(
         if (imeOpen) {
             delay(40)
             val total = listState.layoutInfo.totalItemsCount
-            // 不用 animateScrollToItem：键盘本身在动画，再叠一个滚动动画既卡又晃，
-            // 直接定位到底部跟手得多
-            if (total > 0) runCatching { listState.scrollToItem(total - 1) }
+            // 一开始用硬跳，是因为 onFocusChanged 那种 key 会让这个 effect 每帧重建、
+            // 滚动动画被反复取消重建（"掉帧"）。现在 key 是布尔量、只翻转一次，
+            // 所以改成平滑跟随——键盘上升带动画、列表同步滑过去，衔接才顺，不会"闪"。
+            if (total > 0) {
+                runCatching {
+                    listState.animateScrollToItem(total - 1, -listState.layoutInfo.viewportEndOffset / 6)
+                }
+            }
         }
     }
     LaunchedEffect(itemCount, lastLiveLength) {
@@ -1071,6 +1075,8 @@ private fun Composer(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(24.dp))
                 .background(palette.surface)
+                // 高度变化（模型入口出现/消失）自己带过渡，避免和键盘动画撞在一起时"闪"
+                .animateContentSize(tween(180))
                 .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         ) {
             if (attachments.isNotEmpty()) {
@@ -1197,9 +1203,11 @@ private fun Composer(
 
             // 右下角的模型切换：有内容/聚焦时滑入，带细框方便看清是"可点的控件"
             AnimatedVisibility(
+                // 只淡入淡出、不再做高度展开：键盘弹起本来就在改布局，
+                // 两个动画叠一起会有"衔接不上"的闪，交给外层 animateContentSize 统一收放
                 visible = draft.isNotBlank() || fieldFocused || attachments.isNotEmpty(),
-                enter = fadeIn(tween(140)) + expandVertically(tween(180)),
-                exit = fadeOut(tween(100)) + shrinkVertically(tween(150)),
+                enter = fadeIn(tween(160)),
+                exit = fadeOut(tween(120)),
             ) {
                 Row(
                     // 位置：发送键下切线与输入框底边之间的中线上（上留 6dp = 胶囊底内边距的一半，
