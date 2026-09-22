@@ -94,8 +94,13 @@ class BridgeRepository(context: Context) {
 
     private suspend fun boot() {
         val stored = store.load()
+        // 先把上次缓存的模型文档放回内存：设置页/模型页一打开就有内容，不再"未读取"
+        val cachedDoc = stored.modelsJson.takeIf { it.isNotBlank() }?.let { raw ->
+            runCatching { Wire.parseModelDoc(org.json.JSONObject(raw)) }.getOrNull()
+        }
         _state.update {
             it.copy(
+                doc = cachedDoc,
                 theme = stored.theme,
                 overlayBall = stored.overlayBall,
                 overlayPermission = canOverlay(),
@@ -542,8 +547,11 @@ class BridgeRepository(context: Context) {
             _state.update { it.copy(modelsLoading = true) }
             try {
                 val json = api.models(token)
-                val doc = json.optJSONObject("doc")?.let { Wire.parseModelDoc(it) }
+                val raw = json.optJSONObject("doc")
+                val doc = raw?.let { Wire.parseModelDoc(it) }
                 _state.update { it.copy(doc = doc, modelsLoading = false) }
+                // 缓存下来：下次冷启动不用再跑一趟隧道，也不会显示"未读取"
+                if (raw != null) runCatching { store.saveModels(raw.toString()) }
             } catch (error: BridgeException) {
                 _state.update { it.copy(modelsLoading = false) }
                 handleApiError(error, "读取模型失败")
@@ -838,6 +846,8 @@ class BridgeRepository(context: Context) {
                 val fresh = result.optJSONObject("doc")?.let { Wire.parseModelDoc(it) }
                 _state.update { it.copy(modelsSaving = false, doc = fresh ?: it.doc) }
                 toast("模型配置已保存")
+                // 保存成功后重新读一次：拿到新的 revision，顺手把缓存刷新
+                loadModels()
                 onSaved(true)
             } catch (error: BridgeException) {
                 _state.update { it.copy(modelsSaving = false) }

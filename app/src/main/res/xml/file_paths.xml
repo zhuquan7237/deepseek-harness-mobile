@@ -2,4 +2,6 @@
 <paths>
     <!-- The downloaded update APK lives in cacheDir/updates. -->
     <cache-path name="updates" path="updates/" />
+    <!-- "在外部打开"用的临时文件。 -->
+    <cache-path name="shared" path="shared/" />
 </paths>

@@ -5,6 +5,7 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
@@ -180,7 +181,15 @@ fun PettableWhale(
 ) {
     var face by remember { mutableStateOf(base) }
     var line by remember { mutableStateOf<String?>(null) }
+    // line 一置空，Text 若是直接读 line.orEmpty() 就会立刻变空 —— 气泡在淡出期间
+    // 内容已经没了，看起来就是"文字先消失、再关掉、还闪一下"。这里把最后一句留着，
+    // 淡出期间文字一直在，只有透明度在变。
+    var shown by remember { mutableStateOf("") }
     var pats by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(line) {
+        line?.let { shown = it }
+    }
 
     // initialDelay 只是让她先在页面里站定，再开始接受摸头
     LaunchedEffect(pats) {
@@ -232,14 +241,14 @@ fun PettableWhale(
         )
         AnimatedVisibility(
             visible = line != null,
-            enter = fadeIn(tween(140)) + scaleIn(
-                tween(180),
-                initialScale = 0.9f,
+            enter = fadeIn(tween(200)) + scaleIn(
+                tween(220),
+                initialScale = 0.92f,
                 transformOrigin = TransformOrigin(1f, 1f),
             ),
             // 关闭只做淡出、不做缩放：缩放会让 Surface 的描边/圆角在最后一帧重排，
-            // 看起来就是"关的时候闪一下"
-            exit = fadeOut(tween(150)),
+            // 看起来就是"关的时候闪一下"。时长给足，是"慢慢淡下去"的手感。
+            exit = fadeOut(tween(durationMillis = 520, easing = LinearEasing)),
             // 关键：wrapContentWidth(unbounded = true, align = Alignment.End)。
             // 她要在一个 54dp 宽的容器里渲染，气泡比容器宽是常态；wrapContentSize 的
             // 默认对齐是**居中**，于是气泡被居中撑出容器、右端直接顶到屏幕边缘被切掉
@@ -261,7 +270,7 @@ fun PettableWhale(
                 ),
             ) {
                 Text(
-                    text = line.orEmpty(),
+                    text = shown,
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,

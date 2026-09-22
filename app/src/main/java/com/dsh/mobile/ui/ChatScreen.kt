@@ -180,6 +180,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             onPreview = { preview = it },
             onQuickSend = { line -> scope.launch { repo.send(line) } },
             onRevealDone = { repo.revealConsumed() },
+            onOpenExternal = { lang, code -> openCodeExternally(context, lang, code) },
             onSaveCode = { lang, code ->
                 val where = saveTextToDownloads(context, codeFileName(lang), code)
                 if (where != null) repo.toast("已保存到 $where") else repo.toast("保存失败，已复制到剪贴板")
@@ -312,6 +313,7 @@ private fun MessageList(
     onQuickSend: (String) -> Unit,
     onSaveCode: (String, String) -> Unit,
     onRevealDone: () -> Unit,
+    onOpenExternal: (String, String) -> Unit,
     modifier: Modifier,
 ) {
     val palette = LocalDsh.current
@@ -323,7 +325,11 @@ private fun MessageList(
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(top = 6.dp, bottom = 12.dp),
     ) {
-        itemsIndexed(rows, key = { index, row -> "row:$index:" + row.who + ":" + row.text.hashCode() }) { index, row ->
+        itemsIndexed(
+            rows,
+            key = { index, row -> "row:$index:" + row.who + ":" + row.text.hashCode() },
+            contentType = { _, row -> row.who },
+        ) { index, row ->
             val showActions = row.who == Role.ASSISTANT && index == rows.lastIndex && !state.running
             Box(Modifier.animateItem()) {
                 MessageRow(
@@ -335,6 +341,7 @@ private fun MessageList(
                     onCopy = onCopy,
                     onRegenerate = onRegenerate,
                     onPreview = onPreview,
+                    onOpenExternal = onOpenExternal,
                 )
             }
         }
@@ -398,10 +405,13 @@ private fun MessageList(
     val lastLiveLength = live.lastOrNull()?.text?.length ?: 0
     // 键盘弹起时可视高度被压小，不滚到底的话最新内容正好被输入框盖在下面
     val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
-    LaunchedEffect(imeBottom, itemCount) {
-        if (imeBottom > 0 && itemCount > 0) {
+    // 只在"键盘刚弹起"这一刻跟随到底；不要挂在 itemCount 上——否则打字中途每来一条
+    // 事件都会把正在翻历史的你拽回底部，手感就是"滑着滑着卡住又不听话"。
+    LaunchedEffect(imeBottom) {
+        if (imeBottom > 0) {
             delay(80)
-            runCatching { listState.animateScrollToItem(itemCount - 1) }
+            val total = listState.layoutInfo.totalItemsCount
+            if (total > 0) runCatching { listState.animateScrollToItem(total - 1) }
         }
     }
     LaunchedEffect(itemCount, lastLiveLength) {
@@ -409,13 +419,15 @@ private fun MessageList(
         // frame after the screen opens: totalItemsCount would be 0 and
         // scrollToItem(-1) throws. Never scroll without a measured list.
         if (itemCount <= 0) return@LaunchedEffect
+        // 手指还在滑就别抢滚动条
+        if (listState.isScrollInProgress) return@LaunchedEffect
         val info = listState.layoutInfo
         val total = info.totalItemsCount
         if (total <= 0) return@LaunchedEffect
         val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-        if (lastVisible == -1 || lastVisible >= total - 3) {
-            listState.scrollToItem(total - 1)
-        }
+        // 原来是"离底部 3 条以内就跟随"：手机一屏就几条，翻历史时几乎一直命中，
+        // 于是每次事件都把人拽回底部。现在只有在最后一条正好可见时才跟随。
+        if (lastVisible == total - 1) listState.scrollToItem(total - 1)
     }
 }
 
@@ -439,6 +451,7 @@ private fun MessageRow(
     onCopy: (String) -> Unit = {},
     onRegenerate: () -> Unit = {},
     onPreview: (Wire.Artifact) -> Unit = {},
+    onOpenExternal: (String, String) -> Unit = { _, _ -> },
 ) {
 
     /** Characters drawn so far; the animation only runs for a freshly arrived reply. */
@@ -494,17 +507,28 @@ private fun MessageRow(
                 // 不再和正文混在一起看着像乱码
                 // 不能 remember(row.text)：body 是逐字显示出来的，第一帧还是空串，
                 // 按 row.text 缓存会把"空结果"永久记住 —— 助手回复就整条不显示了（踩过）
-                val segments = splitCodeBlocks(body)
+                // 逐字显示期间不解析（每帧都会跑），播完再解析一次并缓存 —— 长回复
+                // 如果在滚动/重绘时反复重解析，列表就会一卡一卡的。
+                val parsed = remember(row.text) { splitCodeBlocks(row.text) }
+                val segments = if (done) parsed else listOf(MsgSegment.Body(body))
                 segments.forEach { seg ->
                     when (seg) {
-                        is MsgSegment.Body -> Text(
-                            seg.text,
-                            style = MaterialTheme.typography.bodyLarge,
+                        // 电脑端回的是 Markdown：标题/列表/表格都按真排版画，
+                        // 否则手机上看到的是一堆 `|` `-` `#`
+                        is MsgSegment.Body -> MarkdownText(
+                            text = seg.text,
                             color = palette.textPrimary,
                             modifier = Modifier.padding(bottom = 6.dp),
                         )
                         is MsgSegment.Code -> {
-                            CodeCard(lang = seg.lang, code = seg.code, onCopy = onCopy, onSave = onSaveCode)
+                            CodeCard(
+                                lang = seg.lang,
+                                code = seg.code,
+                                onCopy = onCopy,
+                                onSave = onSaveCode,
+                                onPreview = onPreview,
+                                onOpenExternal = onOpenExternal,
+                            )
                             Spacer(Modifier.height(8.dp))
                         }
                     }

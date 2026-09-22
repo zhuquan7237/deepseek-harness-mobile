@@ -35,6 +35,13 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import android.content.Intent
+import android.os.Bundle
+import android.widget.Toast
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.core.content.FileProvider
+import com.dsh.mobile.data.Wire
 
 /**
  * 把一条消息切成"正文 / 代码块"两类片段。
@@ -167,7 +174,10 @@ fun CodeCard(
     code: String,
     onCopy: (String) -> Unit,
     onSave: (String, String) -> Unit,
+    onPreview: ((Wire.Artifact) -> Unit)? = null,
+    onOpenExternal: ((String, String) -> Unit)? = null,
 ) {
+    val previewKind = codePreviewKind(lang, code)
     val palette = LocalDsh.current
     val hScroll = rememberScrollState()
     Column(
@@ -190,6 +200,13 @@ fun CodeCard(
                 color = palette.textTertiary,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // 图形/网页先给"预览"：在手机上看一眼结果，比读代码有用
+                if (previewKind != null && onPreview != null) {
+                    CodeAction(Icons.Filled.Visibility, "预览效果") { onPreview(Wire.Artifact(previewKind, code)) }
+                }
+                if (onOpenExternal != null) {
+                    CodeAction(Icons.AutoMirrored.Filled.OpenInNew, "在外部打开") { onOpenExternal(lang, code) }
+                }
                 CodeAction(Icons.Filled.ContentCopy, "复制代码") { onCopy(code) }
                 CodeAction(Icons.Filled.Save, "保存为文件") { onSave(lang, code) }
             }
@@ -226,6 +243,46 @@ private fun CodeAction(
 }
 
 /** 生成一个带时间戳的文件名，避免互相覆盖。 */
+/**
+ * 这份代码能不能在应用内预览；不能就返回 null（那就干脆不显示预览按钮）。
+ * 电脑端经常把整份 SVG/HTML 直接贴在正文或写进文件，两种开头都要认。
+ */
+fun codePreviewKind(lang: String, code: String): String? {
+    val l = lang.trim().lowercase()
+    val head = code.trimStart().take(400).lowercase()
+    return when {
+        l.startsWith("svg") -> "svg"
+        l == "html" || l == "htm" || l == "xhtml" || l.startsWith("html") -> "html"
+        head.startsWith("<!doctype html") || head.startsWith("<html") -> "html"
+        head.contains("<svg") -> "svg"
+        else -> null
+    }
+}
+
+/**
+ * 交给系统里能打开它的应用：图形给图库/浏览器，网页给浏览器，其余当文本。
+ * 文件先落到 cacheDir/shared（FileProvider 已声明），不能写进别人的沙盒。
+ */
+fun openCodeExternally(context: Context, lang: String, code: String) {
+    val mime = when (codePreviewKind(lang, code)) {
+        "svg" -> "image/svg+xml"
+        "html" -> "text/html"
+        else -> "text/plain"
+    }
+    runCatching {
+        val dir = File(context.cacheDir, "shared").apply { mkdirs() }
+        val file = File(dir, codeFileName(lang))
+        file.writeText(code)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val view = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, mime)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(Intent.createChooser(view, "打开方式"))
+    }.onFailure { error ->
+        Toast.makeText(context, "没有能打开它的应用：${error.message ?: "未知原因"}", Toast.LENGTH_SHORT).show()
+    }
+}
+
 fun codeFileName(lang: String): String {
     val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
     return "dsh-$stamp.${codeExtension(lang)}"

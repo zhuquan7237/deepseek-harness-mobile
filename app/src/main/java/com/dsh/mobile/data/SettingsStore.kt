@@ -23,6 +23,8 @@ data class StoredSession(
     val theme: String = "auto",
     /** 鲸鱼娘悬浮球：用户自己的开关，默认关。 */
     val overlayBall: Boolean = false,
+    /** 上次读到的模型文档（原样缓存）：重开 App 不该再显示"未读取"。 */
+    val modelsJson: String = "",
 )
 
 /** Everything that must survive a restart: where the desktop is, the device
@@ -41,6 +43,7 @@ class SettingsStore(context: Context) {
         val UPDATE_CHECK = longPreferencesKey("update_check")
         val UPDATE_SKIP = stringPreferencesKey("update_skip")
         val OVERLAY = booleanPreferencesKey("overlay_ball")
+        val MODELS = stringPreferencesKey("models_json")
     }
 
     suspend fun load(): StoredSession {
@@ -60,6 +63,7 @@ class SettingsStore(context: Context) {
             epoch = prefs[Keys.EPOCH].orEmpty(),
             theme = prefs[Keys.THEME] ?: "auto",
             overlayBall = prefs[Keys.OVERLAY] ?: false,
+            modelsJson = prefs[Keys.MODELS].orEmpty(),
         )
     }
 
@@ -77,6 +81,11 @@ class SettingsStore(context: Context) {
 
     suspend fun saveEpoch(epoch: String) {
         context.dshStore.edit { prefs -> prefs[Keys.EPOCH] = epoch }
+    }
+
+    /** 缓存模型文档，下次打开设置页/模型页直接就有内容。 */
+    suspend fun saveModels(json: String) {
+        context.dshStore.edit { prefs -> prefs[Keys.MODELS] = json }
     }
 
     suspend fun saveOverlay(on: Boolean) {
