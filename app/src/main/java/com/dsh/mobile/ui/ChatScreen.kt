@@ -478,7 +478,9 @@ private fun MessageRow(
             ) {
                 // 正文与代码块分开排：代码单独装进卡片（等宽、横向滚动、可复制/保存），
                 // 不再和正文混在一起看着像乱码
-                val segments = remember(row.text) { splitCodeBlocks(body) }
+                // 不能 remember(row.text)：body 是逐字显示出来的，第一帧还是空串，
+                // 按 row.text 缓存会把"空结果"永久记住 —— 助手回复就整条不显示了（踩过）
+                val segments = splitCodeBlocks(body)
                 segments.forEach { seg ->
                     when (seg) {
                         is MsgSegment.Body -> Text(

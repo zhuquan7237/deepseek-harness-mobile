@@ -190,9 +190,10 @@ fun PettableWhale(
         }
         face = if (pats % 2 == 1) WhaleFace.SHY else WhaleFace.HAPPY
         line = lines.random()
-        delay(1800)
-        face = base
+        delay(1700)
         line = null
+        delay(160)      // 先收气泡、再换脸：同一帧做两件事看着也是一次闪
+        face = base
     }
 
     // 外面塞进来的自动台词（任务开始 / 任务结束）
@@ -200,9 +201,10 @@ fun PettableWhale(
         if (externalLine == null) return@LaunchedEffect
         face = WhaleFace.HAPPY
         line = externalLine
-        delay(2600)
-        face = base
+        delay(2500)
         line = null
+        delay(160)
+        face = base
     }
 
     val pop by animateFloatAsState(
@@ -235,7 +237,9 @@ fun PettableWhale(
                 initialScale = 0.9f,
                 transformOrigin = TransformOrigin(1f, 1f),
             ),
-            exit = fadeOut(tween(140)) + scaleOut(tween(160), targetScale = 0.95f),
+            // 关闭只做淡出、不做缩放：缩放会让 Surface 的描边/圆角在最后一帧重排，
+            // 看起来就是"关的时候闪一下"
+            exit = fadeOut(tween(150)),
             // 关键：wrapContentWidth(unbounded = true, align = Alignment.End)。
             // 她要在一个 54dp 宽的容器里渲染，气泡比容器宽是常态；wrapContentSize 的
             // 默认对齐是**居中**，于是气泡被居中撑出容器、右端直接顶到屏幕边缘被切掉
@@ -243,7 +247,9 @@ fun PettableWhale(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .wrapContentWidth(unbounded = true, align = Alignment.End)
-                .offset(y = (-26).dp),
+                .offset(y = (-26).dp)
+                // 渲染到独立图层再做透明度动画，避免逐帧重绘时的闪烁
+                .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen },
         ) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
