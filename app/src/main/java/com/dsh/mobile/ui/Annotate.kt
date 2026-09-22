@@ -179,6 +179,9 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
                                             cropTouch = start
                                             1
                                         }
+                                        // 框已经有了：框外点/滑**不再**新开一个框（手机上太容易误触），
+                                        // 只能在现有框上缩放或移动
+                                        crop != null -> 0
                                         else -> 3
                                     }
                                     if (cropGrab == 2) {
@@ -294,7 +297,7 @@ fun AnnotateEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> U
         Text(
             when (tool) {
                 AnnoTool.PEN -> "直接在图上画，画错了点撤销"
-                AnnoTool.CROP -> "拖四角缩放、拖框内移动；框外会被裁掉，点完成生效"
+                AnnoTool.CROP -> "拖四角改范围、拖框内整体移动；框外会被裁掉，点完成生效"
             },
             style = MaterialTheme.typography.labelSmall,
             color = palette.textTertiary,

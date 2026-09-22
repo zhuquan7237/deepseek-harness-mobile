@@ -168,7 +168,7 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
 private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit) {
     val palette = LocalDsh.current
     val clipboard = LocalClipboardManager.current
-    BackHandler { repo.closeSession() }
+
     var showActions by remember { mutableStateOf(false) }
     var showModels by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -183,6 +183,17 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     var reeditAt by remember { mutableStateOf<Int?>(null) }
     var pendingEdit by remember { mutableStateOf<Bitmap?>(null) }
     var showAttach by remember { mutableStateOf(false) }
+    // 返回键：**先关正在看的浮层**（预览图/编辑器），没有浮层才回会话列表。
+    // 之前只有一句 closeSession()，所以在看图片预览时按返回会直接跳回列表——用户报的"返回回主页"。
+    BackHandler {
+        when {
+            reeditAt != null -> reeditAt = null
+            pendingEdit != null -> pendingEdit = null
+            attachPeekAt != null -> attachPeekAt = null
+            preview != null -> preview = null
+            else -> repo.closeSession()
+        }
+    }
     var captureUri by remember { mutableStateOf<Uri?>(null) }
     val attachScope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current

@@ -386,18 +386,9 @@ fun AttachmentStrip(
                 } else {
                     Box(Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(palette.surfaceHi))
                 }
-                Box(
-                    Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(2.dp)
-                        .size(18.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xCC000000))
-                        .clickable { onRemove(index) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Outlined.Close, contentDescription = "移除", tint = Color.White, modifier = Modifier.size(12.dp))
-                }
+                // 以前这里有个 18dp 的 ✗：视觉上很小，但 Compose 的可点区域会自动扩到
+                // 48dp，等于整个 58dp 缩略图都在"删除"热区里——拇指点中间就把图删了。
+                // 现在删除只在预览里做（明确按钮），缩略图整块 = 预览。
             }
         }
         Box(
