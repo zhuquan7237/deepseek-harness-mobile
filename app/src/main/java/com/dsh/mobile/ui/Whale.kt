@@ -168,25 +168,6 @@ enum class WhaleFace(val res: Int) {
     HAPPY(R.drawable.whale_face_happy),
     SHY(R.drawable.whale_face_shy),
     SLEEPY(R.drawable.whale_face_sleepy),
-    HAPPY_BIG(R.drawable.whale_face_happy_big),
-    ANGRY(R.drawable.whale_face_angry),
-    SAD(R.drawable.whale_face_sad),
-    CALM(R.drawable.whale_face_calm),
-    TSUNDERE(R.drawable.whale_face_tsundere),
-    DISDAIN(R.drawable.whale_face_disdain),
-    POUT(R.drawable.whale_face_pout),
-    SMUG(R.drawable.whale_face_smug),
-    BLUSH(R.drawable.whale_face_blush),
-    SURPRISED(R.drawable.whale_face_surprised),
-    AGGRIEVED(R.drawable.whale_face_aggrieved),
-    EAGER(R.drawable.whale_face_eager),
-    EXCITED(R.drawable.whale_face_excited),
-    DEADPAN(R.drawable.whale_face_deadpan),
-    THINKING(R.drawable.whale_face_thinking),
-    COQUETTISH(R.drawable.whale_face_coquettish),
-    SERIOUS(R.drawable.whale_face_serious),
-    NAUGHTY(R.drawable.whale_face_naughty),
-    SCARED(R.drawable.whale_face_scared),
 }
 
 /**
@@ -194,7 +175,8 @@ enum class WhaleFace(val res: Int) {
  *
  * 两条线索：
  *  - **交互**：摸头第几次、任务开工/完工；
- *  - **对话内容**：电脑端回的话里带什么情绪词（成功/失败/注意/疑问…）——她跟着对话变脸。
+ *  - **对话内容**：电脑端回的话里带什么情绪词（成功/失败/疑问…）——她跟着对话变脸。
+ * 只有四张脸（普通/开心/害羞/困），情绪靠"选哪张 + 说什么话"表达。
  */
 object WhaleMood {
 
@@ -204,34 +186,30 @@ object WhaleMood {
     fun forText(text: String): WhaleFace? {
         val t = text.takeLast(1500)
         return when {
-            hit(t, listOf("失败", "错误", "报错", "异常", "无法", "不能", "不支持", "抱歉", "没有找到")) -> WhaleFace.AGGRIEVED
-            hit(t, listOf("注意", "警告", "危险", "小心", "务必", "重要")) -> WhaleFace.SERIOUS
-            hit(t, listOf("哈哈", "太好了", "太棒", "成功", "搞定", "完成", "搞定啦", "🎉", "✅")) -> WhaleFace.EXCITED
-            hit(t, listOf("？", "?")) -> WhaleFace.THINKING
-            hit(t, listOf("！", "!")) -> WhaleFace.SURPRISED
-            hit(t, listOf("好可爱", "谢谢你", "辛苦")) -> WhaleFace.BLUSH
+            hit(t, listOf("失败", "错误", "报错", "异常", "无法", "不能", "不支持", "抱歉", "没有找到")) ->
+                WhaleFace.SLEEPY      // 无奈：眼皮都懒得抬
+            hit(t, listOf("哈哈", "太好了", "太棒", "成功", "搞定", "完成", "🎉", "✅")) ->
+                WhaleFace.HAPPY
+            hit(t, listOf("好可爱", "谢谢你", "辛苦")) -> WhaleFace.SHY
+            hit(t, listOf("注意", "警告", "危险", "小心", "务必", "重要")) -> WhaleFace.NORMAL
+            hit(t, listOf("？", "?", "！", "!")) -> WhaleFace.NORMAL
             else -> null
         }
     }
 
-    /** 摸头：一下一个反应，摸多了会傲娇。 */
+    /** 摸头：一下一个反应，摸多了会烦。 */
     fun forPat(count: Int): WhaleFace = when {
         count <= 1 -> WhaleFace.HAPPY
         count == 2 -> WhaleFace.SHY
-        count == 3 -> WhaleFace.BLUSH
-        count == 4 -> WhaleFace.COQUETTISH
-        count == 5 -> WhaleFace.TSUNDERE
-        count == 6 -> WhaleFace.POUT
-        else -> WhaleFace.DISDAIN
+        count == 3 -> WhaleFace.HAPPY
+        count == 4 -> WhaleFace.SHY
+        count == 5 -> WhaleFace.SLEEPY
+        else -> WhaleFace.SLEEPY          // 摸烦了：装睡
     }
 
-    fun forStart(): WhaleFace =
-        listOf(WhaleFace.SERIOUS, WhaleFace.EAGER, WhaleFace.THINKING, WhaleFace.CALM).random()
+    fun forStart(): WhaleFace = WhaleFace.NORMAL
 
-    fun forDone(): WhaleFace =
-        listOf(WhaleFace.SMUG, WhaleFace.EXCITED, WhaleFace.HAPPY_BIG, WhaleFace.COQUETTISH, WhaleFace.NAUGHTY).random()
-
-    fun forIdle(): WhaleFace = listOf(WhaleFace.CALM, WhaleFace.NORMAL, WhaleFace.SLEEPY, WhaleFace.DEADPAN).random()
+    fun forDone(): WhaleFace = WhaleFace.HAPPY
 }
 
 /**

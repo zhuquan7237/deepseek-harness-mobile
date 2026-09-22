@@ -259,6 +259,8 @@ class WhaleBallService : Service() {
                         ballParams.x = (startX + dx).toInt().coerceIn(dp(4), screen.widthPixels - ballSize - dp(4))
                         ballParams.y = (startY + dy).toInt().coerceIn(statusBar(), screen.heightPixels - ballSize - dp(24))
                         runCatching { window.updateViewLayout(ball, ballParams) }
+                        // 气泡跟着球一起走，不然拖走球、气泡留在原地
+                        bubble?.let { placeBubble(it) }
                     }
                     return true
                 }
@@ -466,7 +468,11 @@ class WhaleBallService : Service() {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT,
-            )
+            ).apply {
+                // 球的 params 显式设了 TOP|START，气泡也必须设成一样——
+                // 不设的话两套坐标原点不同，气泡就会跑到离球很远的地方
+                gravity = Gravity.TOP or Gravity.START
+            }
             runCatching { window.addView(view, params) }.onFailure { return }
             bubble = view
             view
@@ -477,33 +483,7 @@ class WhaleBallService : Service() {
             setColor(if (done) Color.parseColor("#E62E4A3A") else Color.parseColor("#E62B3036"))
             if (done) setStroke(dp(1), Color.parseColor("#804BE07A"))
         }
-        // 气泡不能死板地挂在左上角：球贴到哪个边，它就往哪边收
-        //   ① 球在屏幕右半边 → 气泡右对齐到球；左半边 → 左对齐
-        //   ② 上方放不下（球贴着状态栏）→ 翻到球下方
-        //   ③ 最后再夹进屏幕范围，永不越界
-        (tv.layoutParams as? WindowManager.LayoutParams)?.let { params ->
-            tv.measure(
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-            )
-            val bw = tv.measuredWidth.coerceAtLeast(dp(48))
-            val bh = tv.measuredHeight.coerceAtLeast(dp(28))
-            val metrics = resources.displayMetrics
-            val screenW = metrics.widthPixels
-            val screenH = metrics.heightPixels
-            val ballCenter = ballParams.x + ballSize / 2
-            val gap = dp(7)
-            val rawX = if (ballCenter > screenW / 2) ballParams.x + ballSize - bw else ballParams.x
-            val above = ballParams.y - bh - gap
-            val below = ballParams.y + ballSize + gap
-            val rawY = if (above >= statusBar() + dp(2)) above else below
-            params.x = rawX.coerceIn(dp(6), (screenW - bw - dp(6)).coerceAtLeast(dp(6)))
-            params.y = rawY.coerceIn(
-                statusBar() + dp(2),
-                (screenH - bh - dp(8)).coerceAtLeast(statusBar() + dp(2)),
-            )
-            runCatching { window.updateViewLayout(tv, params) }
-        }
+        placeBubble(tv)
         tv.animate().cancel()
         tv.alpha = 0f
         tv.scaleX = 0.92f
@@ -511,6 +491,31 @@ class WhaleBallService : Service() {
         tv.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start()
         handler.removeCallbacks(fadeBubbleTask)
         handler.postDelayed(fadeBubbleTask, if (done) 2900L else 1900L)
+    }
+
+    /**
+     * 气泡就贴在球脑袋上：X 轴跟球的中心对齐（左右留边时再夹一下），
+     * 优先放球上方；球贴着状态栏放不下时才翻到下方。始终跟球"长在一起"。
+     */
+    private fun placeBubble(tv: TextView) {
+        val params = tv.layoutParams as? WindowManager.LayoutParams ?: return
+        tv.measure(
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val bw = tv.measuredWidth.coerceAtLeast(dp(48))
+        val bh = tv.measuredHeight.coerceAtLeast(dp(28))
+        val metrics = resources.displayMetrics
+        val screenW = metrics.widthPixels
+        val screenH = metrics.heightPixels
+        val gap = dp(5)
+        val ballCenter = ballParams.x + ballSize / 2
+        val above = ballParams.y - bh - gap
+        val below = ballParams.y + ballSize + gap
+        params.x = (ballCenter - bw / 2).coerceIn(dp(6), (screenW - bw - dp(6)).coerceAtLeast(dp(6)))
+        params.y = (if (above >= statusBar() + dp(2)) above else below)
+            .coerceIn(statusBar() + dp(2), (screenH - bh - dp(8)).coerceAtLeast(statusBar() + dp(2)))
+        runCatching { window.updateViewLayout(tv, params) }
     }
 
     /** 慢慢淡下去，再撤掉。 */

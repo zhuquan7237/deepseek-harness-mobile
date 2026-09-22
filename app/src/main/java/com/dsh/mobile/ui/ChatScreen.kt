@@ -117,6 +117,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
 import androidx.compose.material.icons.outlined.Add
 import java.io.File
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
 
 /** 空会话时的开场白：点一下就把这句话发给电脑端。 */
 private val OPENERS = listOf(
@@ -134,7 +139,7 @@ private val MenuEasing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
  * bubble, an action row under the newest reply, and a surface input card whose
  * model chip opens a menu anchored above it.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTextApi::class)
 @Composable
 fun ChatScreen(state: AppState, repo: BridgeRepository) {
     val palette = LocalDsh.current
@@ -153,6 +158,8 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
     var showAttach by remember { mutableStateOf(false) }
     var captureUri by remember { mutableStateOf<Uri?>(null) }
     val attachScope = rememberCoroutineScope()
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     // 她跟着对话变脸：从最新一条回复里读情绪词
     val lastReply = state.history.lastOrNull { it.who == Role.ASSISTANT }?.text
     val chatMood = remember(lastReply) { lastReply?.let { WhaleMood.forText(it) } }
@@ -291,7 +298,12 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
                     attachments = attachments.filterIndexed { i, _ -> i != index }
                     attachPreviews = attachPreviews.filterIndexed { i, _ -> i != index }
                 },
-                onAddAttachment = { showAttach = true },
+                onAddAttachment = {
+            // 先收键盘再弹面板，否则键盘把拍照/相册/文件挡掉一半
+            keyboard?.hide()
+            focus.clearFocus()
+            showAttach = true
+        },
                 onSendWith = { text, images ->
                     scope.launch {
                         val ok = repo.sendWithImages(text, images)
@@ -1052,26 +1064,40 @@ private fun Composer(
             // 胶囊 = 36dp 高，输入框首行也是 36dp（6+24+6）——两边中线对齐，
             // 不会一个上一个下
             ModelChip(state = state, onClick = onOpenModels)
+            // 输入文字居中：Compose 的 bodyLarge 行高 24sp 比字本身高，
+            // 行框居中后字看着仍然偏上（CJK 字形落在基线上方）。用 LineHeightStyle
+            // 把上下多余留白裁掉（Trim.Both），行框就等于字形本身，再居中才是真居中；
+            // 占位文字必须用同一个样式，否则两个"居中"位置不一样。
+            val inputStyle = MaterialTheme.typography.bodyLarge.copy(
+                color = palette.textPrimary,
+                platformStyle = PlatformTextStyle(includeFontPadding = false),
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.Both,
+                ),
+            )
             BasicTextField(
                 value = draft,
                 onValueChange = { draft = it },
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 36.dp, max = 140.dp)
-                    // 单行时把文字在 36dp 里居中；不加这句 BasicTextField 会把文字贴顶
-                    .wrapContentHeight(Alignment.CenterVertically)
                     .padding(horizontal = 6.dp, vertical = 6.dp),
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.textPrimary),
+                textStyle = inputStyle,
                 cursorBrush = SolidColor(palette.accent),
                 maxLines = 6,
                 decorationBox = { innerTextField ->
-                    // 占位文字和真实文字同一个对齐基准（都居中），否则一个偏上一个偏下
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                    // 高度用"至少 24dp"（=36dp 减去上下 6dp 内边距）而不是 fillMaxSize：
+                    // fillMaxSize 会吃满外层允许的最大高度（140dp），整个输入卡片被撑爆，
+                    // 文字浮在上面、模型胶囊和发送键沉到底部——上一版"文字没居中"就是这么来的
+                    Box(
+                        Modifier.fillMaxWidth().heightIn(min = 24.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
                         if (draft.isEmpty()) {
                             Text(
                                 if (state.connected) "给电脑端发消息…" else "重连中…",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = palette.textTertiary,
+                                style = inputStyle.copy(color = palette.textTertiary),
                             )
                         }
                         innerTextField()
