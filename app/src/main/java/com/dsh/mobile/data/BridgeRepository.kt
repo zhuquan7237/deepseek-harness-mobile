@@ -1,6 +1,8 @@
 package com.dsh.mobile.data
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,8 +14,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
+import com.dsh.mobile.BuildConfig
 import java.util.concurrent.TimeUnit
 
 /**
@@ -26,6 +32,7 @@ import java.util.concurrent.TimeUnit
  */
 class BridgeRepository(context: Context) {
 
+    private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val client = OkHttpClient.Builder()
@@ -68,7 +75,7 @@ class BridgeRepository(context: Context) {
 
     private suspend fun boot() {
         val stored = store.load()
-        _state.update { it.copy(theme = stored.theme) }
+        _state.update { it.copy(theme = stored.theme, version = BuildConfig.VERSION_NAME) }
         if (stored.token.isBlank() || stored.base.isBlank()) {
             _state.update { it.copy(ready = true, view = View.PAIRING, base = stored.base) }
             return
@@ -84,6 +91,7 @@ class BridgeRepository(context: Context) {
             )
         }
         lastSeq = stored.seq
+        autoCheckUpdate()
         val ok = refreshMeta(quiet = false)
         if (!ok && _state.value.token == null) return // meta said the token is gone
         connect()
@@ -101,7 +109,7 @@ class BridgeRepository(context: Context) {
     // --------------------------------------------------------------- pairing
 
     /** Pair with the desktop. Fills the store on success; toasts on failure. */
-    fun pair(rawBase: String, code: String, deviceName: String) {
+    fun pair(rawBase: String, code: String, deviceName: String, withConfig: Boolean = true) {
         val base = normalizeBase(rawBase)
         if (base.isEmpty()) {
             toast("请填写服务器地址")
@@ -116,11 +124,18 @@ class BridgeRepository(context: Context) {
         _state.update { it.copy(pairing = true) }
         scope.launch {
             try {
+                val scopes = buildList {
+                    add("read")
+                    add("prompt")
+                    // config is what lets the phone edit models and write API keys
+                    if (withConfig) add("config")
+                }
                 val result = api.pair(
                     base,
                     normalized,
                     deviceName.ifBlank { "Android 手机" },
                     "Android ${Build.MODEL}",
+                    scopes,
                 )
                 val token = result.optString("token")
                 val device = result.optJSONObject("device")
@@ -132,10 +147,12 @@ class BridgeRepository(context: Context) {
                 _state.update {
                     it.copy(
                         pairing = false,
+                        repairing = false,
                         view = View.SESSIONS,
                         base = base,
                         token = token,
                         device = Wire.parseDevice(device),
+                        scopes = Wire.parseDevice(device).scopes,
                         sessionId = null,
                         sessionTitle = "",
                         history = emptyList(),
@@ -570,6 +587,201 @@ class BridgeRepository(context: Context) {
             store.clearBinding()
             _state.update { AppState(ready = true, theme = theme, base = base, view = View.PAIRING) }
             toast("令牌已失效，请重新配对")
+        }
+    }
+
+    // ------------------------------------------------------------ model editing
+
+    /** Open the model screen; loads the document if it is not in memory yet. */
+    fun openModels() {
+        _state.update { it.copy(view = View.MODELS) }
+        if (_state.value.doc == null) loadModels()
+    }
+
+    fun closeModels() {
+        _state.update { it.copy(view = View.SETTINGS) }
+    }
+
+    /** Save the phone's version of the whole model document. */
+    fun saveModels(items: List<ModelItem>, onSaved: (Boolean) -> Unit = {}) {
+        val token = _state.value.token ?: return
+        val doc = _state.value.doc
+        if (doc == null) {
+            toast("还没有读到模型列表，先刷新一次")
+            onSaved(false)
+            return
+        }
+        scope.launch {
+            _state.update { it.copy(modelsSaving = true) }
+            try {
+                val body = JSONObject()
+                    .put("baseRevision", doc.revision)
+                    .put("overlayRevision", doc.overlayRevision)
+                    .put("items", Wire.modelItemsJson(items))
+                val result = api.putModels(token, body)
+                val fresh = result.optJSONObject("doc")?.let { Wire.parseModelDoc(it) }
+                _state.update { it.copy(modelsSaving = false, doc = fresh ?: it.doc) }
+                toast("模型配置已保存")
+                onSaved(true)
+            } catch (error: BridgeException) {
+                _state.update { it.copy(modelsSaving = false) }
+                when (error.code) {
+                    // The desktop changed underneath us: reload and let the user redo it.
+                    "E_REVISION" -> {
+                        toast("电脑端也改过配置，已重新读取，请再操作一次")
+                        loadModels()
+                    }
+                    "E_EMPTY_DOC" -> {
+                        toast(error.message)
+                        loadModels()
+                    }
+                    else -> handleApiError(error, "保存模型失败")
+                }
+                onSaved(false)
+            } catch (error: Exception) {
+                _state.update { it.copy(modelsSaving = false) }
+                toast("保存模型失败：${error.message ?: "网络错误"}")
+                onSaved(false)
+            }
+        }
+    }
+
+    /** Write (or clear) one provider's API key. Values are never read back. */
+    fun setCredential(ref: String, value: String, onDone: (Boolean) -> Unit = {}) {
+        val token = _state.value.token ?: return
+        scope.launch {
+            try {
+                api.setCredential(token, ref, value)
+                toast(if (value.isBlank()) "密钥已清除" else "密钥已保存")
+                loadModels()
+                onDone(true)
+            } catch (error: BridgeException) {
+                handleApiError(error, "保存密钥失败")
+                onDone(false)
+            } catch (error: Exception) {
+                toast("保存密钥失败：${error.message ?: "网络错误"}")
+                onDone(false)
+            }
+        }
+    }
+
+    /**
+     * Ask a provider which models it serves — the phone talks to the provider
+     * directly (`GET {base}/models`), because the engine in this version exposes
+     * no discovery endpoint and stored keys are write-only besides.
+     */
+    fun discoverModels(baseURL: String, apiKey: String, onResult: (List<String>?, String) -> Unit) {
+        scope.launch {
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    val root = baseURL.trim().trimEnd('/')
+                    val url = if (root.endsWith("/v1")) "$root/models" else "$root/v1/models"
+                    val request = Request.Builder().url(url).header("Accept", "application/json")
+                        .apply { if (apiKey.isNotBlank()) header("Authorization", "Bearer ${apiKey.trim()}") }
+                        .build()
+                    client.newCall(request).execute().use { response ->
+                        val text = response.body?.string().orEmpty()
+                        if (!response.isSuccessful) {
+                            throw BridgeException("E_DISCOVER", "接口返回 HTTP ${response.code}")
+                        }
+                        val json = JSONObject(text)
+                        val data = json.optJSONArray("data") ?: json.optJSONArray("models") ?: JSONArray()
+                        val ids = ArrayList<String>()
+                        for (i in 0 until data.length()) {
+                            val entry = data.optJSONObject(i)
+                            val id = entry?.optString("id").orEmpty().ifEmpty { entry?.optString("name").orEmpty() }
+                            if (id.isNotBlank()) ids.add(id)
+                        }
+                        if (ids.isEmpty()) throw BridgeException("E_DISCOVER", "接口没有返回模型列表")
+                        ids
+                    }
+                }
+            }
+            outcome.onSuccess { onResult(it, "") }
+                .onFailure { onResult(null, it.message ?: "拉取失败") }
+        }
+    }
+
+    /** Re-pair so the new token carries the `config` scope. */
+    fun beginRepair() {
+        stream.stop()
+        _state.update { it.copy(repairing = true, view = View.SETTINGS, conn = Conn.OFFLINE) }
+    }
+
+    fun cancelRepair() {
+        _state.update { it.copy(repairing = false) }
+        connect()
+    }
+
+    // ------------------------------------------------------------- self-update
+
+    /** Ask the manifest + GitHub for a newer build; silent unless [manual]. */
+    fun checkUpdate(manual: Boolean = true) {
+        if (_state.value.updateChecking) return
+        scope.launch {
+            _state.update { it.copy(updateChecking = true, updateError = "") }
+            try {
+                val found = Updater.check(client, _state.value.version)
+                val skip = store.loadUpdateState().second
+                val visible = if (found != null && found.version == skip && !manual) null else found
+                _state.update { it.copy(updateChecking = false, update = visible) }
+                store.saveUpdateCheck(System.currentTimeMillis())
+                if (manual) toast(if (found == null) "已是最新版本 ${_state.value.version}" else "发现新版本 ${found.version}")
+            } catch (error: Exception) {
+                _state.update { it.copy(updateChecking = false, updateError = error.message ?: "网络错误") }
+                if (manual) toast("检查更新失败：${error.message ?: "网络错误"}")
+            }
+        }
+    }
+
+    private fun autoCheckUpdate() {
+        scope.launch {
+            val (last, _) = store.loadUpdateState()
+            if (System.currentTimeMillis() - last < 6 * 60 * 60 * 1000L) return@launch
+            val found = runCatching { Updater.check(client, _state.value.version) }.getOrNull()
+            store.saveUpdateCheck(System.currentTimeMillis())
+            if (found != null) _state.update { it.copy(update = found) }
+        }
+    }
+
+    /** Hide the banner until the app restarts. */
+    fun dismissUpdate() {
+        val version = _state.value.update?.version ?: return
+        _state.update { it.copy(update = null) }
+        scope.launch { store.saveUpdateCheck(System.currentTimeMillis(), version) }
+    }
+
+    /** Download the update APK and hand it to the system installer. */
+    fun downloadUpdate() {
+        val info = _state.value.update ?: return
+        if (_state.value.updateProgress >= 0) return
+        scope.launch {
+            _state.update { it.copy(updateProgress = 0) }
+            try {
+                val file = Updater.download(client, appContext, info) { percent ->
+                    _state.update { it.copy(updateProgress = percent) }
+                }
+                _state.update { it.copy(updateProgress = -1) }
+                if (!Updater.canInstall(appContext)) {
+                    toast("请先允许本应用安装应用")
+                    Updater.openInstallSettings(appContext)
+                    return@launch
+                }
+                Updater.install(appContext, file)
+            } catch (error: Exception) {
+                _state.update { it.copy(updateProgress = -1) }
+                toast(error.message ?: "下载失败")
+            }
+        }
+    }
+
+    /** Fall back to the browser when the in-app install cannot work. */
+    fun openUpdatePage() {
+        val info = _state.value.update ?: return
+        runCatching {
+            appContext.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(info.apkUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
         }
     }
 }

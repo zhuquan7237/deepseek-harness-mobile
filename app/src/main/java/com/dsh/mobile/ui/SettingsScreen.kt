@@ -47,6 +47,7 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
     val palette = LocalDsh.current
     BackHandler { repo.closeSettings() }
     var confirmUnpair by remember { mutableStateOf(false) }
+    var showUpdate by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -81,6 +82,17 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
                 SettingsValue("桥接", "${state.server.product} · v${state.server.version}")
             }
 
+            SectionHeader("模型", Modifier.padding(start = 0.dp))
+            SettingsAction(
+                label = "模型配置",
+                value = when {
+                    !state.canConfig -> "只读（需重新配对授权）"
+                    state.doc == null -> "未读取"
+                    else -> "${state.doc?.providers?.size ?: 0} 家提供商 · ${state.doc?.items?.size ?: 0} 个模型"
+                },
+                onClick = { repo.openModels() },
+            )
+
             SectionHeader("外观", Modifier.padding(start = 0.dp))
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 6.dp),
@@ -92,7 +104,19 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
             }
 
             SectionHeader("关于", Modifier.padding(start = 0.dp))
-            SettingsValue("手机端", "0.1.0（P1）")
+            SettingsValue("手机端", state.version.ifBlank { "—" })
+            SettingsAction(
+                label = "检查更新",
+                value = when {
+                    state.updateChecking -> "检查中…"
+                    state.update != null -> "有新版本 ${state.update?.version}"
+                    state.updateError.isNotBlank() -> "检查失败"
+                    else -> "已是最新"
+                },
+                onClick = {
+                    if (state.update != null) showUpdate = true else repo.checkUpdate(manual = true)
+                },
+            )
             Text(
                 "手机是控制器和查看器：会话、模型、以及真正干活的电脑端都不在这台设备上。",
                 style = MaterialTheme.typography.bodySmall,
@@ -120,6 +144,10 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
         }
     }
 
+    if (showUpdate && state.update != null) {
+        UpdateSheet(state = state, repo = repo, onDismiss = { showUpdate = false })
+    }
+
     if (confirmUnpair) {
         AlertDialog(
             onDismissRequest = { confirmUnpair = false },
@@ -145,7 +173,32 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
     }
 }
 
-/** label left, value right — the ChatGPT settings row, 52dp tall. */
+/** A settings row that goes somewhere: label left, current value right. */
+@Composable
+private fun SettingsAction(label: String, value: String, onClick: () -> Unit) {
+    val palette = LocalDsh.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary, modifier = Modifier.weight(1f))
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            color = palette.textSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text("›", style = MaterialTheme.typography.bodyLarge, color = palette.textTertiary)
+    }
+    Hairline()
+}
+
 @Composable
 private fun SettingsValue(label: String, value: String) {
     val palette = LocalDsh.current

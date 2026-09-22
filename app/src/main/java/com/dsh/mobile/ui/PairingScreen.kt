@@ -27,6 +27,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -68,6 +70,8 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
     var base by rememberSaveable { mutableStateOf(state.base.ifBlank { DEFAULT_BASE }) }
     var code by rememberSaveable { mutableStateOf("") }
     var deviceName by rememberSaveable { mutableStateOf(defaultDeviceName()) }
+    // config lets the phone edit models and write API keys; on by default
+    var withConfig by rememberSaveable { mutableStateOf(true) }
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         val contents = result.contents
@@ -78,7 +82,7 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             } else {
                 if (!payload.base.isNullOrBlank()) base = payload.base
                 code = Wire.formatCode(payload.code)
-                repo.pair(payload.base ?: base, payload.code, deviceName)
+                repo.pair(payload.base ?: base, payload.code, deviceName, withConfig)
             }
         }
     }
@@ -139,8 +143,50 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
                 value = deviceName,
                 onValueChange = { deviceName = it },
             )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { withConfig = !withConfig }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Checkbox(
+                    checked = withConfig,
+                    onCheckedChange = { withConfig = it },
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = palette.primaryBtn,
+                        checkmarkColor = palette.onPrimaryBtn,
+                        uncheckedColor = palette.textSecondary,
+                    ),
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("允许在这台手机上改模型配置", style = MaterialTheme.typography.bodyMedium, color = palette.textPrimary)
+                    Text(
+                        "开启后可以在手机上添加/删除提供商与模型、写入 API Key；关闭则只能看和发消息。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary,
+                    )
+                }
+            }
         }
 
+        if (state.repairing && state.token != null) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "当前绑定仍然有效。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                Pill("取消重新配对", onClick = { repo.cancelRepair() })
+            }
+        }
         Spacer(Modifier.height(4.dp))
         Box(
             Modifier
@@ -148,7 +194,7 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
                 .height(54.dp)
                 .clip(RoundedCornerShape(999.dp))
                 .background(if (state.pairing) palette.surfaceHi else palette.primaryBtn)
-                .clickable(enabled = !state.pairing) { repo.pair(base, code, deviceName) },
+                .clickable(enabled = !state.pairing) { repo.pair(base, code, deviceName, withConfig) },
             contentAlignment = Alignment.Center,
         ) {
             Text(

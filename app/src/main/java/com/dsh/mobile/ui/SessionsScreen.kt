@@ -81,6 +81,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
     val palette = LocalDsh.current
     var renameTarget by remember { mutableStateOf<SessionSummary?>(null) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
+    var showUpdate by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -108,6 +109,10 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                 },
                 conn = state.conn,
             )
+        }
+
+        state.update?.let { info ->
+            UpdateBanner(info = info, onOpen = { showUpdate = true }, onDismiss = { repo.dismissUpdate() })
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -184,10 +189,15 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                 PrimaryCta(
                     icon = Icons.Filled.Edit,
                     text = "新建",
+                    label = "新建会话",
                     onClick = { repo.createSession() },
                 )
             }
         }
+    }
+
+    if (showUpdate && state.update != null) {
+        UpdateSheet(state = state, repo = repo, onDismiss = { showUpdate = false })
     }
 
     renameTarget?.let { target ->
@@ -222,30 +232,6 @@ private fun EmptyState(searching: Boolean) {
             color = palette.textSecondary,
             textAlign = TextAlign.Center,
         )
-    }
-}
-
-/** Blue stadium CTA, the dock's right half on ChatGPT's list screen. */
-@Composable
-private fun PrimaryCta(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    text: String,
-    onClick: () -> Unit,
-) {
-    val palette = LocalDsh.current
-    Row(
-        Modifier
-            .height(50.dp)
-            .clip(RoundedCornerShape(999.dp))
-            .background(palette.accent)
-            .clickable(onClick = onClick)
-            .semantics { contentDescription = "新建会话" }
-            .padding(horizontal = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Icon(icon, contentDescription = null, tint = palette.onAccent, modifier = Modifier.size(19.dp))
-        Text(text, style = MaterialTheme.typography.bodyLarge, color = palette.onAccent)
     }
 }
 

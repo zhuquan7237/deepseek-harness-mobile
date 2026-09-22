@@ -3,7 +3,7 @@ package com.dsh.mobile.data
 import androidx.compose.runtime.Immutable
 
 /** Which screen the shell is showing. */
-enum class View { PAIRING, SESSIONS, CHAT, SETTINGS }
+enum class View { PAIRING, SESSIONS, CHAT, SETTINGS, MODELS }
 
 /**
  * The live link to the desktop bridge, as the user sees it:
@@ -73,6 +73,10 @@ data class ModelItem(
     val apiMode: String = "",
     val apiKeyRef: String = "",
     val apiKeyConfigured: Boolean = false,
+    /** The wire `params` object and `tags` array, kept as text so a save
+     *  round-trips every field the engine owns without dropping any. */
+    val paramsJson: String = "",
+    val tagsJson: String = "[]",
 )
 
 /** One provider row: everything the phone needs to show and edit a provider. */
@@ -132,6 +136,15 @@ data class AppState(
     // settings
     val theme: String = "auto",
     val toast: ToastMsg? = null,
+    // models screen
+    val modelsSaving: Boolean = false,
+    val repairing: Boolean = false,
+    // self-update
+    val version: String = "",
+    val update: UpdateInfo? = null,
+    val updateChecking: Boolean = false,
+    val updateError: String = "",
+    val updateProgress: Int = -1,
 ) {
     /** Derived so the old boolean call sites and the tri-state can never drift apart. */
     val connected: Boolean get() = conn == Conn.ONLINE

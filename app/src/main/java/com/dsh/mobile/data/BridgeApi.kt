@@ -64,14 +64,20 @@ class BridgeApi(private val client: OkHttpClient) {
     }
 
     /** Pair this phone with the desktop; returns the raw pair response. */
-    suspend fun pair(base: String, code: String, deviceName: String, platform: String): JSONObject =
+    suspend fun pair(
+        base: String,
+        code: String,
+        deviceName: String,
+        platform: String,
+        scopes: List<String> = listOf("read", "prompt"),
+    ): JSONObject =
         call(
             "POST", "/mobile/pair", token = null,
             body = JSONObject()
                 .put("code", code)
                 .put("deviceName", deviceName)
                 .put("platform", platform)
-                .put("scopes", JSONArray(listOf("read", "prompt"))),
+                .put("scopes", JSONArray(scopes)),
             baseOverride = base,
         )
 
@@ -105,6 +111,17 @@ class BridgeApi(private val client: OkHttpClient) {
 
     suspend fun rename(token: String, sessionId: String, title: String): JSONObject =
         call("POST", "/mobile/sessions/${enc(sessionId)}/rename", token, JSONObject().put("title", title))
+
+    /** Write the whole model document; the bridge turns it into engine ops. */
+    suspend fun putModels(token: String, body: JSONObject): JSONObject =
+        call("PUT", "/mobile/models", token, body)
+
+    /** Write-only credential: the value never comes back. */
+    suspend fun setCredential(token: String, ref: String, value: String): JSONObject =
+        call(
+            "POST", "/mobile/credentials", token,
+            JSONObject().put("ref", ref).put("value", value),
+        )
 
     suspend fun models(token: String): JSONObject = call("GET", "/mobile/models", token)
 

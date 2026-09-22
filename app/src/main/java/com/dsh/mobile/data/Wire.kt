@@ -397,6 +397,8 @@ object Wire {
                     apiMode = raw.optString("apiMode"),
                     apiKeyRef = raw.optString("apiKeyRef"),
                     apiKeyConfigured = raw.optBoolean("apiKeyConfigured", false),
+                    paramsJson = params?.toString().orEmpty(),
+                    tagsJson = raw.optJSONArray("tags")?.toString() ?: "[]",
                 )
             )
         }
@@ -406,6 +408,34 @@ object Wire {
             providers = providers,
             items = list,
         )
+    }
+
+    /**
+     * The reverse of [parseModelDoc] — the wire shape the bridge's save path
+     * expects. `tags` must always be present: the overlay writer reads
+     * `item.tags.length` and would throw without it.
+     */
+    fun modelItemsJson(items: List<ModelItem>): JSONArray {
+        val array = JSONArray()
+        for (item in items) {
+            val row = JSONObject()
+                .put("id", item.id.ifEmpty { item.provider + "::" + item.modelId })
+                .put("provider", item.provider)
+                .put("modelId", item.modelId)
+                .put("enabled", item.enabled)
+                .put("order", item.order)
+                .put("tags", runCatching { JSONArray(item.tagsJson) }.getOrDefault(JSONArray()))
+            if (item.name.isNotBlank()) row.put("name", item.name)
+            if (item.providerName.isNotBlank()) row.put("providerName", item.providerName)
+            if (item.baseURL.isNotBlank()) row.put("baseURL", item.baseURL)
+            if (item.apiMode.isNotBlank()) row.put("apiMode", item.apiMode)
+            if (item.apiKeyRef.isNotBlank()) row.put("apiKeyRef", item.apiKeyRef)
+            if (item.paramsJson.isNotBlank()) {
+                runCatching { row.put("params", JSONObject(item.paramsJson)) }
+            }
+            array.put(row)
+        }
+        return array
     }
 
     /**

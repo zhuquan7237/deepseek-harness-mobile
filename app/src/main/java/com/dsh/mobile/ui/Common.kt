@@ -16,14 +16,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,7 +38,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -276,5 +283,156 @@ fun Hairline(modifier: Modifier = Modifier) {
             .fillMaxWidth()
             .height(1.dp)
             .background(LocalDsh.current.surfaceHi.copy(alpha = 0.5f))
+    )
+}
+
+/** A small rounded action chip: outlined by default, filled when it is the primary one. */
+@Composable
+fun Pill(
+    text: String,
+    onClick: () -> Unit,
+    filled: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    val palette = LocalDsh.current
+    Box(
+        modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (filled) palette.primaryBtn else palette.surfaceHi)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (filled) palette.onPrimaryBtn else palette.textPrimary,
+        )
+    }
+}
+
+/** Blue stadium CTA. [label] is the accessibility name (tests rely on it). */
+@Composable
+fun PrimaryCta(
+    icon: ImageVector,
+    text: String,
+    label: String = "",
+    onClick: () -> Unit,
+) {
+    val palette = LocalDsh.current
+    Row(
+        Modifier
+            .height(50.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(palette.accent)
+            .clickable(onClick = onClick)
+            .then(if (label.isNotBlank()) Modifier.semantics { contentDescription = label } else Modifier)
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = palette.onAccent, modifier = Modifier.size(19.dp))
+        Text(text, style = MaterialTheme.typography.bodyLarge, color = palette.onAccent)
+    }
+}
+
+/** Labelled single-line field on `surfaceHi`, the ChatGPT settings-row look. */
+@Composable
+fun FormField(
+    label: String,
+    value: String,
+    placeholder: String,
+    onChange: (String) -> Unit,
+) {
+    val palette = LocalDsh.current
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = palette.textPrimary),
+            cursorBrush = SolidColor(palette.accent),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(palette.surfaceHi)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            decorationBox = { inner ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(placeholder, style = MaterialTheme.typography.bodyMedium, color = palette.textTertiary)
+                    }
+                    inner()
+                }
+            },
+        )
+    }
+}
+
+/** One text field in a dialog; empty input cancels. */
+@Composable
+fun TextPromptDialog(
+    title: String,
+    hint: String,
+    confirm: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val palette = LocalDsh.current
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        containerColor = palette.surface,
+        title = { Text(title, color = palette.textPrimary, style = MaterialTheme.typography.titleMedium) },
+        text = {
+            BasicTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.textPrimary),
+                cursorBrush = SolidColor(palette.accent),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(palette.surfaceHi)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (text.isEmpty()) {
+                            Text(hint, style = MaterialTheme.typography.bodyMedium, color = palette.textTertiary)
+                        }
+                        inner()
+                    }
+                },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (text.isNotBlank()) onConfirm(text.trim()) else onDismiss()
+            }) { Text(confirm, color = palette.textPrimary) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = palette.textSecondary) } },
+    )
+}
+
+/** Destructive confirmation, ChatGPT's rounded dialog. */
+@Composable
+fun ConfirmDialog(
+    title: String,
+    body: String,
+    confirm: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val palette = LocalDsh.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        containerColor = palette.surface,
+        title = { Text(title, color = palette.textPrimary, style = MaterialTheme.typography.titleMedium) },
+        text = { Text(body, color = palette.textSecondary, style = MaterialTheme.typography.bodyMedium) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(confirm, color = palette.danger) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = palette.textSecondary) } },
     )
 }

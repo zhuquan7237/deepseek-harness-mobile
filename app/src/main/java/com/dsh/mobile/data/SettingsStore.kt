@@ -32,6 +32,8 @@ class SettingsStore(context: Context) {
         val DEVICE = stringPreferencesKey("device")
         val SEQ = longPreferencesKey("seq")
         val THEME = stringPreferencesKey("theme")
+        val UPDATE_CHECK = longPreferencesKey("update_check")
+        val UPDATE_SKIP = stringPreferencesKey("update_skip")
     }
 
     suspend fun load(): StoredSession {
@@ -66,6 +68,19 @@ class SettingsStore(context: Context) {
 
     suspend fun saveTheme(theme: String) {
         context.dshStore.edit { prefs -> prefs[Keys.THEME] = theme }
+    }
+
+    /** When the update check last ran, and which version the user waved off. */
+    suspend fun loadUpdateState(): Pair<Long, String> {
+        val prefs = context.dshStore.data.first()
+        return (prefs[Keys.UPDATE_CHECK] ?: 0L) to prefs[Keys.UPDATE_SKIP].orEmpty()
+    }
+
+    suspend fun saveUpdateCheck(at: Long, skipVersion: String? = null) {
+        context.dshStore.edit { prefs ->
+            prefs[Keys.UPDATE_CHECK] = at
+            if (skipVersion != null) prefs[Keys.UPDATE_SKIP] = skipVersion
+        }
     }
 
     /** Forget the binding but keep the server address and theme. */
