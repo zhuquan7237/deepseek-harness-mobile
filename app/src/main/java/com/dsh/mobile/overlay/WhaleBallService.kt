@@ -287,9 +287,18 @@ class WhaleBallService : Service() {
                         snapToEdge()
                     } else {
                         val now = e.eventTime
-                        // 双击 = 摸摸头（只摸摸头，不弹菜单）；单击 = 开/关菜单。
-                        // 单击要等一个双击窗口再决定，否则双击的第一下就把菜单弹出来了。
-                        if (now - lastTapAt < doubleTapMs) {
+                        val sinceHide = android.os.SystemClock.uptimeMillis() - lastHideAt
+                        // 三种情况，按优先级：
+                        // 1) 菜单刚才还开着 —— 这一下点球会先被菜单窗口的 OUTSIDE_TOUCH 收起来
+                        //    （lastHideAt 就是刚刚），那么这一下就是"关弹窗"，必须吃掉，
+                        //    否则延迟任务 400ms 后又把菜单重新打开，看起来就是"关不掉"。
+                        // 2) 和上一下挨得很近 = 双击 → 只摸摸头，不弹菜单。
+                        // 3) 单击 → 等一个双击窗口，确认第二下不来才开菜单。
+                        if (sinceHide < doubleTapMs + 150) {
+                            lastTapAt = 0L
+                            handler.removeCallbacks(openMenuTask)
+                            hideMenu()
+                        } else if (now - lastTapAt < doubleTapMs) {
                             lastTapAt = 0L
                             handler.removeCallbacks(openMenuTask)
                             hideMenu()
