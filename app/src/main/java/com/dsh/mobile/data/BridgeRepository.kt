@@ -343,6 +343,13 @@ class BridgeRepository(context: Context) {
         }
     }
 
+    /** 只改思考强度：拿当前模型再选一次，只是把 reasoningEffort 换个值。 */
+    fun setEffort(effort: String) {
+        val s = _state.value
+        if (s.modelId.isBlank()) return
+        selectModel(s.modelProvider, s.modelId, s.modelLabel.ifBlank { null }, effort)
+    }
+
     fun renameSession(sessionId: String, title: String) {
         val token = _state.value.token ?: return
         scope.launch {
@@ -565,15 +572,23 @@ class BridgeRepository(context: Context) {
         }
     }
 
-    fun selectModel(provider: String, model: String, label: String? = null) {
+    fun selectModel(provider: String, model: String, label: String? = null, effort: String? = null) {
         val s = _state.value
         val sid = s.sessionId ?: return
         val token = s.token ?: return
         scope.launch {
             try {
-                api.selectModel(token, sid, provider, model)
-                _state.update { it.copy(modelLabel = label ?: model, modelProvider = provider, modelId = model) }
-                toast("已切换到 ${label ?: model}")
+                val applied = effort ?: s.reasoningEffort.ifBlank { null }
+                api.selectModel(token, sid, provider, model, applied)
+                _state.update {
+                    it.copy(
+                        modelLabel = label ?: model,
+                        modelProvider = provider,
+                        modelId = model,
+                        reasoningEffort = applied ?: "",
+                    )
+                }
+                if (effort != null) toast("思考强度：${effortLabel(effort)}") else toast("已切换到 ${label ?: model}")
             } catch (error: BridgeException) {
                 handleApiError(error, "切换模型失败")
             } catch (error: Exception) {

@@ -124,11 +124,17 @@ class BridgeApi(private val client: OkHttpClient) {
     suspend fun cancel(token: String, sessionId: String): JSONObject =
         call("POST", "/mobile/sessions/${enc(sessionId)}/cancel", token, JSONObject())
 
-    suspend fun selectModel(token: String, sessionId: String, provider: String, model: String): JSONObject =
-        call(
-            "POST", "/mobile/sessions/${enc(sessionId)}/model", token,
-            JSONObject().put("selection", JSONObject().put("provider", provider).put("model", model)),
-        )
+    suspend fun selectModel(
+        token: String,
+        sessionId: String,
+        provider: String,
+        model: String,
+        effort: String? = null,
+    ): JSONObject {
+        val selection = JSONObject().put("provider", provider).put("model", model)
+        if (!effort.isNullOrBlank()) selection.put("reasoningEffort", effort)
+        return call("POST", "/mobile/sessions/${enc(sessionId)}/model", token, JSONObject().put("selection", selection))
+    }
 
     suspend fun rename(token: String, sessionId: String, title: String): JSONObject =
         call("POST", "/mobile/sessions/${enc(sessionId)}/rename", token, JSONObject().put("title", title))

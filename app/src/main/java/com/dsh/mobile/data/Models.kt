@@ -77,6 +77,8 @@ data class ModelItem(
      *  round-trips every field the engine owns without dropping any. */
     val paramsJson: String = "",
     val tagsJson: String = "[]",
+    /** 这个模型支持的思考强度档位（低/中/高…），空表示不支持。 */
+    val efforts: List<String> = emptyList(),
 )
 
 /** One provider row: everything the phone needs to show and edit a provider. */
@@ -142,6 +144,8 @@ data class AppState(
     val doc: ModelDoc? = null,
     val modelsLoading: Boolean = false,
     val modelLabel: String = "",
+    /** 当前思考强度（low/medium/high…），空表示跟随电脑端默认。 */
+    val reasoningEffort: String = "",
     val modelProvider: String = "",
     val modelId: String = "",
     // settings
@@ -162,4 +166,16 @@ data class AppState(
 
     /** Whether this device may rewrite model configuration (the `config` scope). */
     val canConfig: Boolean get() = scopes.any { it == "config" || it == "admin" }
+}
+
+/** 思考强度的中文名：低 / 中 / 高 / 极高 / Max… */
+fun effortLabel(effort: String): String = when (effort.lowercase()) {
+    "minimal" -> "最小"
+    "low" -> "低"
+    "medium", "mid" -> "中"
+    "high" -> "高"
+    "xhigh", "veryhigh" -> "极高"
+    "max" -> "Max"
+    "ultra" -> "Ultra"
+    else -> effort
 }

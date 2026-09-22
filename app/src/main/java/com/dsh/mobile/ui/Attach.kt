@@ -64,6 +64,14 @@ import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.FastOutLinearInEasing
 
 /**
  * 一张要发给电脑端的图片。字段和引擎的 `EncodedImageAttachment` 对齐：
@@ -290,28 +298,42 @@ private fun EditorButton(icon: ImageVector, label: String, onClick: () -> Unit) 
 /** 附件来源选择：拍照 / 相册 / 文件。 */
 @Composable
 fun AttachmentSheet(
+    visible: Boolean,
     onDismiss: () -> Unit,
     onCamera: () -> Unit,
     onGallery: () -> Unit,
     onFile: () -> Unit,
 ) {
     val palette = LocalDsh.current
+    // 打开/关闭都要有过渡：背景淡入淡出，面板从底部滑上来（之前是"啪"一下出现）
     Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable(onClick = onDismiss)) {}
-        Row(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 22.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(palette.surface)
-                .padding(vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(160)),
         ) {
-            SheetItem(Icons.Outlined.PhotoCamera, "拍照", onCamera)
-            SheetItem(Icons.Outlined.PhotoLibrary, "相册", onGallery)
-            SheetItem(Icons.Outlined.UploadFile, "文件", onFile)
+            Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable(onClick = onDismiss)) {}
+        }
+        AnimatedVisibility(
+            visible = visible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically(tween(260, easing = FastOutSlowInEasing)) { it } + fadeIn(tween(200)),
+            exit = slideOutVertically(tween(200, easing = FastOutLinearInEasing)) { it } + fadeOut(tween(140)),
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 22.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(palette.surface)
+                    .padding(vertical = 16.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                SheetItem(Icons.Outlined.PhotoCamera, "拍照", onCamera)
+                SheetItem(Icons.Outlined.PhotoLibrary, "相册", onGallery)
+                SheetItem(Icons.Outlined.UploadFile, "文件", onFile)
+            }
         }
     }
 }

@@ -380,6 +380,16 @@ object Wire {
             var image = false
             if (input != null) for (j in 0 until input.length()) if (input.optString(j) == "image") image = true
             val provider = raw.optString("provider")
+            // params.reasoningEfforts 是个对象（{low:"low",high:"high"}）或 false
+            val efforts = ArrayList<String>()
+            val effortObj = params?.optJSONObject("reasoningEfforts")
+            if (effortObj != null) {
+                val keys = effortObj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    if (effortObj.opt(key)?.toString() != "false") efforts.add(key)
+                }
+            }
             list.add(
                 ModelItem(
                     id = raw.optString("id").ifEmpty { provider + "::" + raw.optString("modelId") },
@@ -388,6 +398,7 @@ object Wire {
                     modelId = raw.optString("modelId"),
                     enabled = raw.optBoolean("enabled", true),
                     contextWindow = params?.opt("contextWindow")?.toString() ?: "—",
+                    efforts = efforts,
                     imageInput = image,
                     providerName = raw.optString("providerName").ifEmpty {
                         providers.firstOrNull { it.id == provider }?.name ?: provider

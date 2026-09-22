@@ -125,6 +125,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.horizontalScroll
+import com.dsh.mobile.data.effortLabel
 
 /** 空会话时的开场白：点一下就把这句话发给电脑端。 */
 private val OPENERS = listOf(
@@ -356,7 +358,12 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
                 ModelMenu(state = state, onPick = { provider, model, label ->
                     repo.selectModel(provider, model, label)
                     showModels = false
-                })
+                },
+                    onEffort = { effort ->
+                        repo.setEffort(effort)
+                        showModels = false
+                    },
+                )
             }
         }
     }
@@ -411,9 +418,10 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
             },
         )
     }
-    if (showAttach) {
-        AttachmentSheet(
-            onDismiss = { showAttach = false },
+    // 常驻挂着：这样关闭时也能播完滑出动画，而不是瞬间消失
+    AttachmentSheet(
+        visible = showAttach,
+        onDismiss = { showAttach = false },
             onCamera = {
                 showAttach = false
                 startCamera()
@@ -422,12 +430,11 @@ fun ChatScreen(state: AppState, repo: BridgeRepository) {
                 showAttach = false
                 galleryLauncher.launch("image/*")
             },
-            onFile = {
-                showAttach = false
-                fileLauncher.launch(arrayOf("*/*"))
-            },
-        )
-    }
+        onFile = {
+            showAttach = false
+            fileLauncher.launch(arrayOf("*/*"))
+        },
+    )
 
     pendingEdit?.let { editing ->
         AnnotateEditor(
@@ -1192,7 +1199,9 @@ private fun Composer(
                 exit = fadeOut(tween(100)) + shrinkVertically(tween(150)),
             ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(end = 10.dp).padding(bottom = 3.dp),
+                    // 位置：发送键下切线与输入框底边之间的中线上（上留 6dp = 胶囊底内边距的一半，
+                    // 这样这行正好落在两线正中间）
+                    Modifier.fillMaxWidth().padding(end = 10.dp).padding(top = 6.dp),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1220,13 +1229,14 @@ private fun ComposerModelChip(state: AppState, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
+        // 这一层空间充足，直接显示完整模型名（只在极端长的情况下才省略）
         Text(
-            shortModelLabel(state.modelLabel.ifBlank { "模型" }),
+            state.modelLabel.ifBlank { "模型" },
             style = MaterialTheme.typography.labelSmall,
             color = palette.textSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = 132.dp),
+            modifier = Modifier.widthIn(max = 250.dp),
         )
         Icon(
             Icons.Outlined.KeyboardArrowDown,
@@ -1299,10 +1309,55 @@ private fun contextLabel(raw: String): String? {
 
 /** Model menu: grouped by provider, with a check on the current pick. */
 @Composable
-private fun ModelMenu(state: AppState, onPick: (String, String, String) -> Unit) {
+private fun ModelMenu(
+    state: AppState,
+    onPick: (String, String, String) -> Unit,
+    onEffort: (String) -> Unit,
+) {
     val palette = LocalDsh.current
     val doc = state.doc
     Column(Modifier.fillMaxWidth()) {
+        // 当前模型支持的思考强度（照 ChatGPT：强度在上、模型在下）
+        val activeItem = doc?.items?.firstOrNull { item ->
+            item.modelId == state.modelId && (state.modelProvider.isEmpty() || item.provider == state.modelProvider)
+        }
+        val efforts = activeItem?.efforts.orEmpty()
+        if (efforts.isNotEmpty()) {
+            Text(
+                "思考强度",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+                modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 6.dp),
+            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                efforts.forEach { key ->
+                    val selected = key == state.reasoningEffort ||
+                        (state.reasoningEffort.isBlank() && key == efforts.first())
+                    Box(
+                        Modifier
+                            .height(32.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(if (selected) palette.accent else palette.surfaceHi)
+                            .clickable { onEffort(key) }
+                            .padding(horizontal = 14.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            effortLabel(key),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (selected) palette.onAccent else palette.textSecondary,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+        }
         Text(
             "模型",
             style = MaterialTheme.typography.labelSmall,
