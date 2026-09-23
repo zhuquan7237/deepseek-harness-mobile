@@ -36,7 +36,18 @@ data class UpdateInfo(
  */
 object Updater {
 
-    const val MANIFEST_URL = "https://m.zhuquan.xyz/mobile/app-update.json"
+    /**
+     * 更新清单优先从"这台手机配对的电脑"取：桥接插件就把它放在自己那里
+     * （`/mobile/app-update.json`，随桌面端一起打包），别人自建也用得上。
+     * 还没配对时才回退到这个公共地址。
+     */
+    const val FALLBACK_MANIFEST_URL = "https://m.zhuquan.xyz/mobile/app-update.json"
+
+    /** 配对地址 → 更新清单地址；空地址回退公共地址。 */
+    fun manifestUrl(base: String): String {
+        val trimmed = base.trim().trimEnd('/')
+        return if (trimmed.isBlank()) FALLBACK_MANIFEST_URL else "$trimmed/mobile/app-update.json"
+    }
     const val REPO = "zhuquan7237/deepseek-harness-mobile"
     private const val UA = "DshMobile"
 
@@ -63,9 +74,9 @@ object Updater {
         versionParts(version).take(4).fold(0L) { acc, part -> acc * 1000L + part }
 
     /** The newest of (manifest, GitHub) that beats [currentVersion], or null. */
-    suspend fun check(client: OkHttpClient, currentVersion: String): UpdateInfo? =
+    suspend fun check(client: OkHttpClient, currentVersion: String, base: String = ""): UpdateInfo? =
         withContext(Dispatchers.IO) {
-            val manifest = runCatching { fetchManifest(client) }.getOrNull()
+            val manifest = runCatching { fetchManifest(client, base) }.getOrNull()
             val github = runCatching { fetchGithub(client) }.getOrNull()
             listOfNotNull(manifest, github)
                 .filter { isNewer(it.version, currentVersion) }
@@ -82,11 +93,14 @@ object Updater {
     }
 
     /** The bridge-hosted manifest: tiny, no auth, no API quota. */
-    fun fetchManifest(client: OkHttpClient): UpdateInfo? {
-        val json = JSONObject(get(client, "$MANIFEST_URL?t=${System.currentTimeMillis()}"))
+    fun fetchManifest(client: OkHttpClient, base: String = ""): UpdateInfo? {
+        val json = JSONObject(get(client, "${manifestUrl(base)}?t=${System.currentTimeMillis()}"))
         val version = json.optString("version")
-        val apkUrl = json.optString("apkUrl")
+        var apkUrl = json.optString("apkUrl")
         if (version.isBlank() || apkUrl.isBlank()) return null
+        // 在同一个源上取 APK：桌面端安装包里带了一份，自建的用户不该跑到作者域名去下载。
+        val localBase = base.trim().trimEnd('/')
+        if (localBase.isNotBlank()) apkUrl = "$localBase/mobile/dsh-mobile.apk"
         return UpdateInfo(
             version = version,
             apkUrl = apkUrl,

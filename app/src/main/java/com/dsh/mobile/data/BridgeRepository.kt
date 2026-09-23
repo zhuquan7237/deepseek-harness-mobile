@@ -1080,7 +1080,7 @@ class BridgeRepository(context: Context) {
         scope.launch {
             _state.update { it.copy(updateChecking = true, updateError = "") }
             try {
-                val found = Updater.check(client, _state.value.version)
+                val found = Updater.check(client, _state.value.version, _state.value.base)
                 val skip = store.loadUpdateState().second
                 val visible = if (found != null && found.version == skip && !manual) null else found
                 _state.update { it.copy(updateChecking = false, update = visible) }
@@ -1097,7 +1097,7 @@ class BridgeRepository(context: Context) {
         scope.launch {
             val (last, _) = store.loadUpdateState()
             if (System.currentTimeMillis() - last < 6 * 60 * 60 * 1000L) return@launch
-            val found = runCatching { Updater.check(client, _state.value.version) }.getOrNull()
+            val found = runCatching { Updater.check(client, _state.value.version, _state.value.base) }.getOrNull()
             store.saveUpdateCheck(System.currentTimeMillis())
             if (found != null) _state.update { it.copy(update = found) }
         }

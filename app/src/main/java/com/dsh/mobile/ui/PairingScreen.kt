@@ -58,7 +58,12 @@ import com.dsh.mobile.R
 import com.dsh.mobile.ui.theme.LocalDsh
 
 /** Where a fresh install points before anyone types anything. */
-private const val DEFAULT_BASE = "https://m.zhuquan.xyz"
+/**
+ * 默认**不**指向任何人的服务器。以前这里写死了作者的公网地址，别人装了这个
+ * App 就会一直去连作者的电脑——这正是"扫码连不上"的一半原因。现在默认空着，
+ * 扫码（配对二维码里带着电脑地址）或手动填自己的电脑地址都可以。
+ */
+private const val DEFAULT_BASE = ""
 
 /**
  * Pairing: the ChatGPT form language — quiet title, filled fields, a full-width
@@ -147,7 +152,7 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
                 label = "服务器地址",
                 value = base,
                 onValueChange = { base = it },
-                placeholder = "https://m.zhuquan.xyz",
+                placeholder = "扫码自动填入，或填电脑地址",
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             )
             DshField(
