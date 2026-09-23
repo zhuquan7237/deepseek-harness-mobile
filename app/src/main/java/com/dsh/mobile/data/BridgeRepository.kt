@@ -457,6 +457,8 @@ class BridgeRepository(context: Context) {
 
     fun closeSession() {
         reloadJob?.cancel()
+        // 回到列表立刻刷新：正在进行中的任务要马上带着"正在执行"标识出现
+        loadSessions()
         _state.update {
             it.copy(
                 view = View.SESSIONS,
@@ -512,6 +514,13 @@ class BridgeRepository(context: Context) {
                     current.copy(
                         history = parsed.rows,
                         running = parsed.running,
+                        // 重进正在跑的会话要把"进行态"也恢复出来，否则看起来像卡住/没反应
+                        thinking = parsed.running,
+                        thinkingSince = when {
+                            !parsed.running -> 0L
+                            current.thinkingSince > 0L -> current.thinkingSince
+                            else -> System.currentTimeMillis()
+                        },
                         historyLoading = false,
                         revealText = if (fresh) last?.text else current.revealText,
                         modelProvider = selection?.first ?: current.modelProvider,

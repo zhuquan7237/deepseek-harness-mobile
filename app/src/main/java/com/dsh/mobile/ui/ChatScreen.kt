@@ -265,6 +265,16 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
         }
     }
 
+    // 正在跑的任务：每 10 秒静默重读一次历史（quiet，不触发打字机）。
+    // 长任务里引擎可能几十秒没有一点事件，只靠事件驱动会看起来"卡住"。
+    LaunchedEffect(state.running, state.sessionId) {
+        if (!state.running || state.sessionId == null) return@LaunchedEffect
+        while (true) {
+            delay(10_000)
+            repo.loadHistory(quiet = true)
+        }
+    }
+
     // IME 内边距加在**最外层**：键盘弹起时整列（含对话列表）一起被抬起来，
     // 列表可视区真的变矮，最后一条不会再被键盘压住。只给输入条加的话，
     // 列表仍然铺到屏幕底部，底下那一段就"消失"在键盘后面了。

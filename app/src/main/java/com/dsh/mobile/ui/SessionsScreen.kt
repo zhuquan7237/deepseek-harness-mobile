@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dsh.mobile.data.AppState
+import kotlinx.coroutines.delay
 import com.dsh.mobile.data.Conn
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.SessionSummary
@@ -86,6 +87,18 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
     var renameTarget by remember { mutableStateOf<SessionSummary?>(null) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
     var showUpdate by remember { mutableStateOf(false) }
+
+    // 一进列表就拉一次：从会话页返回时列表常常是旧的（真机反馈"跑着的任务不在列表里/没标识"）
+    LaunchedEffect(Unit) { repo.loadSessions() }
+    // 有任务在跑时轻量轮询：安静运行的回合不产生事件，列表会一直停在旧状态
+    val anyRunning = state.sessions.any { it.running }
+    LaunchedEffect(anyRunning) {
+        if (!anyRunning) return@LaunchedEffect
+        while (true) {
+            delay(10_000)
+            repo.loadSessions()
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -404,7 +417,19 @@ private fun SessionRow(session: SessionSummary, onClick: () -> Unit, onLongClick
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
         if (session.running) {
-            Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
+            // 醒目的进行中标识（原来是个 6dp 小点，真机上等于看不见）
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(palette.accent.copy(alpha = 0.16f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    "正在执行",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.accent,
+                )
+            }
         }
         Text(
             session.title,
