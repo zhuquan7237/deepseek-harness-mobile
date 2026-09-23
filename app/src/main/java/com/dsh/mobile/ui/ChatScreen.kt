@@ -62,6 +62,8 @@ import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.OpenInFull
+import androidx.compose.material.icons.outlined.CloseFullscreen
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.CircularProgressIndicator
@@ -99,6 +101,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.graphics.asImageBitmap
@@ -558,6 +561,10 @@ private fun MessageList(
 ) {
     val palette = LocalDsh.current
     val listState = rememberLazyListState()
+    // 键盘是否可见：只在布尔翻转时通知一次（每帧变化的高度值不能当 key）
+    val imeInsets = WindowInsets.ime
+    val density = LocalDensity.current
+    val imeOpen by remember { derivedStateOf { imeInsets.getBottom(density) > 0 } }
     val rows = state.history
     val live = state.live
     LazyColumn(
@@ -598,15 +605,19 @@ private fun MessageList(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .padding(top = 28.dp, start = 16.dp, end = 16.dp),
+                        // 键盘顶起时可视区只剩小半屏：收紧留白、收掉大立绘，
+                        // 推荐提问不再被切成半截（真机反馈"拉起键盘后布局不合理"）
+                        .padding(top = if (imeOpen) 8.dp else 28.dp, start = 16.dp, end = 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    WhaleMascot(
-                        resId = R.drawable.whale_face_normal,
-                        size = 112.dp,
-                        contentDescription = "鲸鱼娘",
-                    )
-                    Spacer(Modifier.height(8.dp))
+                    if (!imeOpen) {
+                        WhaleMascot(
+                            resId = R.drawable.whale_face_normal,
+                            size = 112.dp,
+                            contentDescription = "鲸鱼娘",
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
                     Text(
                         "电脑端在待命",
                         style = MaterialTheme.typography.titleMedium,
@@ -1147,6 +1158,11 @@ private fun Composer(
     // 照 ChatGPT：空着的时候是干净一行；一旦开始打字（或点进输入框拉起键盘），
     // 输入框右下角就出现模型切换入口
     var fieldFocused by remember { mutableStateOf(false) }
+    // 展开态 = 半屏长文编辑器（真机要求："可以把输入框拉起来，占半个屏幕"）
+    var composerExpanded by rememberSaveable { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    // "半个屏幕"按窗口高度算；键盘顶起时它仍能完整留在可视区（.42 与键盘高度量级相当）
+    val expandedMin = (LocalConfiguration.current.screenHeightDp.dp * 0.42f).coerceIn(180.dp, 420.dp)
     Row(
         Modifier
             .fillMaxWidth()
@@ -1161,6 +1177,12 @@ private fun Composer(
                 .background(palette.surface)
                 // 高度变化（模型入口出现/消失）自己带过渡，避免和键盘动画撞在一起时"闪"
                 .animateContentSize(tween(180))
+                // 整卡任意处点一下就聚焦输入框（按钮/胶囊自己是可点的，会先消费掉）。
+                // 放在 padding 之前 = 连内边距区域也算触区，彻底没有"空气墙"。
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { focusRequester.requestFocus() }
                 .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         ) {
             if (attachments.isNotEmpty()) {
@@ -1172,7 +1194,11 @@ private fun Composer(
                     onOpen = onOpenAttachment,
                 )
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth(),
+                // 展开态：加号/发送键贴着底部（半屏编辑器里它们不该浮在中间）
+                verticalAlignment = if (composerExpanded) Alignment.Bottom else Alignment.CenterVertically,
+            ) {
             // 布局照你发的那套：左边「+」，中间输入区，右边模型名（纯文本，不抢地方），最后发送键。
             // 整行垂直居中，长模型名不会再把它挤成两行。
             if (attachments.isEmpty()) {
@@ -1202,27 +1228,41 @@ private fun Composer(
                 onValueChange = { draft = it },
                 modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 36.dp, max = 140.dp)
+                    .focusRequester(focusRequester)
+                    .then(
+                        // 展开态用**固定高度**：只给 min 的话，装饰盒的 fillMaxHeight 会
+                        // 把输入框撑到占满剩余空间（实测 80% 屏），"半屏"就名存实亡
+                        if (composerExpanded) Modifier.height(expandedMin)
+                        else Modifier.heightIn(min = 36.dp, max = 140.dp)
+                    )
                     .onFocusChanged { fieldFocused = it.isFocused }
                     .padding(horizontal = 6.dp, vertical = 6.dp),
                 textStyle = inputStyle,
                 cursorBrush = SolidColor(palette.accent),
-                maxLines = 6,
+                maxLines = if (composerExpanded) Int.MAX_VALUE else 6,
                 // getBoundingBox 收的是**字符偏移**，空文本会越界崩溃——必须判空
                 onTextLayout = { result ->
-                    if (result.layoutInput.text.isNotEmpty() && result.lineCount > 0) {
+                    // ❗字形校准只对**单行**成立：getBoundingBox(0) 是首行墨迹框，
+                    // 多行时 (整体高度 - 首行墨迹) 会把整块文字向下推半截高度——
+                    // 上方空白凭空变多，末行还会被推出输入框的触摸区（真机"最后一行点不到、像空气墙"）。
+                    val target = if (result.lineCount == 1 && result.layoutInput.text.isNotEmpty()) {
                         val box = result.getBoundingBox(0)
-                        val target = (result.size.height - box.top - box.bottom) / 2f
-                        if (kotlin.math.abs(target - inkShift) > 0.5f) inkShift = target
-                    }
+                        (result.size.height - box.top - box.bottom) / 2f
+                    } else 0f
+                    if (kotlin.math.abs(target - inkShift) > 0.5f) inkShift = target
                 },
                 decorationBox = { innerTextField ->
                     // 高度用"至少 24dp"（=36dp 减去上下 6dp 内边距）而不是 fillMaxSize：
                     // fillMaxSize 会吃满外层允许的最大高度（140dp），整个输入卡片被撑爆，
                     // 文字浮在上面、模型胶囊和发送键沉到底部——上一版"文字没居中"就是这么来的
                     Box(
-                        Modifier.fillMaxWidth().heightIn(min = 24.dp),
-                        contentAlignment = Alignment.CenterStart,
+                        Modifier
+                            .fillMaxWidth()
+                            .then(
+                                if (composerExpanded) Modifier.fillMaxHeight()
+                                else Modifier.heightIn(min = 24.dp)
+                            ),
+                        contentAlignment = if (composerExpanded) Alignment.TopStart else Alignment.CenterStart,
                     ) {
                         if (draft.isEmpty()) {
                             Text(
@@ -1230,7 +1270,7 @@ private fun Composer(
                                 style = inputStyle.copy(color = palette.textTertiary),
                                 // 占位文字也按同一套实测校正，两种状态视觉位置一致
                                 onTextLayout = { result ->
-                                    if (result.layoutInput.text.isNotEmpty() && result.lineCount > 0) {
+                                    if (result.lineCount == 1 && result.layoutInput.text.isNotEmpty()) {
                                         val box = result.getBoundingBox(0)
                                         val target = (result.size.height - box.top - box.bottom) / 2f
                                         if (kotlin.math.abs(target - inkShift) > 0.5f) inkShift = target
@@ -1238,7 +1278,11 @@ private fun Composer(
                                 },
                             )
                         }
-                        Box(Modifier.offset(y = with(density) { inkShift.toDp() })) { innerTextField() }
+                        Box(
+                            Modifier
+                                .then(if (composerExpanded) Modifier.fillMaxHeight() else Modifier)
+                                .offset(y = with(density) { inkShift.toDp() }),
+                        ) { innerTextField() }
                     }
                 },
             )
@@ -1273,6 +1317,7 @@ private fun Composer(
                     val text = draft.trim()
                     if (text.isNotEmpty() || attachments.isNotEmpty()) {
                         draft = ""
+                        composerExpanded = false
                         if (attachments.isEmpty()) {
                             scope.launch {
                                 val ok = repo.send(text)
@@ -1295,12 +1340,22 @@ private fun Composer(
                 exit = fadeOut(tween(120)),
             ) {
                 Row(
-                    // 位置：发送键下切线与输入框底边之间的中线上（上留 6dp = 胶囊底内边距的一半，
-                    // 这样这行正好落在两线正中间）
-                    Modifier.fillMaxWidth().padding(end = 10.dp).padding(top = 6.dp),
+                    // 上留 2dp：原来 6dp 在键盘顶起时垫得太厚（真机反馈"空白别一个地方留太多"）
+                    Modifier.fillMaxWidth().padding(end = 10.dp).padding(top = 2.dp),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // 展开/收起：把输入框拉起到约半个屏幕，方便写长文本、检查排版
+                    CircleAction(
+                        background = Color.Transparent,
+                        icon = if (composerExpanded) Icons.Outlined.CloseFullscreen else Icons.Outlined.OpenInFull,
+                        tint = palette.textSecondary,
+                        contentDescription = if (composerExpanded) "收起输入框" else "展开输入框",
+                        enabled = true,
+                        size = 30.dp,
+                        iconSize = 16.dp,
+                    ) { composerExpanded = !composerExpanded }
+                    Spacer(Modifier.width(2.dp))
                     ComposerModelChip(state = state, onClick = onOpenModels)
                 }
             }
@@ -1378,17 +1433,19 @@ private fun CircleAction(
     tint: androidx.compose.ui.graphics.Color,
     contentDescription: String,
     enabled: Boolean,
+    size: androidx.compose.ui.unit.Dp = 36.dp,
+    iconSize: androidx.compose.ui.unit.Dp = 19.dp,
     onClick: () -> Unit,
 ) {
     Box(
         Modifier
-            .size(36.dp)
+            .size(size)
             .clip(CircleShape)
             .background(background)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(19.dp))
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(iconSize))
     }
 }
 
