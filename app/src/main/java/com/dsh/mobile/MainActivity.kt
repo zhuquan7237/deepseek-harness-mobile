@@ -26,6 +26,15 @@ class MainActivity : ComponentActivity() {
         )
         val repo = (application as DshApp).repo
         handleWhaleIntent(intent, repo)
+        // 调试专用崩溃触发器（仅 debug 包）：adb 启动时带 --ez dsh_crash_test true
+        // 用来实测"崩溃必产出日志"这条链路，release 包不含此代码。
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("dsh_crash_test", false) == true) {
+            intent.removeExtra("dsh_crash_test")
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                { throw IllegalStateException("dsh crash test (debug only)") },
+                600,
+            )
+        }
         setContent {
             val lifecycleOwner = LocalLifecycleOwner.current
             DisposableEffect(lifecycleOwner) {

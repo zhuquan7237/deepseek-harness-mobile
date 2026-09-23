@@ -157,7 +157,7 @@ object Wire {
      *  tool calls. The phone renders them as separate rows: the thinking folds
      *  away, the answer is the message, and a tool call names the tool so a
      *  runaway tool loop cannot bury the conversation. */
-    fun parseHistory(json: JSONObject): HistoryParse {
+    fun parseHistory(json: JSONObject, sessionId: String = ""): HistoryParse {
         val items = json.optJSONArray("items") ?: JSONArray()
         val rows = ArrayList<ChatRow>()
         var lastTurn: String? = null
@@ -182,10 +182,16 @@ object Wire {
                 }
                 "turn/end" -> {
                     lastTurn = "end"
-                    // 失败的回合要显式告诉用户原因（真机反馈"没输出也没有报错"）
-                    turnEndError(data)?.let { rows.add(ChatRow(Role.ERROR, it)) }
+                    // 失败的回合要显式告诉用户原因（真机反馈"没输出也没有报错"）。
+                    // 每条失败行都带稳定日志编号（按会话+文本算，实时/历史两条路径收敛），
+                    // 所以"聊天里看得到报错"和"日志仓库里有这一条"永远一一对应。
+                    turnEndError(data)?.let {
+                        rows.add(ChatRow(Role.ERROR, it, logId = errorLogId(sessionId, "turn", it)))
+                    }
                     // 被输出长度上限截断的回合同理：有结束、没答案，别让用户以为卡死
-                    turnEndTruncated(data)?.let { rows.add(ChatRow(Role.TRUNCATED, it)) }
+                    turnEndTruncated(data)?.let {
+                        rows.add(ChatRow(Role.TRUNCATED, it, logId = errorLogId(sessionId, "trunc", it)))
+                    }
                 }
                 "step/start" -> stepStart = time
                 "user/message" -> {
@@ -362,6 +368,26 @@ object Wire {
         msg = msg.replace(Regex("\\s*\\(request id:[^)]*\\)"), "").trim()
         if (msg.length > 160) msg = msg.take(159) + "…"
         return "请求失败：$msg"
+    }
+
+    /**
+     * 稳定日志编号。同一个失败在"实时帧"和"历史回放"两条路径上必须算出同一个 id，
+     * 否则重进会话会补出重复条目——实测两边的 seq 是**两个不同的计数空间**
+     * （实时帧的 seq 是桥接的全局帧计数器，历史 event.seq 是引擎事件序号，
+     * 同一场失败分别是 298 和 45），所以基数里绝不能带 seq。
+     * 基数 = (会话, 类型, 报错文本)：两条路径拿到的文本完全相同（都走 turnEndError
+     * 归一化），因此天然收敛；同会话里一模一样重复的失败会合并成一条（可接受）。
+     * FNV-1a 32 位 → 36 进制 6 位，短到能直接印在界面上念出来。
+     */
+    fun errorLogId(sessionId: String, kind: String, text: String): String {
+        val basis = "$sessionId|$kind|$text"
+        var h = -2128831035 // FNV offset basis 2166136261 的 Int 补码
+        for (ch in basis) {
+            h = h xor ch.code
+            h *= 16777619
+        }
+        val u = h.toLong() and 0xFFFFFFFFL
+        return "E" + u.toString(36).uppercase().padStart(6, '0').takeLast(6)
     }
 
     /**

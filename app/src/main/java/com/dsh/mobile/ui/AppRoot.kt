@@ -40,6 +40,7 @@ private enum class Screen(val depth: Int) {
     CHAT(2),
     SETTINGS(2),
     MODELS(3),
+    LOGS(3),
 }
 
 private fun screenOf(state: AppState): Screen = when {
@@ -47,6 +48,8 @@ private fun screenOf(state: AppState): Screen = when {
     // Checked before the token test: the scanner exists precisely because the
     // phone is not paired yet.
     state.view == View.SCAN -> Screen.SCAN
+    // 日志页同样要能在未配对时进入——配对失败/连不上正是最需要日志的场景
+    state.view == View.LOGS -> Screen.LOGS
     state.token == null || state.repairing -> Screen.PAIRING
     state.view == View.MODELS -> Screen.MODELS
     state.view == View.SETTINGS -> Screen.SETTINGS
@@ -126,12 +129,23 @@ fun AppRoot(repo: BridgeRepository) {
                         Screen.SCAN -> ScanScreen(repo)
                         Screen.SETTINGS -> SettingsScreen(state, repo)
                         Screen.MODELS -> ModelsScreen(state, repo)
+                        Screen.LOGS -> LogsScreen(state, repo)
                         Screen.CHAT -> ChatScreen(state, repo)
                         Screen.SESSIONS -> SessionsScreen(state, repo, sessionsScroll)
                     }
                 }
             }
             ToastHost(state.toast)
+            // 「发送日志」的同意弹窗放在这里：聊天错误卡和日志页都会触发它，
+            // 用户在确认框里明确选一次"发/不发"（用户要求：可以选择是否发送）。
+            if (state.logAsk != null) {
+                SendLogsDialog(
+                    count = state.logAsk ?: 0,
+                    sending = state.logSending,
+                    onCancel = { repo.cancelSendLogs() },
+                    onConfirm = { repo.confirmSendLogs() },
+                )
+            }
         }
     }
 }

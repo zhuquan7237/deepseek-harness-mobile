@@ -263,6 +263,16 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             style = MaterialTheme.typography.labelSmall,
             color = palette.textSecondary,
         )
+        // 配对失败/连不上时最需要日志：入口放这里，不用等配对成功
+        Text(
+            "连接遇到问题？查看错误日志",
+            style = MaterialTheme.typography.labelMedium,
+            color = palette.textTertiary,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { repo.openLogs() }
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+        )
         Spacer(Modifier.height(28.dp))
     }
 }

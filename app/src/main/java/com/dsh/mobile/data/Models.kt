@@ -3,7 +3,7 @@ package com.dsh.mobile.data
 import androidx.compose.runtime.Immutable
 
 /** Which screen the shell is showing. */
-enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS }
+enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS, LOGS }
 
 /**
  * The live link to the desktop bridge, as the user sees it:
@@ -60,6 +60,8 @@ data class ChatRow(
     val raw: String = "",
     /** 事件时间（epoch ms）；执行记录折叠后靠它算「这一段用了多久」。 */
     val time: Long = 0L,
+    /** 失败行对应的错误日志编号（错误卡上显示 + 发送入口；其余行为 null）。 */
+    val logId: String? = null,
 )
 
 /** One in-flight assistant bubble, keyed by `turn:step`. */
@@ -181,6 +183,12 @@ data class AppState(
     val updateChecking: Boolean = false,
     val updateError: String = "",
     val updateProgress: Int = -1,
+    // 错误日志（诊断）
+    val logPending: Int = 0,
+    val logTotal: Int = 0,
+    /** 非 null = 正在征求「发送 N 条错误日志」的同意（AppRoot 弹确认框）。 */
+    val logAsk: Int? = null,
+    val logSending: Boolean = false,
 ) {
     /** Derived so the old boolean call sites and the tri-state can never drift apart. */
     val connected: Boolean get() = conn == Conn.ONLINE

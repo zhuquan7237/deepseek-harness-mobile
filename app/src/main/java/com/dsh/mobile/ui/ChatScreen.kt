@@ -124,6 +124,7 @@ import com.dsh.mobile.R
 import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.ChatRow
+import com.dsh.mobile.data.ErrorLog
 import com.dsh.mobile.data.Conn
 import com.dsh.mobile.data.LiveBubble
 import com.dsh.mobile.data.Role
@@ -392,6 +393,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 repo.loadSessionFiles()
             },
             onOpenExternal = { lang, code -> openCodeExternally(context, lang, code) },
+            onSendLog = { repo.requestSendLogs() },
             onSaveCode = { lang, code ->
                 val where = saveTextToDownloads(context, codeFileName(lang), code)
                 if (where != null) repo.toast("已保存到 $where") else repo.toast("保存失败，已复制到剪贴板")
@@ -672,6 +674,7 @@ private fun MessageList(
     onRevealDone: () -> Unit,
     onOpenFiles: () -> Unit,
     onOpenExternal: (String, String) -> Unit,
+    onSendLog: () -> Unit,
     modifier: Modifier,
 ) {
     val palette = LocalDsh.current
@@ -685,6 +688,10 @@ private fun MessageList(
     val live = state.live
     // 一次任务的执行记录（思考/工具调用）折成一行摘要：默认收起，
     // 正在跑的尾巴自动展开（你在看它干活），跑完自动合上。手动开合过就以手动为准。
+    // 已发送的日志编号集合（错误卡据此显示「已发送」，logPending/Total 一变就重算）
+    val sentLogIds = remember(state.logPending, state.logTotal) {
+        ErrorLog.all().asSequence().filter { it.sent }.map { it.id }.toSet()
+    }
     val traceBlocks = Wire.traceBlocks(rows, state.historyEndTime)
     val blockAt = traceBlocks.associateBy { it.start }
     val expanded = remember { mutableStateMapOf<Int, Boolean>() }
@@ -724,6 +731,8 @@ private fun MessageList(
                             onRegenerate = onRegenerate,
                             onPreview = onPreview,
                             onOpenExternal = onOpenExternal,
+                            onSendLog = onSendLog,
+                            logSent = row.logId != null && row.logId in sentLogIds,
                         )
                     }
                 }
@@ -990,6 +999,8 @@ private fun MessageRow(
     onRegenerate: () -> Unit = {},
     onPreview: (Wire.Artifact) -> Unit = {},
     onOpenExternal: (String, String) -> Unit = { _, _ -> },
+    onSendLog: () -> Unit = {},
+    logSent: Boolean = false,
 ) {
 
     /** Characters drawn so far; the animation only runs for a freshly arrived reply. */
@@ -1013,12 +1024,36 @@ private fun MessageRow(
             contentAlignment = Alignment.CenterStart,
         ) {
             Surface(color = palette.danger.copy(alpha = 0.12f), shape = RoundedCornerShape(14.dp)) {
-                Text(
-                    "⚠️ $body",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.danger,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                )
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    Text(
+                        "⚠️ $body",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.danger,
+                    )
+                    // 报错必带日志编号：用户能看见"这条已经记下来了"，一键即可发送给维护者
+                    val logId = row.logId
+                    if (logId != null) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "日志 $logId",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.danger.copy(alpha = 0.7f),
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                if (logSent) "已发送 ✓" else "发送日志",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = palette.danger,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(palette.danger.copy(alpha = if (logSent) 0.08f else 0.16f))
+                                    .clickable(enabled = !logSent) { onSendLog() }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
         Role.TRUNCATED -> Box(

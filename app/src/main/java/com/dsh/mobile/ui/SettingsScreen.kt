@@ -165,6 +165,15 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
             if (state.server != null) {
                 SettingsValue("桥接", "${state.server.product} · v${state.server.version}")
             }
+            SettingsAction(
+                label = "错误日志",
+                value = when {
+                    state.logTotal == 0 -> "暂无"
+                    state.logPending > 0 -> "${state.logPending} 条待发送 / 共 ${state.logTotal} 条"
+                    else -> "共 ${state.logTotal} 条 · 已全部发送"
+                },
+                onClick = { repo.openLogs() },
+            )
             Text(
                 "手机是控制器和查看器：会话、模型、以及真正干活的电脑端都不在这台设备上。",
                 style = MaterialTheme.typography.bodySmall,

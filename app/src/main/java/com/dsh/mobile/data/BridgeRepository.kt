@@ -103,6 +103,7 @@ class BridgeRepository(context: Context) {
         stream.onUnauthorized = { handleUnauthorized() }
         stream.onConn = { conn ->
             val was = _state.value.connected
+            EventTrail.add("conn -> $conn")
             if (_state.value.conn != conn) _state.update { it.copy(conn = conn) }
             if (conn == Conn.ONLINE && !was) onReconnected()
         }
@@ -115,6 +116,7 @@ class BridgeRepository(context: Context) {
 
     private suspend fun boot() {
         val stored = store.load()
+        EventTrail.add("boot v${BuildConfig.VERSION_NAME} base=${stored.base.ifBlank { "-" }}")
         defaultModel = stored.defaultModel.takeIf { it.isNotBlank() }?.let {
             Triple(stored.defaultProvider, it, stored.defaultLabel.ifBlank { it })
         }
@@ -131,6 +133,7 @@ class BridgeRepository(context: Context) {
                 version = BuildConfig.VERSION_NAME,
             )
         }
+        refreshLogCounts()
         if (stored.token.isBlank() || stored.base.isBlank()) {
             _state.update { it.copy(ready = true, view = View.PAIRING, base = stored.base) }
             return
@@ -227,7 +230,7 @@ class BridgeRepository(context: Context) {
                 loadSessions()
             } catch (error: Exception) {
                 _state.update { it.copy(pairing = false) }
-                toast(error.message ?: "配对失败")
+                fail("pair", "配对失败：${error.message ?: "网络错误"}")
             }
         }
     }
@@ -336,7 +339,7 @@ class BridgeRepository(context: Context) {
                 handleApiError(error, "读取会话失败")
             } catch (error: Exception) {
                 _state.update { it.copy(sessionsLoading = false) }
-                toast("读取会话失败：${error.message ?: "网络错误"}")
+                fail("sessions", "读取会话失败：${error.message ?: "网络错误"}")
             }
         }
     }
@@ -356,14 +359,14 @@ class BridgeRepository(context: Context) {
             try {
                 val id = api.createSession(token)
                 if (id.isBlank()) {
-                    toast("新建会话没有返回 id")
+                    fail("session", "新建会话没有返回 id")
                     return@launch
                 }
                 // 用户设了"新对话默认模型"就套上：这样新会话不用每次手选模型
                 val wanted = defaultModel
                 if (wanted != null) {
                     runCatching { api.selectModel(token, id, wanted.first, wanted.second) }
-                        .onFailure { toast("默认模型没套上：${it.message ?: "网络错误"}") }
+                        .onFailure { fail("model", "默认模型没套上：${it.message ?: "网络错误"}") }
                 }
                 loadSessions()
                 openSession(id)
@@ -375,7 +378,7 @@ class BridgeRepository(context: Context) {
             } catch (error: BridgeException) {
                 handleApiError(error, "新建会话失败")
             } catch (error: Exception) {
-                toast("新建会话失败：${error.message ?: "网络错误"}")
+                fail("session", "新建会话失败：${error.message ?: "网络错误"}")
             }
         }
     }
@@ -418,7 +421,7 @@ class BridgeRepository(context: Context) {
             } catch (error: BridgeException) {
                 handleApiError(error, "重命名失败")
             } catch (error: Exception) {
-                toast("重命名失败：${error.message ?: "网络错误"}")
+                fail("session", "重命名失败：${error.message ?: "网络错误"}")
             }
         }
     }
@@ -455,6 +458,7 @@ class BridgeRepository(context: Context) {
                 modelLabel = label,
             )
         }
+        EventTrail.add("open session ${sessionId.take(8)}")
         loadHistory(sessionId)
         loadSessionFiles(sessionId)
         // 票据预取：第一次点预览立刻就能开始加载，不再等一趟往返
@@ -492,7 +496,7 @@ class BridgeRepository(context: Context) {
             handleApiError(error, "追加消息失败")
             false
         } catch (error: Exception) {
-            toast("追加消息失败：${error.message ?: "网络错误"}")
+            fail("send", "追加消息失败：${error.message ?: "网络错误"}")
             false
         }
     }
@@ -552,7 +556,7 @@ class BridgeRepository(context: Context) {
                 fileTicketCache = Triple(sid, fresh, System.currentTimeMillis() + 25L * 60_000L)
                 fresh
             } catch (error: Exception) {
-                toast("预览授权失败：${error.message ?: "网络错误"}")
+                fail("files", "预览授权失败：${error.message ?: "网络错误"}")
                 return null
             }
         }
@@ -590,7 +594,7 @@ class BridgeRepository(context: Context) {
             handleApiError(error, "下载失败")
             false
         } catch (error: Exception) {
-            toast("下载失败：${error.message ?: "网络错误"}")
+            fail("files", "下载失败：${error.message ?: "网络错误"}")
             false
         }
     }
@@ -624,7 +628,10 @@ class BridgeRepository(context: Context) {
             val json = api.history(token, sid, 100)
             // JSON 解析放到后台：大会话（几百条、每条带着几十 KB 的思考）在手机上
             // 不是零成本，放在主线程解析就是「点进去顿一下」的来源。
-            val parsed = withContext(Dispatchers.Default) { Wire.parseHistory(json) }
+            val parsed = withContext(Dispatchers.Default) { Wire.parseHistory(json, sid) }
+            // 历史里的失败行也要有日志：App 不在场时发生的回合靠这里补录。
+            // id 是确定性的（session+seq），实时路径已记过的不会重复。
+            backfillLogs(parsed.rows, sid)
             val selection = Wire.parseModelSelection(json)
             _state.update { current ->
                 if (current.sessionId != sid) {
@@ -662,7 +669,7 @@ class BridgeRepository(context: Context) {
             if (!quiet) handleApiError(error, "读取历史失败")
         } catch (error: Exception) {
             _state.update { it.copy(historyLoading = false) }
-            if (!quiet) toast("读取历史失败：${error.message ?: "网络错误"}")
+            if (!quiet) fail("history", "读取历史失败：${error.message ?: "网络错误"}")
         }
     }
 
@@ -706,7 +713,7 @@ class BridgeRepository(context: Context) {
         } catch (error: Exception) {
             _state.update { it.copy(history = it.history.dropLast(1), running = false, sending = false) }
             if (error is BridgeException) handleApiError(error, "发送失败")
-            else toast("发送失败：${error.message ?: "网络错误"}")
+            else fail("send", "发送失败：${error.message ?: "网络错误"}")
             false
         }
     }
@@ -718,6 +725,7 @@ class BridgeRepository(context: Context) {
         val token = s.token ?: return false
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
+        EventTrail.add("send ${trimmed.length} chars sid=${sid.take(8)}")
         _state.update {
             it.copy(history = it.history + ChatRow(Role.USER, trimmed), running = true, sending = true, )
         }
@@ -738,7 +746,7 @@ class BridgeRepository(context: Context) {
         } catch (error: Exception) {
             _state.update { it.copy(history = it.history.dropLast(1), running = false, sending = false) }
             if (error is BridgeException) handleApiError(error, "发送失败")
-            else toast("发送失败：${error.message ?: "网络错误"}")
+            else fail("send", "发送失败：${error.message ?: "网络错误"}")
             false
         }
     }
@@ -755,7 +763,7 @@ class BridgeRepository(context: Context) {
             } catch (error: BridgeException) {
                 handleApiError(error, "重新生成失败")
             } catch (error: Exception) {
-                toast("重新生成失败：${error.message ?: "网络错误"}")
+                fail("send", "重新生成失败：${error.message ?: "网络错误"}")
             }
         }
     }
@@ -771,7 +779,7 @@ class BridgeRepository(context: Context) {
             } catch (error: BridgeException) {
                 handleApiError(error, "停止失败")
             } catch (error: Exception) {
-                toast("停止失败：${error.message ?: "网络错误"}")
+                fail("send", "停止失败：${error.message ?: "网络错误"}")
             }
         }
     }
@@ -796,7 +804,7 @@ class BridgeRepository(context: Context) {
             } catch (error: BridgeException) {
                 handleApiError(error, "切换模型失败")
             } catch (error: Exception) {
-                toast("切换模型失败：${error.message ?: "网络错误"}")
+                fail("model", "切换模型失败：${error.message ?: "网络错误"}")
             }
         }
     }
@@ -819,7 +827,7 @@ class BridgeRepository(context: Context) {
                 handleApiError(error, "读取模型失败")
             } catch (error: Exception) {
                 _state.update { it.copy(modelsLoading = false) }
-                toast("读取模型失败：${error.message ?: "网络错误"}")
+                fail("model", "读取模型失败：${error.message ?: "网络错误"}")
             }
         }
     }
@@ -956,6 +964,7 @@ class BridgeRepository(context: Context) {
         if (epoch.isNotEmpty() && epoch != bridgeEpoch) {
             bridgeEpoch = epoch
             lastSeq = 0L
+            EventTrail.add("hello: epoch 变化 → 全量重读")
             scope.launch {
                 store.saveEpoch(epoch)
                 store.saveSeq(0L)
@@ -963,7 +972,10 @@ class BridgeRepository(context: Context) {
             onReconnected()
             return
         }
-        if (data.optBoolean("gap", false)) onReconnected()
+        if (data.optBoolean("gap", false)) {
+            EventTrail.add("hello: gap → 全量重读")
+            onReconnected()
+        }
     }
 
     private fun handleEvent(frame: JSONObject) {
@@ -977,8 +989,27 @@ class BridgeRepository(context: Context) {
             }
             "turn/end" -> {
                 // 失败/被截断的回合不会再有 assistant/message，常规重载不会触发 ——
-                // 单独补一次，让 Wire.parseHistory 生成的 ERROR / 截断提示行显示出来
-                val failed = Wire.turnEndError(data) != null || Wire.turnEndTruncated(data) != null
+                // 单独补一次，让 Wire.parseHistory 生成的 ERROR / 截断提示行显示出来。
+                // 同时在这里落错误日志：聊天里那条 ERROR 行和日志仓库是同一条（同一编号）。
+                val turnError = Wire.turnEndError(data)
+                val turnCut = Wire.turnEndTruncated(data)
+                if (turnError != null) {
+                    val logId = Wire.errorLogId(sid, "turn", turnError)
+                    Log.i(TAG, "live error log $logId")
+                    ErrorLog.record(
+                        id = logId,
+                        cat = "turn", msg = turnError, detail = turnDetail(sid, data),
+                    )
+                    refreshLogCounts()
+                }
+                if (turnCut != null) {
+                    ErrorLog.record(
+                        id = Wire.errorLogId(sid, "trunc", turnCut),
+                        cat = "turn", msg = turnCut, detail = turnDetail(sid, data),
+                    )
+                    refreshLogCounts()
+                }
+                val failed = turnError != null || turnCut != null
                 if (failed) scheduleHistoryReload() else completionPending = true
                 // 这一回合可能产出了新文件：静默刷新本会话的生成文件列表（卡片随之出现）
                 _state.value.sessionId?.let { sid -> loadSessionFiles(sid, quiet = true) }
@@ -1066,11 +1097,98 @@ class BridgeRepository(context: Context) {
         _state.update { it.copy(toast = ToastMsg(message, toastCounter)) }
     }
 
+    /**
+     * 用户可见失败的单点出口：落日志 + 提示（提示里带日志编号）。
+     * 规则（用户定）：**报错必有日志**——所有失败分支都必须走这里或 handleApiError。
+     */
+    fun fail(category: String, message: String, detail: String = "") {
+        val entry = ErrorLog.record(cat = category, msg = message, detail = detail)
+        toast("$message（日志 ${entry.id}）")
+        refreshLogCounts()
+    }
+
+    fun refreshLogCounts() {
+        val (pending, total) = ErrorLog.counts()
+        _state.update {
+            if (it.logPending != pending || it.logTotal != total) {
+                it.copy(logPending = pending, logTotal = total)
+            } else {
+                it
+            }
+        }
+    }
+
+    /** 失败回合的日志细节（会话/模型/原始 reason 摘要；不含聊天内容）。 */
+    private fun turnDetail(sid: String, data: JSONObject): String {
+        val model = listOf(_state.value.modelProvider, _state.value.modelId)
+            .filter { it.isNotBlank() }.joinToString("/")
+        val reason = data.optJSONObject("reason")?.toString().orEmpty().take(2500)
+        return "session=$sid\nmodel=$model\nreason=$reason"
+    }
+
+    /** 历史回放的失败行补录（确定性 id，天然去重）。 */
+    private fun backfillLogs(rows: List<ChatRow>, sid: String) {
+        var changed = false
+        for (row in rows) {
+            val id = row.logId ?: continue
+            if (ErrorLog.exists(id)) continue
+            Log.i(TAG, "backfill log $id")
+            ErrorLog.record(id = id, cat = "turn", msg = row.text, detail = "会话 $sid（打开会话时从历史补录）")
+            changed = true
+        }
+        if (changed) refreshLogCounts()
+    }
+
+    // ------------------------------------------------------------ 错误日志（诊断）
+
+    fun openLogs() {
+        refreshLogCounts()
+        _state.update { it.copy(view = View.LOGS) }
+    }
+
+    fun closeLogs() {
+        _state.update { it.copy(view = View.SETTINGS) }
+    }
+
+    /** 用户点「发送日志」：先弹确认（发不发由用户定），确认后才真正上传。 */
+    fun requestSendLogs() {
+        val pending = ErrorLog.pending().size
+        if (pending <= 0) {
+            toast("没有待发送的日志")
+            return
+        }
+        _state.update { it.copy(logAsk = pending) }
+    }
+
+    fun cancelSendLogs() {
+        _state.update { it.copy(logAsk = null) }
+    }
+
+    fun confirmSendLogs() {
+        val pending = ErrorLog.pending()
+        if (pending.isEmpty()) {
+            _state.update { it.copy(logAsk = null) }
+            return
+        }
+        _state.update { it.copy(logAsk = null, logSending = true) }
+        scope.launch {
+            val receipt = LogUplink.send(appContext, pending)
+            if (receipt != null) {
+                ErrorLog.markSent(pending.map { it.id })
+                toast("日志已发送 · 回执 $receipt")
+            } else {
+                toast("没发出去：网络不通，日志还留着，可稍后重试")
+            }
+            _state.update { it.copy(logSending = false) }
+            refreshLogCounts()
+        }
+    }
+
     private fun handleApiError(error: BridgeException, fallback: String) {
         if (error.code == "E_UNAUTHORIZED") {
             handleUnauthorized()
         } else {
-            toast(error.message.ifBlank { fallback })
+            fail("api", error.message.ifBlank { fallback }, "code=${error.code}")
         }
     }
 
@@ -1082,7 +1200,8 @@ class BridgeRepository(context: Context) {
             val theme = _state.value.theme
             store.clearBinding()
             _state.update { AppState(ready = true, theme = theme, base = base, view = View.PAIRING) }
-            toast("令牌已失效，请重新配对")
+            fail("auth", "令牌已失效，请重新配对")
+            EventTrail.add("revoked: token cleared")
         }
     }
 
@@ -1138,7 +1257,7 @@ class BridgeRepository(context: Context) {
                 onSaved(false)
             } catch (error: Exception) {
                 _state.update { it.copy(modelsSaving = false) }
-                toast("保存模型失败：${error.message ?: "网络错误"}")
+                fail("model", "保存模型失败：${error.message ?: "网络错误"}")
                 onSaved(false)
             }
         }
@@ -1157,7 +1276,7 @@ class BridgeRepository(context: Context) {
                 handleApiError(error, "保存密钥失败")
                 onDone(false)
             } catch (error: Exception) {
-                toast("保存密钥失败：${error.message ?: "网络错误"}")
+                fail("model", "保存密钥失败：${error.message ?: "网络错误"}")
                 onDone(false)
             }
         }
@@ -1227,7 +1346,7 @@ class BridgeRepository(context: Context) {
                 if (manual) toast(if (found == null) "已是最新版本 ${_state.value.version}" else "发现新版本 ${found.version}")
             } catch (error: Exception) {
                 _state.update { it.copy(updateChecking = false, updateError = error.message ?: "网络错误") }
-                if (manual) toast("检查更新失败：${error.message ?: "网络错误"}")
+                if (manual) fail("update", "检查更新失败：${error.message ?: "网络错误"}")
             }
         }
     }
@@ -1268,7 +1387,7 @@ class BridgeRepository(context: Context) {
                 Updater.install(appContext, file)
             } catch (error: Exception) {
                 _state.update { it.copy(updateProgress = -1) }
-                toast(error.message ?: "下载失败")
+                fail("update", error.message ?: "下载失败")
             }
         }
     }
