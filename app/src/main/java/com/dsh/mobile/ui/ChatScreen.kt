@@ -384,8 +384,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                     .align(Alignment.BottomStart)
                     .padding(start = 12.dp, bottom = 82.dp)
                     .width(310.dp)
-                    .heightIn(max = 420.dp)
-                    .border(1.dp, palette.textSecondary.copy(alpha = 0.12f), RoundedCornerShape(20.dp)),
+                    .heightIn(max = 480.dp)
+                    .border(1.dp, palette.textSecondary.copy(alpha = 0.22f), RoundedCornerShape(20.dp)),
                 shape = RoundedCornerShape(20.dp),
                 color = palette.surface,
                 shadowElevation = 10.dp,
@@ -1408,6 +1408,7 @@ private fun ModelMenu(
                     .padding(start = 16.dp, end = 16.dp, top = 12.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(palette.surfaceHi)
+                    .border(1.dp, palette.textSecondary.copy(alpha = 0.16f), RoundedCornerShape(12.dp))
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1523,8 +1524,10 @@ private fun ModelMenu(
                     item.modelId == state.modelId && (state.modelProvider.isEmpty() || item.provider == state.modelProvider)
                 }
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
-                    contentPadding = PaddingValues(bottom = 18.dp),
+                    // 用 weight 占"剩下的空间"：列表可滚，但底部的默认模型那一行永远留得住。
+                    // 之前列表自己写死 420dp，与外层 420dp 的容器打架，底部那行被挤出了可视区。
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                    contentPadding = PaddingValues(bottom = 8.dp),
                 ) {
                     if (active != null) {
                         item(key = "active") {
@@ -1649,9 +1652,19 @@ private fun ModelMenu(
         // 底部：把"当前这个模型"设成新对话默认（用户要求：新开对话不用再手选）
         if (state.modelId.isNotBlank()) {
             val already = state.modelProvider == defaultTriple?.first && state.modelId == defaultTriple?.second
+            // 和上面的模型列表明确分开：一条分隔线 + 小标题 + 带描边的卡片
+            Hairline(Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp))
+            Text(
+                "默认模型",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+                modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 4.dp),
+            )
             Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, end = 16.dp).padding(bottom = 4.dp)
+                Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp).padding(bottom = 12.dp)
                     .clip(RoundedCornerShape(12.dp))
+                    .background(palette.surfaceHi)
+                    .border(1.dp, palette.textSecondary.copy(alpha = 0.16f), RoundedCornerShape(12.dp))
                     .clickable(onClick = onSetDefault)
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
