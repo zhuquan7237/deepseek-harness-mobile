@@ -329,7 +329,7 @@ class BridgeRepository(context: Context) {
             _state.update { it.copy(sessionsLoading = true) }
             try {
                 val json = api.sessions(token, query)
-                val list = Wire.parseSessions(json)
+                val list = withContext(Dispatchers.Default) { Wire.parseSessions(json) }
                 _state.update { it.copy(sessions = list, sessionsLoading = false) }
             } catch (error: BridgeException) {
                 _state.update { it.copy(sessionsLoading = false) }
@@ -447,6 +447,9 @@ class BridgeRepository(context: Context) {
                 history = emptyList(),
                 live = emptyList(),
                 running = false,
+                thinking = false,
+                thinkingSince = 0L,
+                sessionFiles = emptyList(),
                 modelProvider = provider,
                 modelId = model,
                 modelLabel = label,
@@ -463,20 +466,10 @@ class BridgeRepository(context: Context) {
         fileTicketCache = null
         // 回到列表立刻刷新：正在进行中的任务要马上带着"正在执行"标识出现
         loadSessions()
-        _state.update {
-            it.copy(
-                view = View.SESSIONS,
-                sessionId = null,
-                sessionTitle = "",
-                sessionCwd = "",
-                history = emptyList(),
-                live = emptyList(),
-                running = false,
-                thinking = false,
-                thinkingSince = 0L,
-                sessionFiles = emptyList(),
-            )
-        }
+        // ❗只把 view 切回列表，**不清空会话状态**：退场那 300ms 里聊天页还要原样渲染，
+        // 一清空它就会在滑走的过程中"变成空状态"（页面瞬间变空 = 一眼的不自然）。
+        // 真正的重置交给下一次 openSession（它自带整套清理）。
+        _state.update { it.copy(view = View.SESSIONS) }
     }
 
     /**
@@ -629,7 +622,9 @@ class BridgeRepository(context: Context) {
         if (!quiet) _state.update { it.copy(historyLoading = true) }
         try {
             val json = api.history(token, sid, 100)
-            val parsed = Wire.parseHistory(json)
+            // JSON 解析放到后台：大会话（几百条、每条带着几十 KB 的思考）在手机上
+            // 不是零成本，放在主线程解析就是「点进去顿一下」的来源。
+            val parsed = withContext(Dispatchers.Default) { Wire.parseHistory(json) }
             val selection = Wire.parseModelSelection(json)
             _state.update { current ->
                 if (current.sessionId != sid) {

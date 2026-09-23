@@ -6,13 +6,15 @@ import android.content.ContextWrapper
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.scaleIn
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -66,6 +68,9 @@ fun AppRoot(repo: BridgeRepository) {
     DshTheme(state.theme) {
         val palette = LocalDsh.current
         SystemBarTint(dark = palette.dark)
+        // 会话列表的滚动位置提到这里：切去聊天/设置再回来时，列表还在你离开时的地方，
+        // 而不是「返回后回到顶部」——那一下最伤「没离开过」的自然感。
+        val sessionsScroll = rememberLazyListState()
         Box(Modifier.fillMaxSize().background(palette.bg)) {
             AnimatedContent(
                 targetState = screenOf(state),
@@ -81,11 +86,11 @@ fun AppRoot(repo: BridgeRepository) {
                     //    "ong Reply") and it looks like a rendering fault, not motion.
                     //
                     // So exactly one layer animates and it is always opaque:
-                    // forward — the next screen slides in from beyond the right edge,
-                    // its left edge on screen from the first frame, over a screen that
-                    // stays perfectly still (this is also Android's own default).
-                    // back — the previous screen settles in from a hair of zoom; no
-                    // sideways offset exists to clip.
+                    // 前进 — 新页整幅从右边缘滑入（左缘从第一帧就在屏内），旧页原地轻微后退；
+                    // 返回 — 镜像：新页整幅从左侧滑入把旧页盖回去（AnimatedContent 里入场层
+                    //        永远画在退场层之上，「旧页滑出露出新页」那种写法在这里做不出来，
+                    //        能保持同一观感又不裁切的就是这一种）；
+                    // 启动（LOADING）— 手里只有一枚 spinner，直接错峰淡换。
                     val forward = targetState.depth > initialState.depth
                     // Both screens animate on purpose. A screen whose exit has no
                     // motion (ExitTransition.None, a zero-offset slide, even
@@ -94,11 +99,15 @@ fun AppRoot(repo: BridgeRepository) {
                     // black where the old page was. Scaling the outgoing keeps it in
                     // the composition for the whole transition without translating it
                     // sideways (a translation is what clips a left-aligned list).
-                    val recede = scaleOut(tween(300, easing = PushEasing), targetScale = 0.96f)
-                    if (forward) {
-                        slideInHorizontally(tween(300, easing = PushEasing)) { it } togetherWith recede
-                    } else {
-                        scaleIn(tween(280, easing = PushEasing), initialScale = 0.94f) togetherWith recede
+                    val recede = scaleOut(tween(Motion.SCREEN, easing = PushEasing), targetScale = 0.96f)
+                    when {
+                        initialState == Screen.LOADING || targetState == Screen.LOADING ->
+                            fadeIn(tween(Motion.BASE, delayMillis = 120, easing = PushEasing)) togetherWith
+                                fadeOut(tween(140, easing = PushEasing))
+                        forward ->
+                            slideInHorizontally(tween(Motion.SCREEN, easing = PushEasing)) { it } togetherWith recede
+                        else ->
+                            slideInHorizontally(tween(Motion.SCREEN, easing = PushEasing)) { -it } togetherWith recede
                     }
                 },
                 label = "screen",
@@ -118,7 +127,7 @@ fun AppRoot(repo: BridgeRepository) {
                         Screen.SETTINGS -> SettingsScreen(state, repo)
                         Screen.MODELS -> ModelsScreen(state, repo)
                         Screen.CHAT -> ChatScreen(state, repo)
-                        Screen.SESSIONS -> SessionsScreen(state, repo)
+                        Screen.SESSIONS -> SessionsScreen(state, repo, sessionsScroll)
                     }
                 }
             }

@@ -130,8 +130,12 @@ import com.dsh.mobile.data.Role
 import com.dsh.mobile.data.SessionFile
 import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.slideInVertically
 import androidx.compose.material.icons.outlined.CheckCircle
 import android.graphics.Bitmap
@@ -221,7 +225,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                     } else {
                         val bytes = repo.fetchFileBytes(file)
                         if (bytes != null && file.name.endsWith(".gif", ignoreCase = true)) {
-                            val animated = decodeAnimatedGif(bytes)
+                            val animated = withContext(Dispatchers.Default) { decodeAnimatedGif(bytes) }
                             if (animated != null) {
                                 viewingGif = animated
                             } else {
@@ -572,7 +576,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             onDownload = { file -> scope.launch { repo.downloadSessionFile(file) } },
         )
     }
-    viewing?.let { file ->
+    // 全屏查看器：淡入 + 轻微放大（「打开」的观感）；关闭时内容钉住直到淡出播完
+    OverlayHost(viewing) { file ->
         FileViewerOverlay(
             file = file,
             url = viewingUrl,
@@ -603,44 +608,43 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     )
 
     // 点缩略图 → 大图预览（底下三个键：重新编辑 / 移除 / 关闭）
-    attachPeekAt?.let { index ->
-        if (index in attachPreviews.indices) {
-            AttachmentPeek(
-                bitmap = attachPreviews[index],
-                onClose = { attachPeekAt = null },
-                onEdit = { attachPeekAt = null; reeditAt = index },
-                onRemove = {
-                    attachments = attachments.filterIndexed { i, _ -> i != index }
-                    attachPreviews = attachPreviews.filterIndexed { i, _ -> i != index }
-                    attachPeekAt = null
-                },
-            )
-        }
+    // 位图先取出来再交给浮层：点「移除」列表变了，退场动画里也还有内容可播。
+    val peek = attachPeekAt?.let { i -> attachPreviews.getOrNull(i)?.let { i to it } }
+    OverlayHost(peek) { (index, bitmap) ->
+        AttachmentPeek(
+            bitmap = bitmap,
+            onClose = { attachPeekAt = null },
+            onEdit = { attachPeekAt = null; reeditAt = index },
+            onRemove = {
+                attachments = attachments.filterIndexed { i, _ -> i != index }
+                attachPreviews = attachPreviews.filterIndexed { i, _ -> i != index }
+                attachPeekAt = null
+            },
+        )
     }
 
     // 重新编辑已有的附件：编完替换掉原来那张
-    reeditAt?.let { index ->
-        if (index in attachPreviews.indices) {
-            AnnotateEditor(
-                original = attachPreviews[index],
-                onCancel = { reeditAt = null },
-                onDone = { edited ->
-                    reeditAt = null
-                    attachScope.launch {
-                        val image = encodeForUpload(edited, "photo-${System.currentTimeMillis()}.jpg")
-                        val list = attachments.toMutableList()
-                        if (index < list.size) list[index] = image
-                        attachments = list
-                        val shots = attachPreviews.toMutableList()
-                        if (index < shots.size) shots[index] = edited
-                        attachPreviews = shots
-                    }
-                },
-            )
-        }
+    val reedit = reeditAt?.let { i -> attachPreviews.getOrNull(i)?.let { i to it } }
+    OverlayHost(reedit, enter = EditorEnter, exit = EditorExit) { (index, original) ->
+        AnnotateEditor(
+            original = original,
+            onCancel = { reeditAt = null },
+            onDone = { edited ->
+                reeditAt = null
+                attachScope.launch {
+                    val image = encodeForUpload(edited, "photo-${System.currentTimeMillis()}.jpg")
+                    val list = attachments.toMutableList()
+                    if (index < list.size) list[index] = image
+                    attachments = list
+                    val shots = attachPreviews.toMutableList()
+                    if (index < shots.size) shots[index] = edited
+                    attachPreviews = shots
+                }
+            },
+        )
     }
 
-    pendingEdit?.let { editing ->
+    OverlayHost(pendingEdit, enter = EditorEnter, exit = EditorExit) { editing ->
         AnnotateEditor(
             original = editing,
             onCancel = { pendingEdit = null },
@@ -807,9 +811,14 @@ private fun MessageList(
             }
         }
     }
-        // 翻上去看历史时，右下角给一个「回到最新」：长执行记录展开后不用一路滑回来
-        if (!atBottom && display.isNotEmpty()) {
-            Box(Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 64.dp)) {
+        // 翻上去看历史时，右下角给一个「回到最新」：长执行记录展开后不用一路滑回来。
+        // 出现/消失要有动效（原来硬切，一眼就是「控件弹出来」而不是「长出来」）。
+        AnimatedVisibility(
+            visible = !atBottom && display.isNotEmpty(),
+            enter = fadeIn(tween(150)) + scaleIn(initialScale = 0.8f, animationSpec = tween(180, easing = Motion.Push)),
+            exit = fadeOut(tween(120)) + scaleOut(targetScale = 0.85f, animationSpec = tween(150, easing = Motion.Push)),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 64.dp),
+        ) {
                 Box(
                     Modifier
                         .size(38.dp)
@@ -830,7 +839,6 @@ private fun MessageList(
                         modifier = Modifier.size(18.dp),
                     )
                 }
-            }
         }
     }
 
@@ -845,6 +853,18 @@ private fun MessageList(
     // 键盘弹起**不**做任何滚动同步：用户明确说"对话不用跟着一起上去"，
     // 快速滑到底那一下看着就是在闪（原来是 scrollToItem/animateScrollToItem 都把内容整体挪走）。
     // 现在键盘弹起只让输入栏自己被顶上去，列表原地不动。
+    // 打开会话先落在「最新一条」上（瞬时跳转、不播动画——动画会扫过整段历史，看着就是闪）。
+    // snapshotFlow 等列表真正测量出内容再跳；每个会话只跳一次（记住跳过的 sessionId）。
+    var landedIn by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.sessionId) {
+        val sid = state.sessionId ?: return@LaunchedEffect
+        if (landedIn == sid) return@LaunchedEffect
+        val total = snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
+        if (landedIn != sid) {
+            landedIn = sid
+            listState.scrollToItem(total - 1)
+        }
+    }
     LaunchedEffect(itemCount, lastLiveLength) {
         // `layoutInfo` can still describe the *previous* (empty) layout on the first
         // frame after the screen opens: totalItemsCount would be 0 and

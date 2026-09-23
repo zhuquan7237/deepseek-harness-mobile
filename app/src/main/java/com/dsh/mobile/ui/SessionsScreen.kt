@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -82,7 +83,7 @@ import java.time.temporal.ChronoUnit
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionsScreen(state: AppState, repo: BridgeRepository) {
+fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListState) {
     val palette = LocalDsh.current
     var renameTarget by remember { mutableStateOf<SessionSummary?>(null) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
@@ -151,6 +152,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                     val groups = remember(state.sessions) { groupSessions(state.sessions) }
                     LazyColumn(
                         Modifier.fillMaxSize(),
+                        state = listState,
                         contentPadding = PaddingValues(bottom = 104.dp),
                     ) {
                         item(key = "greeting") { GreetingCard(state) }
