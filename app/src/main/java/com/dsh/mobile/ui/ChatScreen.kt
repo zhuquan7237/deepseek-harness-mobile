@@ -16,6 +16,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -136,6 +139,7 @@ import com.dsh.mobile.data.effortLabel
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Close
 import com.dsh.mobile.data.filterModels
 import androidx.compose.animation.animateContentSize
@@ -282,7 +286,12 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 metaChevron = true,
                 modifier = Modifier.weight(1f),
                 onClick = { showActions = true },
-                onMetaClick = { showModels = true },
+                onMetaClick = {
+                    showModels = true
+                    // 从顶栏模型标签进菜单也要拉一次：之前只有"更多→切换模型"那条路会拉，
+                    // 冷启动直接点标签会一直是"没有读到模型列表"。
+                    if (state.doc == null) repo.loadModels()
+                },
             )
             CircleButton(Icons.Outlined.MoreVert, "更多") { showActions = true }
         }
@@ -370,7 +379,10 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             transformOrigin = TransformOrigin(0f, 1f),
         ),
     ) {
-        Box(Modifier.fillMaxSize().imePadding()) {
+        BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+            // 面板高度跟着"键盘顶起来后还剩多少"走：最高只占可用空间的六成，
+            // 之前写死 480dp，键盘一弹就把面板顶到屏幕最上面去了（用户反馈）。
+            val panelMax = (maxHeight * 0.62f).coerceIn(240.dp, 400.dp)
             Box(
                 Modifier
                     .fillMaxSize()
@@ -382,23 +394,27 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(start = 12.dp, bottom = 82.dp)
-                    .width(310.dp)
-                    .heightIn(max = 480.dp)
+                    .padding(start = 12.dp, bottom = 78.dp)
+                    .width(300.dp)
+                    .heightIn(max = panelMax)
                     .border(1.dp, palette.textSecondary.copy(alpha = 0.22f), RoundedCornerShape(20.dp)),
                 shape = RoundedCornerShape(20.dp),
                 color = palette.surface,
                 shadowElevation = 10.dp,
             ) {
-                ModelMenu(state = state, defaultTriple = repo.currentDefaultModel(), onSetDefault = {
-                    repo.setDefaultModel(state.modelProvider, state.modelId, state.modelLabel)
-                }, onPick = { provider, model, label ->
-                    repo.selectModel(provider, model, label)
-                    showModels = false
-                },
+                ModelMenu(
+                    state = state,
+                    defaultTriple = repo.currentDefaultModel(),
+                    onPick = { provider, model, label ->
+                        repo.selectModel(provider, model, label)
+                        showModels = false
+                    },
                     onEffort = { effort ->
                         repo.setEffort(effort)
                         showModels = false
+                    },
+                    onPickDefault = { provider, model, label ->
+                        repo.setDefaultModel(provider, model, label)
                     },
                 )
             }
@@ -1394,29 +1410,99 @@ private fun ModelMenu(
     defaultTriple: Triple<String, String, String>? = null,
     onPick: (String, String, String) -> Unit,
     onEffort: (String) -> Unit,
-    onSetDefault: () -> Unit,
+    onPickDefault: (String, String, String) -> Unit,
 ) {
     val palette = LocalDsh.current
     val doc = state.doc
-    // 模型一多就得能搜：输入关键词快速定位（名称/供应商都能匹配）
+    // 两种模式分家（用户要求）：默认是"切当前会话的模型"；
+    // 点右上角那枚"默认 · xxx"按钮才切到"挑新对话默认模型"，两边各有各的搜索。
+    var defaultMode by remember { mutableStateOf(false) }
+    var searchOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
+    // 刚选过的默认模型先记在本地，不用等电脑端回传，按钮上的名字立刻变。
+    var pickedDefault by remember { mutableStateOf<Triple<String, String, String>?>(null) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(searchOpen) { if (searchOpen) runCatching { focus.requestFocus() } }
+
+    val shownDefault = pickedDefault ?: defaultTriple
+    val defaultLabel = shownDefault?.third?.ifBlank { shownDefault?.second }.orEmpty()
+    val q = query.trim().lowercase()
+    val visible = remember(doc, q) { filterModels(doc?.items.orEmpty(), q) }
+    val providerRank = remember(doc) {
+        doc?.providers?.withIndex()?.associate { (index, provider) -> provider.id to index } ?: emptyMap()
+    }
+    val groups = remember(doc, visible, providerRank) {
+        visible
+            .groupBy { it.provider }
+            .entries
+            .sortedBy { providerRank[it.key] ?: Int.MAX_VALUE }
+            .map { entry -> entry.key to entry.value.sortedWith(compareBy({ it.order }, { it.modelId })) }
+    }
+    val active = doc?.items?.firstOrNull { item ->
+        item.modelId == state.modelId && (state.modelProvider.isEmpty() || item.provider == state.modelProvider)
+    }
+    val isDefault: (com.dsh.mobile.data.ModelItem) -> Boolean = { item ->
+        shownDefault != null && item.provider == shownDefault.first && item.modelId == shownDefault.second
+    }
+
     Column(Modifier.fillMaxWidth()) {
-        if (!doc?.items.isNullOrEmpty()) {
+        // ── 顶栏：左＝搜索圆圈 | 标题 | 右侧＝"默认 · xxx"（或"返回"）────────────
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            MenuCircle(palette, Icons.Outlined.Search, "搜索模型") {
+                searchOpen = !searchOpen
+                if (!searchOpen) query = ""
+            }
+            Text(
+                if (defaultMode) "选择默认模型" else "切换模型",
+                style = MaterialTheme.typography.labelLarge,
+                color = palette.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.weight(1f))
+            if (defaultMode) {
+                MenuPill(
+                    palette,
+                    Icons.Outlined.Close,
+                    "返回",
+                    active = false,
+                ) {
+                    defaultMode = false
+                    searchOpen = false
+                    query = ""
+                }
+            } else {
+                MenuPill(
+                    palette,
+                    if (shownDefault != null) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+                    "默认 · " + defaultLabel.ifBlank { "未设置" },
+                    active = shownDefault != null,
+                ) {
+                    defaultMode = true
+                    searchOpen = false
+                    query = ""
+                }
+            }
+        }
+        // ── 点了放大镜才拉起的搜索长条 ────────────────────────────────────────
+        AnimatedVisibility(visible = searchOpen) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, top = 12.dp)
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(palette.surfaceHi)
                     .border(1.dp, palette.textSecondary.copy(alpha = 0.16f), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Icon(
-                    Icons.Outlined.Search, contentDescription = null,
-                    tint = palette.textTertiary, modifier = Modifier.size(16.dp),
-                )
                 Box(Modifier.weight(1f)) {
                     if (query.isEmpty()) {
                         Text(
@@ -1431,7 +1517,7 @@ private fun ModelMenu(
                         singleLine = true,
                         textStyle = MaterialTheme.typography.labelMedium.copy(color = palette.textPrimary),
                         cursorBrush = SolidColor(palette.accent),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().focusRequester(focus),
                     )
                 }
                 if (query.isNotEmpty()) {
@@ -1443,52 +1529,56 @@ private fun ModelMenu(
                 }
             }
         }
-        // 当前模型支持的思考强度（照 ChatGPT：强度在上、模型在下）
-        val activeItem = doc?.items?.firstOrNull { item ->
-            item.modelId == state.modelId && (state.modelProvider.isEmpty() || item.provider == state.modelProvider)
-        }
-        val efforts = activeItem?.efforts.orEmpty()
-        if (efforts.isNotEmpty()) {
-            Text(
-                "思考强度",
-                style = MaterialTheme.typography.labelSmall,
-                color = palette.textSecondary,
-                modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 6.dp),
-            )
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                efforts.forEach { key ->
-                    val selected = key == state.reasoningEffort ||
-                        (state.reasoningEffort.isBlank() && key == efforts.first())
-                    Box(
-                        Modifier
-                            .height(32.dp)
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(if (selected) palette.accent else palette.surfaceHi)
-                            .clickable { onEffort(key) }
-                            .padding(horizontal = 14.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            effortLabel(key),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (selected) palette.onAccent else palette.textSecondary,
-                        )
+        // ── 思考强度（只属于"切换模型"；改默认模型时不显示）────────────────────
+        if (!defaultMode) {
+            val efforts = active?.efforts.orEmpty()
+            if (efforts.isNotEmpty()) {
+                Text(
+                    "思考强度",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 6.dp),
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    efforts.forEach { key ->
+                        val selected = key == state.reasoningEffort ||
+                            (state.reasoningEffort.isBlank() && key == efforts.first())
+                        Box(
+                            Modifier
+                                .height(30.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(if (selected) palette.accent else palette.surfaceHi)
+                                .border(
+                                    1.dp,
+                                    if (selected) Color.Transparent else palette.textSecondary.copy(alpha = 0.14f),
+                                    RoundedCornerShape(999.dp),
+                                )
+                                .clickable { onEffort(key) }
+                                .padding(horizontal = 14.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                effortLabel(key),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (selected) palette.onAccent else palette.textSecondary,
+                            )
+                        }
                     }
                 }
             }
-            Spacer(Modifier.height(4.dp))
         }
+        // ── 列表 ─────────────────────────────────────────────────────────────
         Text(
-            "模型",
+            if (defaultMode) "点一个模型设为新对话默认" else "模型",
             style = MaterialTheme.typography.labelSmall,
             color = palette.textSecondary,
-            modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp),
+            modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
         )
         when {
             state.modelsLoading && doc == null -> {
@@ -1505,37 +1595,19 @@ private fun ModelMenu(
                 )
             }
             else -> {
-                // The wire gives a flat list ranked by a cross-provider `order`,
-                // which reads as shuffled. Group by provider, keep the desktop's
-                // provider order, and rank inside a group by that same order.
-                val providerRank = remember(doc) {
-                    doc.providers.withIndex().associate { (index, provider) -> provider.id to index }
-                }
-                val q = query.trim().lowercase()
-                val visibleItems = remember(doc, q) { filterModels(doc.items, q) }
-                val groups = remember(doc, visibleItems) {
-                    visibleItems
-                        .groupBy { it.provider }
-                        .entries
-                        .sortedBy { providerRank[it.key] ?: Int.MAX_VALUE }
-                        .map { entry -> entry.key to entry.value.sortedWith(compareBy({ it.order }, { it.modelId })) }
-                }
-                val active = doc.items.firstOrNull { item ->
-                    item.modelId == state.modelId && (state.modelProvider.isEmpty() || item.provider == state.modelProvider)
-                }
                 LazyColumn(
-                    // 用 weight 占"剩下的空间"：列表可滚，但底部的默认模型那一行永远留得住。
-                    // 之前列表自己写死 420dp，与外层 420dp 的容器打架，底部那行被挤出了可视区。
+                    // weight：列表占"剩下的空间"，顶栏/搜索/强度这些永远留得住，
+                    // 面板再也不会把内容顶出去（之前固定 420dp 会和面板上限打架）。
                     modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
-                    contentPadding = PaddingValues(bottom = 8.dp),
+                    contentPadding = PaddingValues(bottom = 12.dp),
                 ) {
-                    if (active != null) {
+                    if (!defaultMode && active != null) {
                         item(key = "active") {
                             Text(
                                 "当前",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = palette.textSecondary,
-                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 2.dp),
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp),
                             )
                         }
                         item(key = "active-row") {
@@ -1543,7 +1615,7 @@ private fun ModelMenu(
                                 Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))
-                                    .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                                    .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
@@ -1557,9 +1629,9 @@ private fun ModelMenu(
                                 Icon(Icons.Outlined.Check, contentDescription = "当前模型", tint = palette.accent, modifier = Modifier.size(18.dp))
                             }
                         }
-                        item(key = "active-gap") { Hairline(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp)) }
+                        item(key = "active-gap") { Hairline(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp)) }
                     }
-                    if (q.isNotEmpty() && visibleItems.isEmpty()) {
+                    if (q.isNotEmpty() && visible.isEmpty()) {
                         item(key = "no-match") {
                             Text(
                                 "没有匹配「$query」的模型",
@@ -1572,26 +1644,23 @@ private fun ModelMenu(
                     groups.forEachIndexed { groupIndex, (provider, rows) ->
                         val title = doc.providers.firstOrNull { it.id == provider }?.name?.ifBlank { provider } ?: provider
                         item(key = "h:$provider") {
-                            // A tinted bar, not one more line of the list: the block
-                            // below it then reads as "these models belong together"
-                            // without the user having to compare font sizes.
                             Row(
                                 Modifier
                                     .fillMaxWidth()
                                     .padding(
                                         start = 12.dp,
                                         end = 12.dp,
-                                        top = if (groupIndex > 0) 20.dp else 6.dp,
+                                        top = if (groupIndex > 0) 16.dp else 4.dp,
                                     )
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(palette.surfaceHi)
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    .padding(horizontal = 12.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 Text(
                                     title,
-                                    fontSize = 16.sp,
+                                    fontSize = 15.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = palette.textPrimary,
                                     maxLines = 1,
@@ -1606,21 +1675,30 @@ private fun ModelMenu(
                             }
                         }
                         items(rows, key = { it.id }) { item ->
-                            val current = item.modelId == state.modelId &&
+                            val current = !defaultMode && item.modelId == state.modelId &&
                                 (state.modelProvider.isEmpty() || item.provider == state.modelProvider)
+                            val thisIsDefault = isDefault(item)
                             Row(
                                 Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))
-                                    .clickable(enabled = item.enabled) { onPick(item.provider, item.modelId, item.name) }
-                                    .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                                    .clickable(enabled = item.enabled || defaultMode) {
+                                        if (defaultMode) {
+                                            pickedDefault = Triple(item.provider, item.modelId, item.name)
+                                            onPickDefault(item.provider, item.modelId, item.name)
+                                            defaultMode = false
+                                        } else {
+                                            onPick(item.provider, item.modelId, item.name)
+                                        }
+                                    }
+                                    .padding(start = 16.dp, end = 16.dp, top = 7.dp, bottom = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                                     Text(
                                         item.name,
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = if (item.enabled) palette.textPrimary else palette.textTertiary,
+                                        color = if (item.enabled || defaultMode) palette.textPrimary else palette.textTertiary,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -1639,7 +1717,9 @@ private fun ModelMenu(
                                     }
                                 }
                                 when {
-                                    !item.enabled -> MiniTag("已停用", palette.textTertiary)
+                                    defaultMode && thisIsDefault -> MiniTag("当前默认", palette.accent)
+                                    defaultMode && !item.enabled -> MiniTag("已停用", palette.textTertiary)
+                                    !defaultMode && !item.enabled -> MiniTag("已停用", palette.textTertiary)
                                     current -> Icon(Icons.Outlined.Check, contentDescription = "当前模型", tint = palette.accent, modifier = Modifier.size(18.dp))
                                 }
                             }
@@ -1649,41 +1729,58 @@ private fun ModelMenu(
             }
         }
     }
-        // 底部：把"当前这个模型"设成新对话默认（用户要求：新开对话不用再手选）
-        if (state.modelId.isNotBlank()) {
-            val already = state.modelProvider == defaultTriple?.first && state.modelId == defaultTriple?.second
-            // 和上面的模型列表明确分开：一条分隔线 + 小标题 + 带描边的卡片
-            Hairline(Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp))
-            Text(
-                "默认模型",
-                style = MaterialTheme.typography.labelSmall,
-                color = palette.textSecondary,
-                modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 4.dp),
-            )
-            Row(
-                Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp).padding(bottom = 12.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(palette.surfaceHi)
-                    .border(1.dp, palette.textSecondary.copy(alpha = 0.16f), RoundedCornerShape(12.dp))
-                    .clickable(onClick = onSetDefault)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    if (already) Icons.Outlined.Check else Icons.Outlined.BookmarkBorder,
-                    "设为新对话默认",
-                    tint = if (already) palette.accent else palette.textSecondary,
-                    modifier = Modifier.size(17.dp),
-                )
-                Text(
-                    if (already) "新对话默认就是它" else "把「" + state.modelLabel.ifBlank { state.modelId } + "」设为新对话默认",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (already) palette.accent else palette.textSecondary,
-                )
-            }
-        }
+}
 
+/** 顶栏上的圆形小按钮（放大镜之类）。 */
+@Composable
+private fun MenuCircle(
+    palette: com.dsh.mobile.ui.theme.DshPalette,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .size(34.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(palette.surfaceHi)
+            .border(1.dp, palette.textSecondary.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = palette.textSecondary, modifier = Modifier.size(17.dp))
+    }
+}
+
+/** 顶栏右侧的胶囊按钮：显示当前默认模型 / 返回。 */
+@Composable
+private fun MenuPill(
+    palette: com.dsh.mobile.ui.theme.DshPalette,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .widthIn(max = 168.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(palette.surfaceHi)
+            .border(1.dp, palette.textSecondary.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = if (active) palette.accent else palette.textSecondary, modifier = Modifier.size(15.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (active) palette.accent else palette.textSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 /** 附件大图预览：能重新编辑、能移除（用户："上传图片之后，在输入框上方要能点开预览图片"）。 */
