@@ -54,8 +54,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -84,6 +86,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material3.DrawerValue
@@ -101,8 +104,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
@@ -667,35 +672,62 @@ private fun MessageList(
 ) {
     val palette = LocalDsh.current
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     // 键盘是否可见：只在布尔翻转时通知一次（每帧变化的高度值不能当 key）
     val imeInsets = WindowInsets.ime
     val density = LocalDensity.current
     val imeOpen by remember { derivedStateOf { imeInsets.getBottom(density) > 0 } }
     val rows = state.history
     val live = state.live
+    // 一次任务的执行记录（思考/工具调用）折成一行摘要：默认收起，
+    // 正在跑的尾巴自动展开（你在看它干活），跑完自动合上。手动开合过就以手动为准。
+    val traceBlocks = Wire.traceBlocks(rows, state.historyEndTime)
+    val blockAt = traceBlocks.associateBy { it.start }
+    val expanded = remember { mutableStateMapOf<Int, Boolean>() }
+    val display = buildDisplay(rows, blockAt, expanded, state.running)
+    val atBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val total = info.totalItemsCount
+            total == 0 || (info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= total - 1
+        }
+    }
+    Box(modifier.fillMaxWidth()) {
     LazyColumn(
         state = listState,
-        modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(top = 6.dp, bottom = 12.dp),
+        modifier = Modifier.fillMaxSize(),
+        // 底部给她留位置：鲸鱼娘趴在输入框上沿，不留的话最后一条内容
+        //（尤其是「生成的文件」卡片右侧的「查看」）会被她盖住、点不准
+        contentPadding = PaddingValues(top = 6.dp, bottom = 52.dp),
     ) {
-        itemsIndexed(
-            rows,
-            key = { index, row -> "row:$index:" + row.who + ":" + row.text.hashCode() },
-            contentType = { _, row -> row.who },
-        ) { index, row ->
-            val showActions = row.who == Role.ASSISTANT && index == rows.lastIndex && !state.running
-            Box(Modifier.animateItem()) {
-                MessageRow(
-                    row = row,
-                    onSaveCode = onSaveCode,
-                    showActions = showActions,
-                    reveal = state.revealText != null && row.text == state.revealText,
-                    onRevealDone = onRevealDone,
-                    onCopy = onCopy,
-                    onRegenerate = onRegenerate,
-                    onPreview = onPreview,
-                    onOpenExternal = onOpenExternal,
-                )
+        items(
+            display,
+            key = { it.key },
+            contentType = { entry -> if (entry is DispEntry.One) entry.row.who else "trace" },
+        ) { entry ->
+            when (entry) {
+                is DispEntry.One -> {
+                    val row = entry.row
+                    val showActions = row.who == Role.ASSISTANT && entry.index == rows.lastIndex && !state.running
+                    Box(Modifier.animateItem()) {
+                        MessageRow(
+                            row = row,
+                            onSaveCode = onSaveCode,
+                            showActions = showActions,
+                            reveal = state.revealText != null && row.text == state.revealText,
+                            onRevealDone = onRevealDone,
+                            onCopy = onCopy,
+                            onRegenerate = onRegenerate,
+                            onPreview = onPreview,
+                            onOpenExternal = onOpenExternal,
+                        )
+                    }
+                }
+                is DispEntry.Trace -> Box(Modifier.animateItem()) {
+                    TraceSummary(label = entry.block.label, open = entry.open, live = entry.live) {
+                        expanded[entry.block.start] = !entry.open
+                    }
+                }
             }
         }
         if (live.isNotEmpty()) {
@@ -710,6 +742,17 @@ private fun MessageList(
             item(key = "session-files") {
                 Box(Modifier.animateItem()) {
                     SessionFilesCard(state.sessionFiles, state.filesLoading, onClick = onOpenFiles)
+                }
+            }
+        }
+        if (rows.isEmpty() && live.isEmpty() && state.historyLoading) {
+            item(key = "loading") {
+                Box(Modifier.fillMaxWidth().padding(top = 56.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        "正在读取会话…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textTertiary,
+                    )
                 }
             }
         }
@@ -764,6 +807,32 @@ private fun MessageList(
             }
         }
     }
+        // 翻上去看历史时，右下角给一个「回到最新」：长执行记录展开后不用一路滑回来
+        if (!atBottom && display.isNotEmpty()) {
+            Box(Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 64.dp)) {
+                Box(
+                    Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(palette.surface)
+                        .border(1.dp, palette.textSecondary.copy(alpha = 0.18f), CircleShape)
+                        .clickable {
+                            scope.launch {
+                                listState.animateScrollToItem((display.size - 1).coerceAtLeast(0))
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.ArrowDownward,
+                        contentDescription = "回到最新",
+                        tint = palette.textPrimary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
 
     val itemCount = rows.size + (if (live.isEmpty()) 0 else live.size)
     val lastLiveLength = live.lastOrNull()?.text?.length ?: 0
@@ -790,6 +859,93 @@ private fun MessageList(
         // 原来是"离底部 3 条以内就跟随"：手机一屏就几条，翻历史时几乎一直命中，
         // 于是每次事件都把人拽回底部。现在只有在最后一条正好可见时才跟随。
         if (lastVisible == total - 1) listState.scrollToItem(total - 1)
+    }
+}
+
+/** LazyColumn 里的一项：一条原始消息，或者一段折叠/展开的执行记录摘要。 */
+private sealed interface DispEntry {
+    val key: String
+
+    data class One(val row: ChatRow, val index: Int) : DispEntry {
+        override val key: String get() = "row:$index:" + row.who + ":" + row.text.hashCode()
+    }
+
+    data class Trace(val block: Wire.TraceBlock, val open: Boolean, val live: Boolean) : DispEntry {
+        override val key: String get() = "trace:${block.start}"
+    }
+}
+
+/**
+ * 把行序列铺成供 LazyColumn 使用的条目：折叠的块 = 一行摘要；展开的块 = 摘要行 + 原始行。
+ * 没被手动开合过的块按「正在跑的尾巴自动展开」推断——在看它干活时铺开，
+ * 跑完自动合上，不用自己收。
+ */
+private fun buildDisplay(
+    rows: List<ChatRow>,
+    blockAt: Map<Int, Wire.TraceBlock>,
+    overrides: Map<Int, Boolean>,
+    running: Boolean,
+): List<DispEntry> {
+    val out = ArrayList<DispEntry>(rows.size)
+    var i = 0
+    while (i < rows.size) {
+        val block = blockAt[i]
+        if (block == null) {
+            out.add(DispEntry.One(rows[i], i))
+            i++
+            continue
+        }
+        val live = running && block.end == rows.lastIndex
+        val open = overrides[i] ?: live
+        out.add(DispEntry.Trace(block, open, live))
+        if (open) for (j in block.start..block.end) out.add(DispEntry.One(rows[j], j))
+        i = block.end + 1
+    }
+    return out
+}
+
+/**
+ * 折叠的执行记录：一行灰字摘要（「执行 9 步 · 6 分 20 秒」），点开才铺开每一步。
+ * 正在跑的是蓝点 + 蓝字——「它还在干活」要一眼看得出来。
+ */
+@Composable
+private fun TraceSummary(label: String, open: Boolean, live: Boolean, onToggle: () -> Unit) {
+    val palette = LocalDsh.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
+    ) {
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onToggle)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (live) {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
+            } else {
+                Icon(
+                    Icons.Outlined.Terminal,
+                    contentDescription = null,
+                    tint = palette.textTertiary,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (live) palette.accent else palette.textSecondary,
+            )
+            Icon(
+                if (open) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = if (open) "收起执行记录" else "展开执行记录",
+                tint = palette.textTertiary,
+                modifier = Modifier.size(16.dp),
+            )
+        }
     }
 }
 
@@ -1010,7 +1166,8 @@ private fun ReasoningRow(row: ChatRow) {
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 2.dp),
+            // 左缘和工具行对齐：图标都落在 16dp 处，不再一个 16 一个 24
+            .padding(start = 8.dp, end = 16.dp, top = 8.dp, bottom = 2.dp),
     ) {
         Row(
             Modifier
@@ -1344,6 +1501,7 @@ private fun Composer(
     val palette = LocalDsh.current
     var draft by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
     // 各家手机字体（小米 MiSans / Roboto / 思源）的 ascent/descent 差很多，
     // 同一份"行框居中"在模拟器上对、到手机上就偏。这里量**实际渲染出来的字形外框**，
     // 再把它挪到正中间——不管用哪个字体都自己校准。
@@ -1528,7 +1686,10 @@ private fun Composer(
                     tint = palette.textPrimary,
                     contentDescription = "停止生成",
                     enabled = true,
-                ) { repo.cancelTurn() }
+                ) {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    repo.cancelTurn()
+                }
             } else {
                 val ready = draft.isNotBlank() || attachments.isNotEmpty()
                 val sendBg by animateColorAsState(
@@ -1550,6 +1711,7 @@ private fun Composer(
                 ) {
                     val text = draft.trim()
                     if (text.isNotEmpty() || attachments.isNotEmpty()) {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         draft = ""
                         composerExpanded = false
                         if (attachments.isEmpty()) {

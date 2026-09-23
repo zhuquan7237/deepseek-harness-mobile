@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -116,19 +117,27 @@ class EndToEndTest {
         check(code.isNotBlank()) { "desktop did not hand out a pairing code" }
 
         composeRule.waitUntil(40_000) {
-            isOnPairingScreen() || isOnChatScreen() || isOnSessionsScreen()
+            isOnPairingScreen() || isOnChatScreen() || isOnSessionsScreen() || anyContent("返回")
         }
         // Let the app settle: a stale (revoked) token flips to pairing by itself.
         composeRule.waitUntil(30_000) { isOnPairingScreen() || isConnected() }
         if (!isOnPairingScreen()) {
-            // 设置入口：聊天页在左侧抽屉里（顶栏现在是"会话列表"），会话页在顶栏
-            if (!anyContent("设置")) {
-                composeRule.onAllNodesWithContentDescription("会话列表")[0].performClick()
-                composeRule.waitUntil(15_000) { anyContent("设置") }
+            // 可能停在聊天/设置/模型页（前一个用例失败留下的现场）：先点「返回」退回会话列表。
+            // 设置入口在会话页顶栏；聊天页的返回键就是回列表。
+            var guard = 0
+            while (!anyContent("设置") && guard < 4) {
+                if (!anyContent("返回")) break
+                composeRule.onAllNodesWithContentDescription("返回")[0].performClick()
+                composeRule.waitForIdle()
+                guard++
             }
+            composeRule.waitUntil(15_000) { anyContent("设置") }
             composeRule.onAllNodesWithContentDescription("设置")[0].performClick()
             composeRule.waitUntil(15_000) { anyText("解除本机绑定") }
-            composeRule.onAllNodesWithText("解除本机绑定")[0].performClick()
+            // ❗设置页比一屏高：先滚到按钮可见再点，否则点击坐标落在屏幕外=空点
+            val unpair = composeRule.onAllNodesWithText("解除本机绑定")[0]
+            unpair.performScrollTo()
+            unpair.performClick()
             composeRule.waitUntil(15_000) { anyText("解除本机绑定？") }
             composeRule.onAllNodesWithText("解除")[0].performClick()
         }

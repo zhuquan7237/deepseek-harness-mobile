@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -35,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,23 +74,20 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
+                // 内容底部避开手势条：滚到底时最后一行不该被小白条压住
+                .navigationBarsPadding()
                 .padding(horizontal = 16.dp),
         ) {
             SectionHeader("连接", Modifier.padding(start = 0.dp))
             SettingsValue("设备", state.device?.name?.ifBlank { "未命名" } ?: "—")
-            SettingsValue("权限", state.device?.scopes?.joinToString(" / ") ?: "—")
-            SettingsValue("状态", if (state.connected) "已连接（事件流）" else "重连中…")
-            SettingsValue("设备权限", state.scopes.joinToString(" / ").ifBlank { "未知" })
+            SettingsValue("服务器", state.base.ifBlank { "—" })
+            SettingsValue("权限", state.scopes.joinToString(" / ").ifBlank { "未知" })
+
+            SectionHeader("模型", Modifier.padding(start = 0.dp))
             SettingsValue(
                 "当前模型",
                 listOf(state.modelProvider, state.modelId).filter { it.isNotBlank() }.joinToString(" / ").ifBlank { "未知" },
             )
-            SettingsValue("服务器", state.base.ifBlank { "—" })
-            if (state.server != null) {
-                SettingsValue("桥接", "${state.server.product} · v${state.server.version}")
-            }
-
-            SectionHeader("模型", Modifier.padding(start = 0.dp))
             SettingsAction(
                 label = "模型配置",
                 value = when {
@@ -100,21 +99,14 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
             )
 
             SectionHeader("外观", Modifier.padding(start = 0.dp))
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ModeChip("跟随系统", state.theme == "auto") { repo.setTheme("auto") }
-                ModeChip("浅色", state.theme == "light") { repo.setTheme("light") }
-                ModeChip("深色", state.theme == "dark") { repo.setTheme("dark") }
-            }
+            ThemeSegmented(state.theme) { repo.setTheme(it) }
 
             SectionHeader("鲸鱼娘", Modifier.padding(start = 0.dp))
             // 胶囊开关：一眼能看出开还是关（原来是一行文字，容易看错）
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 20.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+                    .padding(vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
@@ -166,6 +158,13 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
                     if (state.update != null) showUpdate = true else repo.checkUpdate(manual = true)
                 },
             )
+
+            // 调试用的原始信息收进「诊断」：连的是哪台电脑、事件流状态、桥接版本
+            SectionHeader("诊断信息", Modifier.padding(start = 0.dp))
+            SettingsValue("连接状态", if (state.connected) "已连接（事件流）" else "重连中…")
+            if (state.server != null) {
+                SettingsValue("桥接", "${state.server.product} · v${state.server.version}")
+            }
             Text(
                 "手机是控制器和查看器：会话、模型、以及真正干活的电脑端都不在这台设备上。",
                 style = MaterialTheme.typography.bodySmall,
@@ -245,7 +244,6 @@ private fun SettingsAction(label: String, value: String, onClick: () -> Unit) {
         Spacer(Modifier.width(6.dp))
         Text("›", style = MaterialTheme.typography.bodyLarge, color = palette.textTertiary)
     }
-    Hairline()
 }
 
 @Composable
@@ -270,20 +268,37 @@ private fun SettingsValue(label: String, value: String) {
     }
 }
 
+/** 外观三选一：一个容器里的等宽分段控件（选中 = 白底黑字胶囊）。 */
 @Composable
-private fun ModeChip(text: String, selected: Boolean, onClick: () -> Unit) {
+private fun ThemeSegmented(current: String, onPick: (String) -> Unit) {
     val palette = LocalDsh.current
-    Box(
+    val options = listOf("auto" to "跟随系统", "light" to "浅色", "dark" to "深色")
+    Row(
         Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
             .clip(RoundedCornerShape(999.dp))
-            .background(if (selected) palette.primaryBtn else palette.surface)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .background(palette.surface)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (selected) palette.onPrimaryBtn else palette.textSecondary,
-        )
+        options.forEach { (value, label) ->
+            val selected = current == value
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (selected) palette.primaryBtn else Color.Transparent)
+                    .clickable { onPick(value) }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selected) palette.onPrimaryBtn else palette.textSecondary,
+                )
+            }
+        }
     }
 }

@@ -55,14 +55,24 @@ object Wire {
         val model = sessionModel(json)
         return SessionSummary(
             sessionId = id,
-            title = titleOf(json),
+            title = cleanTitle(titleOf(json)),
             updatedAt = millis(json.optLong("updatedAt", 0L)),
             running = json.optBoolean("running", false),
             cwd = json.optString("cwd"),
             modelProvider = model?.first.orEmpty(),
             modelId = model?.second.orEmpty(),
+            fileCount = json.optInt("producedFiles", 0),
         )
     }
+
+    /**
+     * 会话标题取的是第一句用户输入，可能裹着 Markdown 反引号、换行或连续空白。
+     * 列表和顶栏显示前先洗干净——`皮卡丘跳舞动画` 这种漏反引号看着很糙。
+     */
+    fun cleanTitle(raw: String): String = raw
+        .replace("`", "")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
     /**
      * 会话用的模型在 `projections.values.modelSelection`（`next` 优先，退回 `lastUsed`）。
@@ -106,7 +116,7 @@ object Wire {
         return id.take(8).ifEmpty { "会话" }
     }
 
-    data class HistoryParse(val rows: List<ChatRow>, val running: Boolean)
+    data class HistoryParse(val rows: List<ChatRow>, val running: Boolean, val endTime: Long = 0L)
 
     /** One content block inside an assistant/user message. */
     private data class Part(
@@ -152,6 +162,8 @@ object Wire {
         val rows = ArrayList<ChatRow>()
         var lastTurn: String? = null
         var stepStart = 0L
+        // 历史里最后一个事件的时间：折叠的执行记录靠它算「这一段到哪结束」
+        var endTime = 0L
         val seenCalls = HashSet<String>()
         // 引擎收件箱：agent/inbox/spliced 记录"已排队/已插话但还没生效"的消息，
         // 手机发、桌面发的都在这 —— 是跨设备、重启后都不丢的唯一真相。
@@ -162,6 +174,7 @@ object Wire {
             val type = event.optString("type")
             val data = event.optJSONObject("data") ?: JSONObject()
             val time = millis(event.optLong("time", 0L))
+            if (time > endTime) endTime = time
             when (type) {
                 "turn/start" -> {
                     lastTurn = "start"
@@ -184,7 +197,7 @@ object Wire {
                         val notice = modelChangedNotice(text)
                         when {
                             notice != null -> rows.add(ChatRow(Role.NOTICE, notice))
-                            !isInjectedContext(text) -> rows.add(ChatRow(Role.USER, text))
+                            !isInjectedContext(text) -> rows.add(ChatRow(Role.USER, text, time = time))
                         }
                     }
                 }
@@ -197,15 +210,22 @@ object Wire {
                         .joinToString("\n\n") { it.text }.trim()
                     if (reasoning.isNotEmpty()) {
                         val seconds = if (stepStart > 0 && time > stepStart) (time - stepStart) / 1000 else 0L
-                        rows.add(ChatRow(Role.REASONING, reasoning, if (seconds > 0) "思考 $seconds 秒" else "思考过程"))
+                        rows.add(
+                            ChatRow(
+                                Role.REASONING,
+                                reasoning,
+                                if (seconds > 0) "思考 $seconds 秒" else "思考过程",
+                                time = time,
+                            )
+                        )
                     }
-                    if (answer.isNotEmpty()) rows.add(ChatRow(Role.ASSISTANT, answer))
+                    if (answer.isNotEmpty()) rows.add(ChatRow(Role.ASSISTANT, answer, time = time))
                     // Tool calls can arrive inside the message or as their own
                     // event; whichever shows up first wins, the other is skipped.
                     for (call in parts.filter { it.type == "tool-call" }) {
                         if (call.callId.isNotEmpty() && !seenCalls.add(call.callId)) continue
                         val name = call.name.ifEmpty { "工具" }
-                        rows.add(ChatRow(Role.TOOL, "调用 $name", hint(call.args), call.args))
+                        rows.add(ChatRow(Role.TOOL, "调用 $name", hint(call.args), call.args, time))
                     }
                 }
                 "tool/call" -> {
@@ -213,7 +233,7 @@ object Wire {
                     if (callId.isEmpty() || seenCalls.add(callId)) {
                         val name = data.optString("name").ifEmpty { "工具" }
                         val args = decodeArgs(data.optString("arguments"))
-                        rows.add(ChatRow(Role.TOOL, "调用 $name", hint(args), args))
+                        rows.add(ChatRow(Role.TOOL, "调用 $name", hint(args), args, time))
                     }
                 }
                 "tool/result" -> {
@@ -225,6 +245,7 @@ object Wire {
                             text = if (isFailedResult(data)) "返回失败" else "工具返回",
                             detail = hint(text, 100),
                             raw = text,
+                            time = time,
                         )
                     )
                 }
@@ -254,7 +275,67 @@ object Wire {
         // 待生效的消息挂在末尾：它们还没进入回合，但用户必须看得见
         inbox["next-step"]?.forEach { (_, text) -> rows.add(ChatRow(Role.STEER, text)) }
         inbox["next-turn"]?.forEach { (_, text) -> rows.add(ChatRow(Role.QUEUED, text)) }
-        return HistoryParse(rows, lastTurn == "start")
+        return HistoryParse(rows, lastTurn == "start", endTime)
+    }
+
+    /** 一段连续的执行记录（思考 + 工具调用/返回），折叠成一行摘要后展示。 */
+    data class TraceBlock(val start: Int, val end: Int, val label: String)
+
+    /** 「6 分 20 秒」这类时长文案。 */
+    fun fmtDuration(ms: Long): String {
+        val sec = (ms / 1000).coerceAtLeast(0)
+        return when {
+            sec < 60 -> "$sec 秒"
+            sec < 3600 -> {
+                val m = sec / 60
+                val s = sec % 60
+                if (s == 0L) "$m 分" else "$m 分 $s 秒"
+            }
+            else -> {
+                val h = sec / 3600
+                val m = (sec % 3600) / 60
+                if (m == 0L) "$h 小时" else "$h 小时 $m 分"
+            }
+        }
+    }
+
+    /**
+     * 把行序列里连续的「思考/工具」记录归成块——一次任务跑 9 步会铺 20+ 行灰字，
+     * 把答案都挤出屏幕了。块内至少 2 行才值得折叠（单行本来就是一行灰字）。
+     * 时长 = 首行事件时间 → 下一锚点（或回合末尾）时间。
+     */
+    fun traceBlocks(rows: List<ChatRow>, endTime: Long): List<TraceBlock> {
+        val out = ArrayList<TraceBlock>()
+        var i = 0
+        while (i < rows.size) {
+            val isTrace = rows[i].who == Role.REASONING || rows[i].who == Role.TOOL
+            if (!isTrace) {
+                i++
+                continue
+            }
+            var j = i
+            while (j + 1 < rows.size && (rows[j + 1].who == Role.REASONING || rows[j + 1].who == Role.TOOL)) j++
+            if (j - i + 1 >= 2) {
+                val steps = (i..j).count { rows[it].who == Role.TOOL && rows[it].text.startsWith("调用") }
+                val thoughts = (i..j).count { rows[it].who == Role.REASONING }
+                val startT = rows[i].time
+                val endT = when {
+                    j + 1 < rows.size && rows[j + 1].time > 0 -> rows[j + 1].time
+                    endTime > 0 -> endTime
+                    else -> rows[j].time
+                }
+                val label = buildString {
+                    if (steps > 0) append("执行 $steps 步") else append("思考 ${thoughts.coerceAtLeast(1)} 段")
+                    if (startT > 0 && endT > startT) {
+                        append(" · ")
+                        append(fmtDuration(endT - startT))
+                    }
+                }
+                out.add(TraceBlock(i, j, label))
+            }
+            i = j + 1
+        }
+        return out
     }
 
     /**

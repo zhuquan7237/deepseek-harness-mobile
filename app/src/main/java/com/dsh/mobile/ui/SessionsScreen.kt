@@ -204,11 +204,15 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository) {
                     modifier = Modifier.weight(1f),
                 )
                 Spacer(Modifier.width(10.dp))
+                val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
                 PrimaryCta(
                     icon = Icons.Outlined.Edit,
                     text = "新建",
                     label = "新建会话",
-                    onClick = { repo.createSession() },
+                    onClick = {
+                        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        repo.createSession()
+                    },
                 )
             }
         }
@@ -264,7 +268,12 @@ private fun GreetingCard(state: AppState) {
                 color = palette.textPrimary,
             )
             Text(
-                if (state.sessions.isEmpty()) "还没有会话" else "${state.sessions.size} 个会话在等着你",
+                if (state.sessions.isEmpty()) {
+                    "还没有会话"
+                } else {
+                    val running = state.sessions.count { it.running }
+                    if (running > 0) "$running 个任务正在电脑上跑" else "在下面开始一个新会话吧"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = palette.textSecondary,
             )
@@ -406,39 +415,62 @@ private fun groupSessions(sessions: List<SessionSummary>): List<SessionGroup> {
 @Composable
 private fun SessionRow(session: SessionSummary, onClick: () -> Unit, onLongClick: () -> Unit) {
     val palette = LocalDsh.current
+    val time = Wire.timeText(session.updatedAt)
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 6.dp, vertical = 1.dp)
             .clip(RoundedCornerShape(12.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 14.dp, vertical = 13.dp),
+            .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        if (session.running) {
-            // 醒目的进行中标识（原来是个 6dp 小点，真机上等于看不见）
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(palette.accent.copy(alpha = 0.16f))
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-            ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            // 标题行：右边跟一个时间，120 条会话不再长得一模一样
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "正在执行",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.accent,
+                    session.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = palette.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+                if (time.isNotBlank()) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(time, style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
+                }
+            }
+            // 副行只在有值得注意的状态时出现：在跑 / 有产出
+            if (session.running || session.fileCount > 0) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (session.running) {
+                        Row(
+                            Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(palette.accent.copy(alpha = 0.16f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Box(Modifier.size(5.dp).clip(CircleShape).background(palette.accent))
+                            Text("正在执行", style = MaterialTheme.typography.labelSmall, color = palette.accent)
+                        }
+                    }
+                    if (session.fileCount > 0) {
+                        Text(
+                            "${session.fileCount} 个文件",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.textTertiary,
+                        )
+                    }
+                }
             }
         }
-        Text(
-            session.title,
-            style = MaterialTheme.typography.bodyLarge,
-            color = palette.textPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
     }
 }
 

@@ -152,7 +152,10 @@ class ModelsManagementTest {
         if (!isOnPairingScreen()) {
             openSettings()
             composeRule.waitUntil(15_000) { anyText("解除本机绑定") }
-            composeRule.onAllNodesWithText("解除本机绑定")[0].performClick()
+            // ❗设置页比一屏高：先滚到按钮可见再点，否则点击坐标落在屏幕外=空点
+            val unpair = composeRule.onAllNodesWithText("解除本机绑定")[0]
+            unpair.performScrollTo()
+            unpair.performClick()
             composeRule.waitUntil(15_000) { anyText("解除本机绑定？") }
             composeRule.onAllNodesWithText("解除")[0].performClick()
         }

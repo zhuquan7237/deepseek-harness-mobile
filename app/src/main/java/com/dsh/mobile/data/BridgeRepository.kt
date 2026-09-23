@@ -641,6 +641,7 @@ class BridgeRepository(context: Context) {
                     if (fresh) Log.i(TAG, "typewriter armed (${last?.text?.length ?: 0} chars)")
                     current.copy(
                         history = parsed.rows,
+                        historyEndTime = parsed.endTime,
                         running = parsed.running,
                         // 重进正在跑的会话要把"进行态"也恢复出来，否则看起来像卡住/没反应
                         thinking = parsed.running,

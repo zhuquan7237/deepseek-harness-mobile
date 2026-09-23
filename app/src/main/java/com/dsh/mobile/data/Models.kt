@@ -43,6 +43,8 @@ data class SessionSummary(
     /** 这个会话用的模型（来自 projections.values.modelSelection）——打开历史会话时要继承它。 */
     val modelProvider: String = "",
     val modelId: String = "",
+    /** 这个会话已生成的文件数（桥接记账；0 = 没有）。 */
+    val fileCount: Int = 0,
 )
 
 /**
@@ -56,6 +58,8 @@ data class ChatRow(
     val text: String,
     val detail: String = "",
     val raw: String = "",
+    /** 事件时间（epoch ms）；执行记录折叠后靠它算「这一段用了多久」。 */
+    val time: Long = 0L,
 )
 
 /** One in-flight assistant bubble, keyed by `turn:step`. */
@@ -144,6 +148,8 @@ data class AppState(
     val sessionTitle: String = "",
     val sessionCwd: String = "",
     val history: List<ChatRow> = emptyList(),
+    /** 历史里最后一个事件的时间：折叠的执行记录用它当作「这一段到哪结束」。 */
+    val historyEndTime: Long = 0L,
     val live: List<LiveBubble> = emptyList(),
     val running: Boolean = false,
     val thinking: Boolean = false,

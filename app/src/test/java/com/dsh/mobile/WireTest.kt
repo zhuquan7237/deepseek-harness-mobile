@@ -1,5 +1,6 @@
 package com.dsh.mobile
 
+import com.dsh.mobile.data.ChatRow
 import com.dsh.mobile.data.Role
 import com.dsh.mobile.data.Wire
 import org.json.JSONArray
@@ -455,5 +456,119 @@ class WireTest {
         )
         val parsed = Wire.parseHistory(JSONObject().put("items", JSONArray().put(JSONObject().put("event", event))))
         assertEquals(1, parsed.rows.count { it.who == Role.TRUNCATED })
+    }
+
+    // ------------------------------------------------ 执行记录折叠 / 时长
+
+    @Test
+    fun fmtDurationShapes() {
+        assertEquals("45 秒", Wire.fmtDuration(45_000))
+        assertEquals("2 分", Wire.fmtDuration(120_000))
+        assertEquals("2 分 5 秒", Wire.fmtDuration(125_000))
+        assertEquals("1 小时", Wire.fmtDuration(3_600_000))
+        assertEquals("1 小时 5 分", Wire.fmtDuration(3_900_000))
+    }
+
+    @Test
+    fun traceBlocksFoldRunOfSteps() {
+        val rows = listOf(
+            ChatRow(Role.USER, "hi", time = 1000),
+            ChatRow(Role.REASONING, "think", time = 2000),
+            ChatRow(Role.TOOL, "调用 pwsh", time = 3000),
+            ChatRow(Role.TOOL, "工具返回", time = 4000),
+            ChatRow(Role.ASSISTANT, "done", time = 20_000),
+        )
+        val blocks = Wire.traceBlocks(rows, endTime = 20_000)
+        assertEquals(1, blocks.size)
+        assertEquals(1, blocks[0].start)
+        assertEquals(3, blocks[0].end)
+        // 时长 = 首行 2s → 下一锚点 20s；步数 = 1 次调用
+        assertEquals("执行 1 步 · 18 秒", blocks[0].label)
+    }
+
+    @Test
+    fun traceBlocksUseEndTimeForTail() {
+        val rows = listOf(
+            ChatRow(Role.USER, "go", time = 1000),
+            ChatRow(Role.REASONING, "a", time = 2000),
+            ChatRow(Role.TOOL, "调用 x", time = 3000),
+        )
+        val blocks = Wire.traceBlocks(rows, endTime = 62_000)
+        assertEquals(1, blocks.size)
+        assertEquals("执行 1 步 · 1 分", blocks[0].label)
+    }
+
+    @Test
+    fun traceBlocksNeedAtLeastTwoRows() {
+        val rows = listOf(
+            ChatRow(Role.REASONING, "solo", time = 1000),
+            ChatRow(Role.ASSISTANT, "answer", time = 2000),
+        )
+        assertTrue(Wire.traceBlocks(rows, 2000).isEmpty())
+    }
+
+    @Test
+    fun traceBlocksSplitOnAnchors() {
+        val rows = listOf(
+            ChatRow(Role.TOOL, "调用 a", time = 1000),
+            ChatRow(Role.TOOL, "工具返回", time = 2000),
+            ChatRow(Role.ASSISTANT, "mid", time = 3000),
+            ChatRow(Role.REASONING, "b", time = 4000),
+            ChatRow(Role.TOOL, "调用 c", time = 5000),
+            ChatRow(Role.ASSISTANT, "end", time = 9000),
+        )
+        val blocks = Wire.traceBlocks(rows, 9000)
+        assertEquals(2, blocks.size)
+        assertEquals(0, blocks[0].start)
+        assertEquals(3, blocks[1].start)
+    }
+
+    @Test
+    fun traceBlocksLabelThinkingOnlyGroup() {
+        val rows = listOf(
+            ChatRow(Role.REASONING, "a", time = 1000),
+            ChatRow(Role.REASONING, "b", time = 2000),
+            ChatRow(Role.ASSISTANT, "x", time = 12_000),
+        )
+        val blocks = Wire.traceBlocks(rows, 12_000)
+        assertEquals(1, blocks.size)
+        assertEquals("思考 2 段 · 11 秒", blocks[0].label)
+    }
+
+    @Test
+    fun parseHistoryStampsRowTimesAndEndTime() {
+        val t = 1_700_000_000_000L
+        val message = JSONObject()
+            .put("type", "assistant/message")
+            .put("time", t)
+            .put(
+                "data",
+                JSONObject().put(
+                    "message",
+                    JSONObject().put(
+                        "content",
+                        JSONArray().put(JSONObject().put("type", "text").put("text", "hello")),
+                    ),
+                ),
+            )
+        val parsed = Wire.parseHistory(JSONObject().put("items", JSONArray().put(JSONObject().put("event", message))))
+        assertEquals(t, parsed.rows.first { it.who == Role.ASSISTANT }.time)
+        assertEquals(t, parsed.endTime)
+    }
+
+    // ------------------------------------------------------------- 其它打磨
+
+    @Test
+    fun cleanTitleStripsMarkdownAndNewlines() {
+        assertEquals("皮卡丘跳舞动画", Wire.cleanTitle("`皮卡丘跳舞动画`"))
+        assertEquals("a b", Wire.cleanTitle("a\n  b"))
+        assertEquals("标题", Wire.cleanTitle("  标题  "))
+    }
+
+    @Test
+    fun parseSessionReadsFileCount() {
+        val session = JSONObject().put("sessionId", "s1").put("producedFiles", 3)
+        assertEquals(3, Wire.parseSession(session).fileCount)
+        assertEquals(0, Wire.parseSession(JSONObject().put("sessionId", "s2")).fileCount)
     }
 }
