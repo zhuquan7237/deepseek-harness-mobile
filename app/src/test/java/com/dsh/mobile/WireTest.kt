@@ -273,4 +273,50 @@ class WireTest {
         assertEquals(1_700_000_000_000L, Wire.millis(1_700_000_000L))
         assertEquals(1_700_000_000_000L, Wire.millis(1_700_000_000_000L))
     }
+
+    // ------------------------------------------------------ turn failures
+
+    @Test
+    fun turnEndErrorExtractsProviderMessage() {
+        // 真实载荷（2026-09-23 hyb/glm-5.3-flash 的"你好"被反测活拦截）
+        val message = "400: {\"code\":\"content_anti_probe_blocking\",\"message\":\"反测活已拦截本次请求：短消息命中测活探针关键词（如 hi、你好等） (request id: 20260923180742515645600IjN73max)\",\"type\":\"one_hub_err\"}"
+        val data = JSONObject().put("turn", 1).put(
+            "reason",
+            JSONObject().put("kind", "error").put("error", JSONObject().put("message", message)),
+        )
+        assertEquals(
+            "请求失败：400 反测活已拦截本次请求：短消息命中测活探针关键词（如 hi、你好等）",
+            Wire.turnEndError(data),
+        )
+    }
+
+    @Test
+    fun turnEndErrorIgnoresNormalEndings() {
+        assertNull(Wire.turnEndError(JSONObject()))
+        assertNull(Wire.turnEndError(JSONObject().put("reason", JSONObject().put("kind", "aborted"))))
+        assertNull(Wire.turnEndError(JSONObject().put("reason", JSONObject().put("kind", "completed"))))
+    }
+
+    @Test
+    fun turnEndErrorPassesThroughPlainMessages() {
+        val data = JSONObject().put(
+            "reason",
+            JSONObject().put("kind", "error").put("error", JSONObject().put("message", "plain boom")),
+        )
+        assertEquals("请求失败：plain boom", Wire.turnEndError(data))
+    }
+
+    @Test
+    fun parseHistoryEmitsErrorRow() {
+        val event = JSONObject().put("type", "turn/end").put(
+            "data",
+            JSONObject().put(
+                "reason",
+                JSONObject().put("kind", "error").put("error", JSONObject().put("message", "boom")),
+            ),
+        )
+        val parsed = Wire.parseHistory(JSONObject().put("items", JSONArray().put(JSONObject().put("event", event))))
+        assertEquals(1, parsed.rows.count { it.who == Role.ERROR })
+        assertTrue(parsed.rows.first { it.who == Role.ERROR }.text.startsWith("请求失败："))
+    }
 }

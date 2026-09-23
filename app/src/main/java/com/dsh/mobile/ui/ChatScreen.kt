@@ -719,6 +719,19 @@ private fun MessageRow(
     val body = if (done) row.text else row.text.substring(0, shown.coerceIn(0, row.text.length))
     val palette = LocalDsh.current
     when (row.who) {
+        Role.ERROR -> Box(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Surface(color = palette.danger.copy(alpha = 0.12f), shape = RoundedCornerShape(14.dp)) {
+                Text(
+                    "⚠️ $body",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.danger,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+        }
         Role.NOTICE -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text(
                 row.text,

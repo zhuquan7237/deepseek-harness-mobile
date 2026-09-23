@@ -14,7 +14,7 @@ enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS }
 enum class Conn { CONNECTING, ONLINE, OFFLINE }
 
 /** Who said a message in the conversation log. */
-enum class Role { USER, ASSISTANT, TOOL, REASONING, NOTICE }
+enum class Role { USER, ASSISTANT, TOOL, REASONING, NOTICE, ERROR }
 
 @Immutable
 data class DeviceInfo(

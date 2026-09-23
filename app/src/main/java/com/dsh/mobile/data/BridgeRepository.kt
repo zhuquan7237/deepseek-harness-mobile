@@ -843,7 +843,9 @@ class BridgeRepository(context: Context) {
                 it.copy(running = true, live = emptyList(), thinking = true, thinkingSince = System.currentTimeMillis())
             }
             "turn/end" -> {
-                completionPending = true
+                // 失败回合不会再有 assistant/message，常规重载不会触发 ——
+                // 单独补一次，让 Wire.parseHistory 生成的 ERROR 行显示出来
+                if (Wire.turnEndError(data) != null) scheduleHistoryReload() else completionPending = true
                 _state.update {
                     it.copy(running = false, live = emptyList(), thinking = false, thinkingSince = 0L)
             }

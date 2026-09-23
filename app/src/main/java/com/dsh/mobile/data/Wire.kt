@@ -164,7 +164,11 @@ object Wire {
                     lastTurn = "start"
                     stepStart = time
                 }
-                "turn/end" -> lastTurn = "end"
+                "turn/end" -> {
+                    lastTurn = "end"
+                    // 失败的回合要显式告诉用户原因（真机反馈"没输出也没有报错"）
+                    turnEndError(data)?.let { rows.add(ChatRow(Role.ERROR, it)) }
+                }
                 "step/start" -> stepStart = time
                 "user/message" -> {
                     val text = extractText(data)
@@ -222,6 +226,32 @@ object Wire {
             }
         }
         return HistoryParse(rows, lastTurn == "start")
+    }
+
+    /**
+     * 回合以错误结束时的可读原因。引擎把失败放在 `turn/end.data.reason`：
+     * `{"kind":"error","error":{"message":"400: {…上游 JSON…}"}}` —— 上游那段常把
+     * 自己的 JSON 再套一层字符串，所以再解一层抠出最里面的 message 给人看，
+     * 并把 `(request id: …)` 这种噪音去掉、超长截断。
+     */
+    fun turnEndError(data: JSONObject): String? {
+        val reason = data.optJSONObject("reason") ?: return null
+        if (reason.optString("kind") != "error") return null
+        var msg = reason.optJSONObject("error")?.optString("message").orEmpty().trim()
+        if (msg.isEmpty()) msg = "引擎未提供原因"
+        val brace = msg.indexOf('{')
+        if (brace >= 0) {
+            runCatching {
+                val inner = JSONObject(msg.substring(brace)).optString("message").trim()
+                if (inner.isNotEmpty()) {
+                    val status = msg.substring(0, brace).trim().trimEnd(':')
+                    msg = if (status.isNotEmpty()) "$status $inner" else inner
+                }
+            }
+        }
+        msg = msg.replace(Regex("\\s*\\(request id:[^)]*\\)"), "").trim()
+        if (msg.length > 160) msg = msg.take(159) + "…"
+        return "请求失败：$msg"
     }
 
     /** First meaningful line of a payload, short enough for a meta row. */
