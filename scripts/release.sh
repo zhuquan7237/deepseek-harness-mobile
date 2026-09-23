@@ -27,6 +27,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GRADLE_FILE="app/build.gradle.kts"
 APK="app/build/outputs/apk/release/app-release.apk"
 PUBLISH_DIR="C:/Users/zhuquan/AppData/Roaming/DeepSeek/plugins/mobile-bridge/app"
+# 同一份清单/APK 也回写进桌面端仓库的内置插件目录：否则桌面端下次重打包会带着旧清单
+# 覆盖运行期副本（"发了版但手机收不到更新"的根因，2026-09-23 实锤）
+REPO_APP_DIR="D:/zcode测试/deepseek-harness-desktop/deepseek-harness-site/desktop/resources/plugins/mobile-bridge/app"
 APK_NAME="dsh-mobile.apk"
 APK_URL="https://m.zhuquan.xyz/mobile/dsh-mobile.apk"
 REPO_SLUG="zhuquan7237/deepseek-harness-mobile"
@@ -121,6 +124,10 @@ SIZE="$(wc -c < "$APK" | tr -d '[:space:]')"
 mkdir -p "$PUBLISH_DIR"
 cp -f "$APK" "$PUBLISH_DIR/$APK_NAME"
 printf '==> 已复制到 %s/%s（%s 字节）\n' "$PUBLISH_DIR" "$APK_NAME" "$SIZE"
+if [ -d "$REPO_APP_DIR" ]; then
+    cp -f "$APK" "$REPO_APP_DIR/$APK_NAME"
+    printf '==> 已回写仓库副本 %s/%s\n' "$REPO_APP_DIR" "$APK_NAME"
+fi
 
 # ---------------------------------------------------------------- 5. 更新清单
 "$PY_BIN" - "$VERSION" "$NEW_CODE" "$APK_URL" "$SHA256" "$SIZE" "$NOTES" \
@@ -157,6 +164,11 @@ printf '==> 提交并推送\n'
 git commit -am "release v$VERSION"
 git tag "v$VERSION"
 git push origin "$RELEASE_BRANCH" --tags
+
+if [ -d "$REPO_APP_DIR" ]; then
+    cp -f "$PUBLISH_DIR/app-update.json" "$REPO_APP_DIR/app-update.json"
+    printf '==> 清单已回写仓库副本\n'
+fi
 
 # ---------------------------------------------------------------- 7. GitHub Release
 printf '==> 发布 GitHub Release\n'
