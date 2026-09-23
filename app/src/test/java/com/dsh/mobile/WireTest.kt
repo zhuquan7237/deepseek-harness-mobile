@@ -118,6 +118,72 @@ class WireTest {
         assertEquals("真正的用户消息", parsed.rows[0].text)
     }
 
+    // ---------------------------------------------------------- inbox (排队/插话)
+
+    private fun inboxEvent(target: String, removed: Int, vararg texts: String): JSONObject {
+        val inserted = JSONArray()
+        texts.forEachIndexed { i, t ->
+            inserted.put(
+                JSONObject().put("id", "m$i")
+                    .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", t))),
+            )
+        }
+        return JSONObject().put(
+            "event",
+            JSONObject().put("type", "agent/inbox/spliced")
+                .put(
+                    "data",
+                    JSONObject().put("target", target).put("start", 0)
+                        .put("removedCount", removed).put("inserted", inserted),
+                ),
+        )
+    }
+
+    @Test
+    fun queuedMessageShowsAsPendingRow() {
+        val items = JSONArray()
+            .put(JSONObject().put("event", JSONObject().put("type", "turn/start").put("data", JSONObject())))
+            .put(inboxEvent("next-turn", 0, "跑完补个结论"))
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(Role.QUEUED, parsed.rows.last().who)
+        assertEquals("跑完补个结论", parsed.rows.last().text)
+        assertTrue(parsed.running)
+    }
+
+    @Test
+    fun steeredMessageShowsAsPendingRow() {
+        val items = JSONArray()
+            .put(JSONObject().put("event", JSONObject().put("type", "turn/start").put("data", JSONObject())))
+            .put(inboxEvent("next-step", 0, "直接输出"))
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(Role.STEER, parsed.rows.last().who)
+        assertEquals("直接输出", parsed.rows.last().text)
+    }
+
+    @Test
+    fun claimedInboxMessageDisappearsFromPending() {
+        // 引擎接管时先发 removedCount=1 的 spliced，再把它作为 user/message 写进回合
+        val items = JSONArray()
+            .put(JSONObject().put("event", JSONObject().put("type", "turn/start").put("data", JSONObject())))
+            .put(inboxEvent("next-step", 0, "直接输出"))
+            .put(inboxEvent("next-step", 1))
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "user/message")
+                        .put(
+                            "data",
+                            JSONObject().put("id", "m0")
+                                .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "直接输出"))),
+                        ),
+                ),
+            )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertFalse(parsed.rows.any { it.who == Role.STEER })
+        assertEquals(Role.USER, parsed.rows.last().who)
+        assertEquals("直接输出", parsed.rows.last().text)
+    }
+
     @Test
     fun historyFinishedTurnIsNotRunning() {
         val items = JSONArray()

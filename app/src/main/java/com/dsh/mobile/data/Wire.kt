@@ -153,6 +153,9 @@ object Wire {
         var lastTurn: String? = null
         var stepStart = 0L
         val seenCalls = HashSet<String>()
+        // 引擎收件箱：agent/inbox/spliced 记录"已排队/已插话但还没生效"的消息，
+        // 手机发、桌面发的都在这 —— 是跨设备、重启后都不丢的唯一真相。
+        val inbox = LinkedHashMap<String, MutableList<Pair<String, String>>>()
         for (i in 0 until items.length()) {
             val item = items.optJSONObject(i) ?: continue
             val event = item.optJSONObject("event") ?: item
@@ -223,8 +226,32 @@ object Wire {
                         )
                     )
                 }
+                "agent/inbox/spliced" -> {
+                    // target: next-step=插话（当前任务下一步生效）/ next-turn=排队（下一回合）
+                    val target = data.optString("target")
+                    if (target == "next-step" || target == "next-turn") {
+                        val list = inbox.getOrPut(target) { mutableListOf() }
+                        val start = data.optInt("start", 0).coerceIn(0, list.size)
+                        repeat(data.optInt("removedCount", 0)) {
+                            if (start < list.size) list.removeAt(start)
+                        }
+                        val inserted = data.optJSONArray("inserted")
+                        if (inserted != null) {
+                            for (j in 0 until inserted.length()) {
+                                val node = inserted.optJSONObject(j) ?: continue
+                                val text = extractText(node)
+                                if (text.isNotBlank()) {
+                                    list.add((start + j).coerceAtMost(list.size), node.optString("id") to text)
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
+        // 待生效的消息挂在末尾：它们还没进入回合，但用户必须看得见
+        inbox["next-step"]?.forEach { (_, text) -> rows.add(ChatRow(Role.STEER, text)) }
+        inbox["next-turn"]?.forEach { (_, text) -> rows.add(ChatRow(Role.QUEUED, text)) }
         return HistoryParse(rows, lastTurn == "start")
     }
 

@@ -67,6 +67,8 @@ import androidx.compose.material.icons.outlined.CloseFullscreen
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -778,6 +780,39 @@ private fun MessageRow(
                 }
             }
         }
+        Role.STEER, Role.QUEUED -> Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 14.dp),
+            horizontalAlignment = Alignment.End,
+        ) {
+            Text(
+                if (row.who == Role.STEER) "⚡ 插话 · 下一步生效" else "⏳ 排队中 · 等当前任务结束",
+                style = MaterialTheme.typography.labelMedium,
+                color = palette.accent,
+                modifier = Modifier.padding(end = 4.dp, bottom = 5.dp),
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth(0.82f)
+                    .widthIn(max = 520.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(palette.accent.copy(alpha = 0.10f))
+                        .border(1.dp, palette.accent.copy(alpha = 0.45f), RoundedCornerShape(22.dp))
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Text(
+                        row.text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = palette.textPrimary,
+                    )
+                }
+            }
+        }
         Role.REASONING -> ReasoningRow(row)
         Role.ASSISTANT -> SpeakerSemantics {
             Column(
@@ -1311,6 +1346,46 @@ private fun Composer(
             )
             Spacer(Modifier.width(4.dp))
             if (state.running) {
+                // 运行中也不白打字：可以「插话」引导当前任务，或「排队」等它跑完
+                if (draft.isNotBlank() && attachments.isEmpty()) {
+                    var inboxMenu by remember { mutableStateOf(false) }
+                    Box {
+                        CircleAction(
+                            background = palette.accent,
+                            icon = Icons.Outlined.ArrowUpward,
+                            tint = palette.onAccent,
+                            contentDescription = "追加消息",
+                            enabled = !state.sending,
+                        ) { inboxMenu = true }
+                        DropdownMenu(
+                            expanded = inboxMenu,
+                            onDismissRequest = { inboxMenu = false },
+                            containerColor = palette.surface,
+                        ) {
+                            InboxAction("插话", "立即引导当前任务（下一步生效）") {
+                                inboxMenu = false
+                                val text = draft.trim()
+                                draft = ""
+                                composerExpanded = false
+                                scope.launch {
+                                    val ok = repo.sendInbox(text, "steer")
+                                    if (!ok) draft = text
+                                }
+                            }
+                            InboxAction("排队", "等当前任务跑完后自动发送") {
+                                inboxMenu = false
+                                val text = draft.trim()
+                                draft = ""
+                                composerExpanded = false
+                                scope.launch {
+                                    val ok = repo.sendInbox(text, "queue")
+                                    if (!ok) draft = text
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.width(4.dp))
+                }
                 CircleAction(
                     background = palette.surfaceHi,
                     icon = Icons.Outlined.Stop,
@@ -1920,5 +1995,20 @@ private fun PeekAction(
             .background(Color.White.copy(alpha = 0.16f))
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 10.dp),
+    )
+}
+
+/** 运行中追加消息的菜单项：标题一行、说明一行，选之前就把后果讲清楚。 */
+@Composable
+private fun InboxAction(title: String, caption: String, onClick: () -> Unit) {
+    val palette = LocalDsh.current
+    DropdownMenuItem(
+        text = {
+            Column {
+                Text(title, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
+                Text(caption, style = MaterialTheme.typography.labelMedium, color = palette.textTertiary)
+            }
+        },
+        onClick = onClick,
     )
 }

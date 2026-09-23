@@ -474,6 +474,31 @@ class BridgeRepository(context: Context) {
         }
     }
 
+    /**
+     * 任务运行中追加消息。
+     * mode = "steer"：插话 —— 直接注入当前任务的下一步，立即改变它的方向；
+     * mode = "queue"：排队 —— 等当前回合结束后自动作为新回合发送。
+     * 两种都由引擎收件箱承载，历史里的 spliced 事件会渲染成"待生效"气泡。
+     */
+    suspend fun sendInbox(text: String, mode: String): Boolean {
+        val s = _state.value
+        val sid = s.sessionId ?: return false
+        val token = s.token ?: return false
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return false
+        return try {
+            api.prompt(token, sid, trimmed, mode)
+            toast(if (mode == "steer") "已插话：当前任务下一步生效" else "已排队：当前任务结束后发送")
+            true
+        } catch (error: BridgeException) {
+            handleApiError(error, "追加消息失败")
+            false
+        } catch (error: Exception) {
+            toast("追加消息失败：${error.message ?: "网络错误"}")
+            false
+        }
+    }
+
     fun loadHistory(sessionId: String? = _state.value.sessionId, quiet: Boolean = false) {
         val sid = sessionId ?: return
         scope.launch { fetchHistory(sid, quiet) }
@@ -881,7 +906,8 @@ class BridgeRepository(context: Context) {
                     }
                 }
             }
-            "assistant/message", "tool/call", "tool/result", "user/message" -> scheduleHistoryReload()
+            "assistant/message", "tool/call", "tool/result", "user/message",
+            "agent/inbox/spliced" -> scheduleHistoryReload()
         }
     }
 
