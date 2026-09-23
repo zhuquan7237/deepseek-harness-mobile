@@ -118,6 +118,48 @@ class WireTest {
         assertEquals("真正的用户消息", parsed.rows[0].text)
     }
 
+    // ---------------------------------------------------------- session files
+
+    @Test
+    fun parsesSessionFiles() {
+        val items = JSONArray()
+            .put(
+                JSONObject().put("path", "pelican-bike-3d.html").put("name", "pelican-bike-3d.html")
+                    .put("size", 24576L).put("mtime", 1758634231000L),
+            )
+            .put(JSONObject().put("path", "shot.png").put("size", 1024L))
+        val parsed = Wire.parseSessionFiles(JSONObject().put("items", items))
+        assertEquals(2, parsed.size)
+        assertEquals("pelican-bike-3d.html", parsed[0].name)
+        assertEquals(24576L, parsed[0].size)
+        assertEquals("shot.png", parsed[1].name)
+        assertEquals("shot.png", parsed[1].path)
+    }
+
+    @Test
+    fun parsesEmptySessionFiles() {
+        assertTrue(Wire.parseSessionFiles(JSONObject()).isEmpty())
+        assertTrue(Wire.parseSessionFiles(JSONObject().put("items", JSONArray())).isEmpty())
+    }
+
+    @Test
+    fun fileKindByName() {
+        assertEquals("image", Wire.fileKind("a.PNG"))
+        assertEquals("svg", Wire.fileKind("pelican.svg"))
+        assertEquals("html", Wire.fileKind("index.html"))
+        assertEquals("text", Wire.fileKind("notes.md"))
+        assertEquals("other", Wire.fileKind("deck.pptx"))
+        assertEquals("other", Wire.fileKind("noext"))
+    }
+
+    @Test
+    fun formatsSizes() {
+        assertEquals("0 B", Wire.formatSize(0))
+        assertEquals("512 B", Wire.formatSize(512))
+        assertEquals("1.5 KB", Wire.formatSize(1536))
+        assertEquals("2.0 MB", Wire.formatSize(2L * 1024 * 1024))
+    }
+
     // ---------------------------------------------------------- inbox (排队/插话)
 
     private fun inboxEvent(target: String, removed: Int, vararg texts: String): JSONObject {

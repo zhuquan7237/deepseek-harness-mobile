@@ -112,6 +112,15 @@ data class ToastMsg(val message: String, val seq: Int)
  */
 data class PairingDraft(val base: String = "", val deviceName: String = "", val withConfig: Boolean = true)
 
+/** 电脑端会话工作目录里的一个文件（GET /mobile/sessions/:id/files）。 */
+@Immutable
+data class SessionFile(
+    val path: String,
+    val name: String,
+    val size: Long = 0L,
+    val mtime: Long = 0L,
+)
+
 data class AppState(
     val ready: Boolean = false,
     val view: View = View.PAIRING,
@@ -143,6 +152,9 @@ data class AppState(
     val revealText: String? = null,
     val sending: Boolean = false,
     val historyLoading: Boolean = false,
+    // files produced in the session's working directory
+    val sessionFiles: List<SessionFile> = emptyList(),
+    val filesLoading: Boolean = false,
     // models
     val doc: ModelDoc? = null,
     val modelsLoading: Boolean = false,

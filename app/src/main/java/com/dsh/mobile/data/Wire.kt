@@ -281,6 +281,46 @@ object Wire {
         return "请求失败：$msg"
     }
 
+    /** 会话工作目录里的文件列表。 */
+    fun parseSessionFiles(json: JSONObject): List<SessionFile> {
+        val items = json.optJSONArray("items") ?: return emptyList()
+        val out = ArrayList<SessionFile>()
+        for (i in 0 until items.length()) {
+            val node = items.optJSONObject(i) ?: continue
+            val path = node.optString("path").ifEmpty { node.optString("name") }
+            if (path.isEmpty()) continue
+            out.add(
+                SessionFile(
+                    path = path,
+                    name = node.optString("name").ifEmpty { path.substringAfterLast('/') },
+                    size = node.optLong("size", 0L),
+                    mtime = millis(node.optLong("mtime", 0L)),
+                ),
+            )
+        }
+        return out
+    }
+
+    /** 文件扩展名 → 预览方式（image / svg / html / text / other）。 */
+    fun fileKind(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+        "png", "jpg", "jpeg", "gif", "webp", "bmp" -> "image"
+        "svg" -> "svg"
+        "html", "htm" -> "html"
+        "txt", "md", "markdown", "json", "jsonl", "csv", "log", "xml", "yaml", "yml",
+        "js", "mjs", "cjs", "ts", "tsx", "jsx", "css", "py", "kt", "java", "sh", "ps1",
+        "bat", "sql", "ini", "toml", "cfg", "conf" -> "text"
+        else -> "other"
+    }
+
+    /** 字节数 → 人话（1.2 MB 这种）。 */
+    fun formatSize(bytes: Long): String = when {
+        bytes <= 0L -> "0 B"
+        bytes < 1024L -> "$bytes B"
+        bytes < 1024L * 1024 -> String.format("%.1f KB", bytes / 1024.0)
+        bytes < 1024L * 1024 * 1024 -> String.format("%.1f MB", bytes / 1048576.0)
+        else -> String.format("%.2f GB", bytes / 1073741824.0)
+    }
+
     /** First meaningful line of a payload, short enough for a meta row. */
     fun hint(text: String, limit: Int = 80): String {
         val line = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()

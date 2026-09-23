@@ -453,10 +453,12 @@ class BridgeRepository(context: Context) {
             )
         }
         loadHistory(sessionId)
+        loadSessionFiles(sessionId)
     }
 
     fun closeSession() {
         reloadJob?.cancel()
+        fileTicketCache = null
         // 回到列表立刻刷新：正在进行中的任务要马上带着"正在执行"标识出现
         loadSessions()
         _state.update {
@@ -470,6 +472,7 @@ class BridgeRepository(context: Context) {
                 running = false,
                 thinking = false,
                 thinkingSince = 0L,
+                sessionFiles = emptyList(),
             )
         }
     }
@@ -495,6 +498,88 @@ class BridgeRepository(context: Context) {
             false
         } catch (error: Exception) {
             toast("追加消息失败：${error.message ?: "网络错误"}")
+            false
+        }
+    }
+
+    // ------------------------------------------------------------ session files
+
+    /** 会话工作目录里的文件列表；打开会话时拉一次，静默失败（不打扰用户）。 */
+    fun loadSessionFiles(sessionId: String? = _state.value.sessionId) {
+        val sid = sessionId ?: return
+        val token = _state.value.token ?: return
+        scope.launch {
+            _state.update { it.copy(filesLoading = true) }
+            try {
+                val list = Wire.parseSessionFiles(api.sessionFiles(token, sid))
+                _state.update { current ->
+                    if (current.sessionId == sid) current.copy(sessionFiles = list, filesLoading = false)
+                    else current.copy(filesLoading = false)
+                }
+            } catch (error: Exception) {
+                _state.update { it.copy(filesLoading = false) }
+            }
+        }
+    }
+
+    /** 票据缓存：预览 URL 复用同一张，过期前 1 分钟再换新的。 */
+    private var fileTicketCache: Pair<String, Long>? = null
+
+    /** 预览 URL（带票据）；拿不到返回 null。 */
+    suspend fun fileUrlFor(path: String): String? {
+        val s = _state.value
+        val sid = s.sessionId ?: return null
+        val token = s.token ?: return null
+        if (s.base.isEmpty()) return null
+        val cached = fileTicketCache
+        val ticket = if (cached != null && cached.second > System.currentTimeMillis() + 60_000L) {
+            cached.first
+        } else {
+            try {
+                val fresh = api.fileTicket(token, sid).optString("ticket")
+                if (fresh.isEmpty()) return null
+                fileTicketCache = fresh to (System.currentTimeMillis() + 25L * 60_000L)
+                fresh
+            } catch (error: Exception) {
+                toast("预览授权失败：${error.message ?: "网络错误"}")
+                return null
+            }
+        }
+        return api.fileUrl(s.base, sid, path, ticket)
+    }
+
+    /** 拉文件字节（文本预览用）。 */
+    suspend fun fetchFileBytes(file: SessionFile): ByteArray? {
+        val s = _state.value
+        val sid = s.sessionId ?: return null
+        val token = s.token ?: return null
+        return try {
+            api.download(token, sid, file.path)
+        } catch (error: Exception) {
+            null
+        }
+    }
+
+    /** 下载到系统「下载」目录。 */
+    suspend fun downloadSessionFile(file: SessionFile): Boolean {
+        val s = _state.value
+        val sid = s.sessionId ?: return false
+        val token = s.token ?: return false
+        return try {
+            val bytes = api.download(token, sid, file.path)
+            val saved = saveBytesToDownloads(appContext, file.name, bytes)
+            if (saved == null) {
+                toast("保存失败，没有可写的下载目录")
+                false
+            } else {
+                toast("已保存到 $saved")
+                true
+            }
+        } catch (error: BridgeException) {
+            handleApiError(error, "下载失败")
+            false
+        } catch (error: Exception) {
+            toast("下载失败：${error.message ?: "网络错误"}")
             false
         }
     }

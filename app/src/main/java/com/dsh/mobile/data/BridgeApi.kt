@@ -152,5 +152,34 @@ class BridgeApi(private val client: OkHttpClient) {
 
     suspend fun models(token: String): JSONObject = call("GET", "/mobile/models", token)
 
+    /** 会话工作目录里最近生成的文件。 */
+    suspend fun sessionFiles(token: String, sessionId: String): JSONObject =
+        call("GET", "/mobile/sessions/${enc(sessionId)}/files", token)
+
+    /** 文件访问票据：WebView 的子资源请求带不了 Authorization 头，用票据 + cookie。 */
+    suspend fun fileTicket(token: String, sessionId: String): JSONObject =
+        call("POST", "/mobile/sessions/${enc(sessionId)}/fsticket", token, JSONObject())
+
+    /** 文件在桥接上的预览 URL（带票据）。 */
+    fun fileUrl(base: String, sessionId: String, path: String, ticket: String): String {
+        val encoded = path.split('/').joinToString("/") { enc(it) }
+        return base.trimEnd('/') + "/mobile/fs/" + enc(sessionId) + "/" + encoded + "?t=" + enc(ticket)
+    }
+
+    /** 下载文件字节（走设备令牌，不依赖票据）。 */
+    suspend fun download(token: String, sessionId: String, path: String): ByteArray = withContext(Dispatchers.IO) {
+        val root = base.trimEnd('/')
+        if (root.isEmpty()) throw BridgeException("E_NO_SERVER", "还没有设置服务器地址")
+        val encoded = path.split('/').joinToString("/") { enc(it) }
+        val request = Request.Builder()
+            .url(root + "/mobile/fs/" + enc(sessionId) + "/" + encoded)
+            .header("Authorization", "Bearer $token")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw BridgeException("E_FILE", "下载失败（HTTP ${response.code}）")
+            response.body?.bytes() ?: throw BridgeException("E_FILE", "下载失败（空响应）")
+        }
+    }
+
     private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
 }

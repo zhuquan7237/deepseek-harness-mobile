@@ -73,6 +73,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -120,6 +121,7 @@ import com.dsh.mobile.data.ChatRow
 import com.dsh.mobile.data.Conn
 import com.dsh.mobile.data.LiveBubble
 import com.dsh.mobile.data.Role
+import com.dsh.mobile.data.SessionFile
 import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.delay
@@ -185,6 +187,27 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     val context = LocalContext.current
     var showRename by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<Wire.Artifact?>(null) }
+    // ---- 生成的文件：列表 + 全屏预览 ----
+    var filesSheet by remember { mutableStateOf(false) }
+    var viewing by remember { mutableStateOf<SessionFile?>(null) }
+    var viewingUrl by remember { mutableStateOf<String?>(null) }
+    var viewingText by remember { mutableStateOf<String?>(null) }
+    var viewingLoading by remember { mutableStateOf(false) }
+    val openFile: (SessionFile) -> Unit = { file ->
+        filesSheet = false
+        viewing = file
+        viewingUrl = null
+        viewingText = null
+        viewingLoading = true
+        scope.launch {
+            if (Wire.fileKind(file.name) == "text") {
+                viewingText = repo.fetchFileBytes(file)?.toString(Charsets.UTF_8)
+            } else {
+                viewingUrl = repo.fileUrlFor(file.path)
+            }
+            viewingLoading = false
+        }
+    }
     // ---- 附件：待发图片、缩略图、编辑中的图、来源弹层 ----
     var attachments by remember { mutableStateOf<List<AttachImage>>(emptyList()) }
     var attachPreviews by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
@@ -200,6 +223,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             reeditAt != null -> reeditAt = null
             pendingEdit != null -> pendingEdit = null
             attachPeekAt != null -> attachPeekAt = null
+            viewing != null -> viewing = null
+            filesSheet -> filesSheet = false
             preview != null -> preview = null
             else -> repo.closeSession()
         }
@@ -320,6 +345,10 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             onPreview = { preview = it },
             onQuickSend = { line -> scope.launch { repo.send(line) } },
             onRevealDone = { repo.revealConsumed() },
+            onOpenFiles = {
+                filesSheet = true
+                repo.loadSessionFiles()
+            },
             onOpenExternal = { lang, code -> openCodeExternally(context, lang, code) },
             onSaveCode = { lang, code ->
                 val where = saveTextToDownloads(context, codeFileName(lang), code)
@@ -460,6 +489,14 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                     showActions = false
                     showRename = true
                 }
+                SheetAction(
+                    if (state.sessionFiles.isEmpty()) "生成的文件" else "生成的文件 · ${state.sessionFiles.size} 个",
+                    caption = "预览或下载电脑端生成的文件",
+                ) {
+                    showActions = false
+                    filesSheet = true
+                    repo.loadSessionFiles()
+                }
                 Spacer(Modifier.height(16.dp))
             }
         }
@@ -484,6 +521,25 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 clipboard.setText(AnnotatedString(artifact.markup))
                 repo.toast("源码已复制")
             },
+        )
+    }
+    if (filesSheet) {
+        SessionFilesSheet(
+            files = state.sessionFiles,
+            loading = state.filesLoading,
+            onDismiss = { filesSheet = false },
+            onOpen = openFile,
+            onDownload = { file -> scope.launch { repo.downloadSessionFile(file) } },
+        )
+    }
+    viewing?.let { file ->
+        FileViewerOverlay(
+            file = file,
+            url = viewingUrl,
+            text = viewingText,
+            loading = viewingLoading,
+            onClose = { viewing = null },
+            onDownload = { scope.launch { repo.downloadSessionFile(file) } },
         )
     }
     // 常驻挂着：这样关闭时也能播完滑出动画，而不是瞬间消失
@@ -568,6 +624,7 @@ private fun MessageList(
     onQuickSend: (String) -> Unit,
     onSaveCode: (String, String) -> Unit,
     onRevealDone: () -> Unit,
+    onOpenFiles: () -> Unit,
     onOpenExternal: (String, String) -> Unit,
     modifier: Modifier,
 ) {
@@ -611,6 +668,13 @@ private fun MessageList(
         }
         if (state.thinking && live.isEmpty()) {
             item(key = "thinking") { ThinkingRow(state.thinkingSince) }
+        }
+        if (state.sessionFiles.isNotEmpty()) {
+            item(key = "session-files") {
+                Box(Modifier.animateItem()) {
+                    SessionFilesCard(state.sessionFiles, state.filesLoading, onClick = onOpenFiles)
+                }
+            }
         }
         if (rows.isEmpty() && live.isEmpty() && !state.historyLoading) {
             item {
@@ -1059,14 +1123,19 @@ private fun MessageAction(icon: ImageVector, label: String, onClick: () -> Unit)
 @Composable
 private fun PreviewSheet(artifact: Wire.Artifact, onDismiss: () -> Unit, onCopy: () -> Unit) {
     val palette = LocalDsh.current
+    // 之前是半展开的"吊在半空"，图贴在 420dp 高的框顶 —— 现在直接全屏展开、内容居中。
+    // M3 1.2 起 skipPartiallyExpanded 在 SheetState 上，不在 ModalBottomSheet 参数里。
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetState = sheetState,
         containerColor = palette.surface,
         dragHandle = { SheetHandle() },
     ) {
         Column(
             Modifier
                 .fillMaxWidth()
+                .fillMaxHeight()
                 .padding(horizontal = 16.dp)
                 .navigationBarsPadding(),
         ) {
@@ -1091,7 +1160,7 @@ private fun PreviewSheet(artifact: Wire.Artifact, onDismiss: () -> Unit, onCopy:
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(420.dp)
+                    .weight(1f)
                     .clip(RoundedCornerShape(14.dp))
                     .border(
                         1.dp,
@@ -1134,8 +1203,9 @@ private fun artifactPage(artifact: Wire.Artifact): String = if (artifact.kind !=
     artifact.markup
 } else {
     """<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>html,body{margin:0;padding:12px;background:#ffffff;}
-svg{max-width:100%;height:auto;display:block;margin:0 auto;}</style></head><body>${artifact.markup}</body></html>"""
+<style>html,body{margin:0;height:100%;background:#ffffff;}
+body{display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;}
+svg{max-width:100%;max-height:100%;height:auto;width:auto;display:block;}</style></head><body>${artifact.markup}</body></html>"""
 }
 
 /**
