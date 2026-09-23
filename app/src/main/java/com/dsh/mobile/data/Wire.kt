@@ -171,6 +171,8 @@ object Wire {
                     lastTurn = "end"
                     // 失败的回合要显式告诉用户原因（真机反馈"没输出也没有报错"）
                     turnEndError(data)?.let { rows.add(ChatRow(Role.ERROR, it)) }
+                    // 被输出长度上限截断的回合同理：有结束、没答案，别让用户以为卡死
+                    turnEndTruncated(data)?.let { rows.add(ChatRow(Role.TRUNCATED, it)) }
                 }
                 "step/start" -> stepStart = time
                 "user/message" -> {
@@ -279,6 +281,18 @@ object Wire {
         msg = msg.replace(Regex("\\s*\\(request id:[^)]*\\)"), "").trim()
         if (msg.length > 160) msg = msg.take(159) + "…"
         return "请求失败：$msg"
+    }
+
+    /**
+     * 回合因**输出长度上限**被截断时的可读提示。引擎把这类结束放在
+     * `turn/end.data.reason = {"kind":"max-tokens"}`——回合结束了但没有正文答案
+     * （模型把预算花在了思考上），手机上如果什么都不显示，看起来就像“卡死”。
+     * 这里给出一行说明 + 出路提示（点提示卡上的「继续」即发“继续”）。
+     */
+    fun turnEndTruncated(data: JSONObject): String? {
+        val reason = data.optJSONObject("reason") ?: return null
+        if (reason.optString("kind") != "max-tokens") return null
+        return "输出达到长度上限被截断，这一回合没能写完 —— 点「继续」让它接着往下写"
     }
 
     /** 会话工作目录里的文件列表。 */

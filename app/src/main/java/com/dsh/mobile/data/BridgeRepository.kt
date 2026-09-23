@@ -454,6 +454,8 @@ class BridgeRepository(context: Context) {
         }
         loadHistory(sessionId)
         loadSessionFiles(sessionId)
+        // 票据预取：第一次点预览立刻就能开始加载，不再等一趟往返
+        scope.launch { prefetchFileTicket() }
     }
 
     fun closeSession() {
@@ -505,11 +507,11 @@ class BridgeRepository(context: Context) {
     // ------------------------------------------------------------ session files
 
     /** 会话工作目录里的文件列表；打开会话时拉一次，静默失败（不打扰用户）。 */
-    fun loadSessionFiles(sessionId: String? = _state.value.sessionId) {
+    fun loadSessionFiles(sessionId: String? = _state.value.sessionId, quiet: Boolean = false) {
         val sid = sessionId ?: return
         val token = _state.value.token ?: return
         scope.launch {
-            _state.update { it.copy(filesLoading = true) }
+            if (!quiet) _state.update { it.copy(filesLoading = true) }
             try {
                 val list = Wire.parseSessionFiles(api.sessionFiles(token, sid))
                 _state.update { current ->
@@ -517,13 +519,29 @@ class BridgeRepository(context: Context) {
                     else current.copy(filesLoading = false)
                 }
             } catch (error: Exception) {
-                _state.update { it.copy(filesLoading = false) }
+                if (!quiet) _state.update { it.copy(filesLoading = false) }
             }
         }
     }
 
-    /** 票据缓存：预览 URL 复用同一张，过期前 1 分钟再换新的。 */
-    private var fileTicketCache: Pair<String, Long>? = null
+    /** 票据缓存：(会话 id, 票据, 过期时刻)。票据与会话绑定，切会话要作废。 */
+    private var fileTicketCache: Triple<String, String, Long>? = null
+
+    /** 打开会话就顺手取一张文件票据：第一次点预览就不用等这趟往返。 */
+    private suspend fun prefetchFileTicket() {
+        val s = _state.value
+        val sid = s.sessionId ?: return
+        val token = s.token ?: return
+        if (s.base.isEmpty()) return
+        val cached = fileTicketCache
+        if (cached != null && cached.first == sid && cached.third > System.currentTimeMillis() + 60_000L) return
+        try {
+            val fresh = api.fileTicket(token, sid).optString("ticket")
+            if (fresh.isNotEmpty()) fileTicketCache = Triple(sid, fresh, System.currentTimeMillis() + 25L * 60_000L)
+        } catch (error: Exception) {
+            // 静默：真正要预览时还有一次机会
+        }
+    }
 
     /** 预览 URL（带票据）；拿不到返回 null。 */
     suspend fun fileUrlFor(path: String): String? {
@@ -532,13 +550,13 @@ class BridgeRepository(context: Context) {
         val token = s.token ?: return null
         if (s.base.isEmpty()) return null
         val cached = fileTicketCache
-        val ticket = if (cached != null && cached.second > System.currentTimeMillis() + 60_000L) {
-            cached.first
+        val ticket = if (cached != null && cached.first == sid && cached.third > System.currentTimeMillis() + 60_000L) {
+            cached.second
         } else {
             try {
                 val fresh = api.fileTicket(token, sid).optString("ticket")
                 if (fresh.isEmpty()) return null
-                fileTicketCache = fresh to (System.currentTimeMillis() + 25L * 60_000L)
+                fileTicketCache = Triple(sid, fresh, System.currentTimeMillis() + 25L * 60_000L)
                 fresh
             } catch (error: Exception) {
                 toast("预览授权失败：${error.message ?: "网络错误"}")
@@ -962,12 +980,15 @@ class BridgeRepository(context: Context) {
                 it.copy(running = true, live = emptyList(), thinking = true, thinkingSince = System.currentTimeMillis())
             }
             "turn/end" -> {
-                // 失败回合不会再有 assistant/message，常规重载不会触发 ——
-                // 单独补一次，让 Wire.parseHistory 生成的 ERROR 行显示出来
-                if (Wire.turnEndError(data) != null) scheduleHistoryReload() else completionPending = true
+                // 失败/被截断的回合不会再有 assistant/message，常规重载不会触发 ——
+                // 单独补一次，让 Wire.parseHistory 生成的 ERROR / 截断提示行显示出来
+                val failed = Wire.turnEndError(data) != null || Wire.turnEndTruncated(data) != null
+                if (failed) scheduleHistoryReload() else completionPending = true
+                // 这一回合可能产出了新文件：静默刷新本会话的生成文件列表（卡片随之出现）
+                _state.value.sessionId?.let { sid -> loadSessionFiles(sid, quiet = true) }
                 _state.update {
                     it.copy(running = false, live = emptyList(), thinking = false, thinkingSince = 0L)
-            }
+                }
             }
             "assistant/chunk" -> {
                 // A streaming adapter may send thinking first; it belongs in the

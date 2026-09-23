@@ -1,5 +1,6 @@
 package com.dsh.mobile.ui
 
+import android.graphics.drawable.Drawable
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -192,18 +193,50 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     var viewing by remember { mutableStateOf<SessionFile?>(null) }
     var viewingUrl by remember { mutableStateOf<String?>(null) }
     var viewingText by remember { mutableStateOf<String?>(null) }
+    var viewingBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var viewingGif by remember { mutableStateOf<Drawable?>(null) }
     var viewingLoading by remember { mutableStateOf(false) }
     val openFile: (SessionFile) -> Unit = { file ->
         filesSheet = false
         viewing = file
         viewingUrl = null
         viewingText = null
+        viewingBitmap = null
+        viewingGif = null
         viewingLoading = true
         scope.launch {
-            if (Wire.fileKind(file.name) == "text") {
-                viewingText = repo.fetchFileBytes(file)?.toString(Charsets.UTF_8)
-            } else {
-                viewingUrl = repo.fileUrlFor(file.path)
+            val kind = Wire.fileKind(file.name)
+            val key = file.path + "@" + file.mtime
+            when {
+                kind == "image" -> {
+                    // 缓存命中直接上屏（重开图零等待）
+                    val cached = PreviewCache.image(key)
+                    if (cached != null) {
+                        viewingBitmap = cached
+                    } else {
+                        val bytes = repo.fetchFileBytes(file)
+                        if (bytes != null && file.name.endsWith(".gif", ignoreCase = true)) {
+                            val animated = decodeAnimatedGif(bytes)
+                            if (animated != null) {
+                                viewingGif = animated
+                            } else {
+                                viewingBitmap = decodePreviewBitmap(bytes)
+                            }
+                        } else if (bytes != null) {
+                            val decoded = decodePreviewBitmap(bytes)
+                            if (decoded != null) PreviewCache.putImage(key, decoded)
+                            viewingBitmap = decoded
+                        }
+                    }
+                }
+                kind == "text" -> {
+                    val cached = PreviewCache.text(key)
+                    val raw = cached ?: repo.fetchFileBytes(file)?.toString(Charsets.UTF_8)?.also { PreviewCache.putText(key, it) }
+                    viewingText = raw?.let {
+                        if (it.length > 800_000) it.take(800_000) + "\n\n……（内容过大，仅预览前 800 KB，完整内容请下载查看）" else it
+                    }
+                }
+                else -> viewingUrl = repo.fileUrlFor(file.path)
             }
             viewingLoading = false
         }
@@ -489,13 +522,15 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                     showActions = false
                     showRename = true
                 }
-                SheetAction(
-                    if (state.sessionFiles.isEmpty()) "生成的文件" else "生成的文件 · ${state.sessionFiles.size} 个",
-                    caption = "预览或下载电脑端生成的文件",
-                ) {
-                    showActions = false
-                    filesSheet = true
-                    repo.loadSessionFiles()
+                if (state.sessionFiles.isNotEmpty()) {
+                    SheetAction(
+                        "生成的文件 · ${state.sessionFiles.size} 个",
+                        caption = "预览或下载这个会话生成的文件",
+                    ) {
+                        showActions = false
+                        filesSheet = true
+                        repo.loadSessionFiles()
+                    }
                 }
                 Spacer(Modifier.height(16.dp))
             }
@@ -537,6 +572,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             file = file,
             url = viewingUrl,
             text = viewingText,
+            bitmap = viewingBitmap,
+            gif = viewingGif,
             loading = viewingLoading,
             onClose = { viewing = null },
             onDownload = { scope.launch { repo.downloadSessionFile(file) } },
@@ -806,6 +843,35 @@ private fun MessageRow(
                     color = palette.danger,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 )
+            }
+        }
+        Role.TRUNCATED -> Box(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Surface(color = palette.warn.copy(alpha = 0.14f), shape = RoundedCornerShape(14.dp)) {
+                Row(
+                    Modifier.padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "✂️ $body",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.warn,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "继续",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = palette.warn,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(palette.warn.copy(alpha = 0.18f))
+                            .clickable { onRegenerate() }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
         Role.NOTICE -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {

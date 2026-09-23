@@ -1,11 +1,26 @@
 package com.dsh.mobile.ui
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color as AndroidColor
+import android.graphics.ImageDecoder
+import android.graphics.drawable.AnimatedImageDrawable
+import android.graphics.drawable.Drawable
+import android.os.Build
+import android.util.LruCache
+import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.ImageView
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,14 +45,26 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.key
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -46,12 +73,20 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.dsh.mobile.data.SessionFile
 import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.nio.ByteBuffer
 
 /**
  * 电脑端生成的文件，手机上的三个入口：
  *  - [SessionFilesCard] 挂在对话末尾（有文件才会出现）
  *  - [SessionFilesSheet] 列表（预览 / 下载）
- *  - [FileViewerOverlay] 全屏预览器（图片/网页居中、文本可读、其余给下载）
+ *  - [FileViewerOverlay] 全屏预览器（图片原生查看、网页/矢量图 WebView、文本可读、其余给下载）
+ *
+ * 流畅度上的三条经验（真机反馈“预览很卡”）：
+ *  1. 图片不再走 WebView：原生解码 + 下采样 + LRU 缓存，捏合缩放只走合成层；
+ *  2. WebView 全局复用 + HTTP 校验缓存（桥接发 ETag/304），重开几乎即显；
+ *  3. 预览打开前先取票据（打开会话时预取），点开第一帧就开始加载。
  */
 
 @Composable
@@ -109,7 +144,7 @@ fun SessionFilesSheet(
         ) {
             Text("生成的文件", style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
             Text(
-                if (loading) "正在读取…" else "${files.size} 个 · 电脑端会话工作目录",
+                if (loading) "正在读取…" else "${files.size} 个 · 这个会话生成的文件",
                 style = MaterialTheme.typography.labelMedium,
                 color = palette.textTertiary,
             )
@@ -194,8 +229,60 @@ private fun ExtChip(name: String) {
     }
 }
 
+// ----------------------------------------------------------------- 预览缓存与解码
+
+/** 预览用的小缓存：图片按 28MB LRU，文本留最近 8 个。 */
+object PreviewCache {
+    private val images = object : LruCache<String, Bitmap>(28 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
+    }
+    private val texts = object : LruCache<String, String>(8) {}
+
+    fun image(key: String): Bitmap? = images.get(key)
+    fun putImage(key: String, bitmap: Bitmap) {
+        images.put(key, bitmap)
+    }
+    fun text(key: String): String? = texts.get(key)
+    fun putText(key: String, text: String) {
+        texts.put(key, text)
+    }
+}
+
+/** 大图按屏宽下采样解码（IO 线程），避免动辄几十 MB 的位图把合成拖卡。 */
+suspend fun decodePreviewBitmap(bytes: ByteArray, maxDim: Int = 2200): Bitmap? = withContext(Dispatchers.IO) {
+    try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        val dim = maxOf(bounds.outWidth, bounds.outHeight)
+        while (dim / (sample * 2) >= maxDim) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+    } catch (t: Throwable) {
+        null
+    }
+}
+
+/** GIF 解码成可播放的 AnimatedImageDrawable（API 28+），失败返回 null（退回图片路径）。 */
+fun decodeAnimatedGif(bytes: ByteArray): Drawable? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+    return try {
+        val source = ImageDecoder.createSource(ByteBuffer.wrap(bytes))
+        val drawable = ImageDecoder.decodeDrawable(source)
+        if (drawable is AnimatedImageDrawable) {
+            drawable.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+            drawable.start()
+        }
+        drawable
+    } catch (t: Throwable) {
+        null
+    }
+}
+
+// ------------------------------------------------------------------- 全屏预览器
+
 /**
- * 全屏文件预览。图片/SVG/网页交给 WebView（自带缩放，页面里居中），
+ * 全屏文件预览。图片走原生查看器（双击/捏合缩放、拖动），SVG/HTML 交给 WebView，
  * 文本直接排版（等宽、可滚动），其余类型给下载入口。
  */
 @Composable
@@ -203,12 +290,16 @@ fun FileViewerOverlay(
     file: SessionFile,
     url: String?,
     text: String?,
+    bitmap: Bitmap?,
+    gif: Drawable?,
     loading: Boolean,
     onClose: () -> Unit,
     onDownload: () -> Unit,
 ) {
     val palette = LocalDsh.current
     val kind = Wire.fileKind(file.name)
+    // WebView 的真实加载进度（0-100）。用确定值进度条，不用无限动画。
+    var webProgress by remember(file.path) { mutableIntStateOf(0) }
     Box(Modifier.fillMaxSize().background(palette.bg)) {
         Column(Modifier.fillMaxSize().systemBarsPadding()) {
             Row(
@@ -231,6 +322,17 @@ fun FileViewerOverlay(
                 }
                 Spacer(Modifier.width(8.dp))
                 CircleButton(Icons.Outlined.Download, "下载") { onDownload() }
+            }
+            if (url != null && webProgress in 1..99) {
+                LinearProgressIndicator(
+                    progress = { webProgress / 100f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp)
+                        .height(2.dp),
+                    color = palette.accent,
+                    trackColor = palette.surface,
+                )
             }
             Box(
                 Modifier
@@ -264,7 +366,14 @@ fun FileViewerOverlay(
                             }
                         }
                     }
-                    url != null -> WebPreview(url, kind, Modifier.fillMaxSize())
+                    kind == "image" -> {
+                        if (bitmap == null && gif == null) {
+                            ViewerHint("图片读取失败，可以点右上角下载后再看") { }
+                        } else {
+                            ImagePreview(bitmap = bitmap, gif = gif, modifier = Modifier.fillMaxSize())
+                        }
+                    }
+                    url != null -> WebPreview(url, kind, Modifier.fillMaxSize()) { webProgress = it }
                     else -> ViewerHint("这个格式没法直接预览，先下载再用其它应用打开") { }
                 }
             }
@@ -289,15 +398,110 @@ private fun ViewerHint(message: String, action: () -> Unit) {
     }
 }
 
+/**
+ * 原生图片查看器：双击缩放 / 捏合缩放 / 拖动。
+ * 缩放与位移都写在 [graphicsLayer] 的 lambda 里（只重合成、不重组不重排），
+ * 手势期间逐帧都跟得上——这就是“不流畅”最直接的解法。
+ */
+@Composable
+private fun ImagePreview(bitmap: Bitmap?, gif: Drawable?, modifier: Modifier = Modifier) {
+    val palette = LocalDsh.current
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+    var boxW by remember { mutableIntStateOf(0) }
+    var boxH by remember { mutableIntStateOf(0) }
+    Box(
+        modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(palette.surface)
+            .onSizeChanged {
+                boxW = it.width
+                boxH = it.height
+            }
+            .pointerInput(Unit) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    val next = (scale * zoom).coerceIn(1f, 6f)
+                    if (next <= 1.02f) {
+                        scale = 1f
+                        offsetX = 0f
+                        offsetY = 0f
+                    } else {
+                        scale = next
+                        val maxX = boxW * (scale - 1f) / 2f
+                        val maxY = boxH * (scale - 1f) / 2f
+                        offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
+                        offsetY = (offsetY + pan.y).coerceIn(-maxY, maxY)
+                    }
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(onDoubleTap = {
+                    if (scale > 1.05f) {
+                        scale = 1f
+                        offsetX = 0f
+                        offsetY = 0f
+                    } else {
+                        scale = 2.5f
+                    }
+                })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        val transform = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationX = offsetX
+                translationY = offsetY
+            }
+        when {
+            gif != null -> AndroidView(
+                modifier = transform,
+                factory = { context ->
+                    ImageView(context).apply {
+                        setImageDrawable(gif)
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                    }
+                },
+            )
+            bitmap != null -> Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = transform,
+                contentScale = ContentScale.Fit,
+            )
+        }
+    }
+}
+
+/**
+ * 预览共用一个 WebView：冷建一次要几百毫秒，复用后重开（含三方的 3D 页面）
+ * 基本即显。页面在后台会被暂停计时器，不空烧 CPU。
+ */
+private object WebPreviewPool {
+    var view: WebView? = null
+    var onProgress: ((Int) -> Unit)? = null
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun WebPreview(url: String, kind: String, modifier: Modifier = Modifier) {
-    key(url) {
-        AndroidView(
-            modifier = modifier.clip(RoundedCornerShape(16.dp)),
-            factory = { context ->
+private fun WebPreview(
+    url: String,
+    kind: String,
+    modifier: Modifier = Modifier,
+    onProgress: (Int) -> Unit,
+) {
+    AndroidView(
+        modifier = modifier.clip(RoundedCornerShape(16.dp)),
+        factory = { context ->
+            val existing = WebPreviewPool.view
+            if (existing != null) {
+                (existing.parent as? ViewGroup)?.removeView(existing)
+                existing
+            } else {
                 WebView(context).apply {
-                    settings.javaScriptEnabled = kind == "html"
                     settings.domStorageEnabled = true
                     settings.allowFileAccess = false
                     settings.allowContentAccess = false
@@ -305,21 +509,52 @@ private fun WebPreview(url: String, kind: String, modifier: Modifier = Modifier)
                     settings.useWideViewPort = true
                     settings.builtInZoomControls = true
                     settings.displayZoomControls = false
+                    settings.cacheMode = WebSettings.LOAD_DEFAULT
+                    settings.javaScriptCanOpenWindowsAutomatically = false
                     setBackgroundColor(AndroidColor.parseColor("#101114"))
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            WebPreviewPool.onProgress?.invoke(100)
+                        }
+                    }
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                            WebPreviewPool.onProgress?.invoke(newProgress)
+                        }
+                    }
                     CookieManager.getInstance().setAcceptCookie(true)
-                    // 子资源请求要靠 cookie 带票据（URL 上的 ?t= 只覆盖首帧请求）
-                    val ticket = url.substringAfter("?t=", "")
-                    if (ticket.isNotEmpty()) {
-                        CookieManager.getInstance().setCookie(url.substringBefore("?"), "dsht=$ticket")
-                    }
-                    if (kind == "html") {
-                        loadUrl(url)
-                    } else {
-                        loadDataWithBaseURL(url, filePage(url), "text/html", "utf-8", null)
-                    }
+                }.also { WebPreviewPool.view = it }
+            }
+        },
+        update = { web ->
+            // 每次组合都指向当前的进度回调（池里的 WebView 生命周期更长）。
+            WebPreviewPool.onProgress = onProgress
+            if (web.tag != url) {
+                web.tag = url
+                web.stopLoading()
+                web.settings.javaScriptEnabled = kind == "html"
+                // 子资源请求要靠 cookie 带票据（URL 上的 ?t= 只覆盖首帧请求）
+                val ticket = url.substringAfter("?t=", "")
+                if (ticket.isNotEmpty()) {
+                    CookieManager.getInstance().setCookie(url.substringBefore("?t="), "dsht=$ticket")
                 }
-            },
-        )
+                if (kind == "html") {
+                    web.loadUrl(url)
+                } else {
+                    web.loadDataWithBaseURL(url, filePage(url), "text/html", "utf-8", null)
+                }
+            }
+        },
+    )
+    DisposableEffect(url) {
+        val web = WebPreviewPool.view
+        web?.onResume()
+        web?.resumeTimers()
+        onDispose {
+            // 关掉预览后暂停页面（3D 场景的 rAF 循环不许在后台空转）
+            web?.onPause()
+            web?.pauseTimers()
+        }
     }
 }
 

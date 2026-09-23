@@ -427,4 +427,33 @@ class WireTest {
         assertEquals(1, parsed.rows.count { it.who == Role.ERROR })
         assertTrue(parsed.rows.first { it.who == Role.ERROR }.text.startsWith("请求失败："))
     }
+
+    // ------------------------------------------------------ truncated turns
+
+    @Test
+    fun turnEndTruncatedExplainsMaxTokens() {
+        // 真实载荷（2026-09-23 皮卡丘会话：思考太长撞上输出上限，回合结束了却没有答案）
+        val data = JSONObject().put("turn", 1).put("reason", JSONObject().put("kind", "max-tokens"))
+        val message = Wire.turnEndTruncated(data)
+        assertTrue(message != null)
+        assertTrue(message!!.contains("输出达到长度上限"))
+        assertTrue(message.contains("继续"))
+    }
+
+    @Test
+    fun turnEndTruncatedIgnoresOtherEndings() {
+        assertNull(Wire.turnEndTruncated(JSONObject()))
+        assertNull(Wire.turnEndTruncated(JSONObject().put("reason", JSONObject().put("kind", "completed"))))
+        assertNull(Wire.turnEndTruncated(JSONObject().put("reason", JSONObject().put("kind", "error"))))
+    }
+
+    @Test
+    fun parseHistoryEmitsTruncatedRow() {
+        val event = JSONObject().put("type", "turn/end").put(
+            "data",
+            JSONObject().put("turn", 1).put("reason", JSONObject().put("kind", "max-tokens")),
+        )
+        val parsed = Wire.parseHistory(JSONObject().put("items", JSONArray().put(JSONObject().put("event", event))))
+        assertEquals(1, parsed.rows.count { it.who == Role.TRUNCATED })
+    }
 }
