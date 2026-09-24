@@ -427,10 +427,15 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
         ) {
             CompletionCard(line = doneLine) { doneVisible = false }
         }
+        // 任务控制条（运行/停止/失联）：在输入区之上——停止的唯一边常住入口。
+        TaskControlStrip(state = state, repo = repo)
         // 她浮在输入框上沿：Box + align + offset 不占布局空间（原来独占一行，输入框
         // 上面会空出一整条）；先画她、后画输入框，所以下半身被输入框盖住 = 趴在框沿上。
         // 她的说话气泡允许压过下面的对话内容——再点一下就会消失。
         Box(Modifier.fillMaxWidth()) {
+            // 任务控制条出现时，她整体上移一个条高——否则她的气泡会正好压在
+            // 停止键上把点击吃掉（模拟器实测：真手指点不到停止，E2E 不受影响故未暴露）。
+            val stripVisible = state.running || !state.connected
             WhalePerch(
                 size = 54.dp,
                 running = state.running,
@@ -438,7 +443,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(end = 30.dp)
-                    .offset(y = (-34).dp),
+                    .offset(y = if (stripVisible) (-120).dp else (-34).dp),
             )
             Composer(
                 state = state,
@@ -1762,16 +1767,8 @@ private fun Composer(
                     }
                     Spacer(Modifier.width(4.dp))
                 }
-                CircleAction(
-                    background = palette.surfaceHi,
-                    icon = Icons.Outlined.Stop,
-                    tint = palette.textPrimary,
-                    contentDescription = "停止生成",
-                    enabled = true,
-                ) {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    repo.cancelTurn()
-                }
+                // 停止键已移到输入条上方的任务控制条（《指挥有据》v2：停止属于任务控制区）——
+                // 运行中这里只留「追加消息」入口，不再出现第二个停止键。
             } else {
                 val ready = draft.isNotBlank() || attachments.isNotEmpty()
                 val sendBg by animateColorAsState(
@@ -1838,6 +1835,137 @@ private fun Composer(
                 }
             }
         }
+    }
+}
+
+/**
+ * 任务控制条（《指挥有据》v2）：运行状态 + 停止入口 + 失联告知。
+ * 停止在这里是「唯一」的常住入口：点后进入「正在停止，等待电脑确认」，
+ * 电脑回执（turn/end）到达前绝不显示已停止；断线时明确「请勿视为已停止」。
+ */
+@Composable
+private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
+    val palette = LocalDsh.current
+    if (!state.running && state.connected) return
+    val haptics = LocalHapticFeedback.current
+    // 每秒走一次的时钟：给「已用时」和停止等待计时（只在本条可见时跑）。
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(state.running, state.stopping, state.connected) {
+        while (state.running) {
+            now = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+    val elapsed = if (state.runSince > 0) (now - state.runSince).coerceAtLeast(0) else 0L
+    val stopWait = if (state.stopping && state.stopRequestedAt > 0) (now - state.stopRequestedAt).coerceAtLeast(0) else 0L
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, bottom = 2.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(palette.surface)
+            .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        when {
+            // ① 停止等待确认（优先级最高；断线时也要说清楚「未确认」）
+            state.running && state.stopping -> {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(palette.textTertiary))
+                Text(
+                    when {
+                        !state.connected -> "停止请求尚未确认，请勿将断线视为已停止。"
+                        stopWait >= 12_000L -> "停止请求尚未确认，请稍候或刷新状态。"
+                        else -> "正在停止，等待电脑确认…"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                if (stopWait >= 12_000L) {
+                    Text(
+                        "刷新状态",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.primaryBtn,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { repo.refreshNow() }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
+            }
+            // ② 执行中失联：说清「电脑可能仍在执行」
+            state.running && !state.connected -> {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(palette.textTertiary))
+                Text(
+                    "连接已断开，任务可能仍在电脑上执行。恢复连接后确认状态。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "重新连接",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.primaryBtn,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable { repo.refreshNow() }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+            // ③ 正在执行（正常）
+            state.running -> {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
+                Column(Modifier.weight(1f)) {
+                    Text("正在执行", style = MaterialTheme.typography.labelMedium, color = palette.textPrimary)
+                    Text(
+                        "已用时 ${fmtClock(elapsed)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textTertiary,
+                    )
+                }
+                CircleAction(
+                    background = palette.surfaceHi,
+                    icon = Icons.Outlined.Stop,
+                    tint = palette.textPrimary,
+                    contentDescription = "停止生成",
+                    enabled = true,
+                    size = 34.dp,
+                    iconSize = 18.dp,
+                ) {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    repo.cancelTurn()
+                }
+            }
+            // ④ 无任务失联
+            else -> {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(palette.textTertiary))
+                Text(
+                    "与电脑的连接已断开。重新连接后可以继续操作。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "重新连接",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.primaryBtn,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable { repo.refreshNow() }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+/** 「02:18」/「1 小时 02 分」——任务控制条的已用时。 */
+private fun fmtClock(ms: Long): String {
+    val sec = (ms / 1000).coerceAtLeast(0)
+    return when {
+        sec < 3600 -> "%02d:%02d".format(sec / 60, sec % 60)
+        else -> "${sec / 3600} 小时 ${"%02d".format((sec % 3600) / 60)} 分"
     }
 }
 

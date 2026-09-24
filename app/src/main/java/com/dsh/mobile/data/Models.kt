@@ -156,6 +156,11 @@ data class AppState(
     val running: Boolean = false,
     val thinking: Boolean = false,
     val thinkingSince: Long = 0L,
+    /** 本回合开始时间（任务控制条的「已用时」；恢复历史时用 turn/start 的真实时间续上）。 */
+    val runSince: Long = 0L,
+    /** 停止请求已发出、等待电脑确认——收到 turn/end 才清（绝不在断线时假装已停止）。 */
+    val stopping: Boolean = false,
+    val stopRequestedAt: Long = 0L,
     /** 刚到达、还没放完打字机的那条助手消息（用后即焚，见 revealConsumed）。 */
     val revealText: String? = null,
     val sending: Boolean = false,
