@@ -9,7 +9,9 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -40,17 +42,59 @@ object Motion {
     @Volatile
     var animations: Boolean = true
 
-    /** Material 的 push 曲线：起步快、收尾长而柔。整屏切换与浮层统一用它。 */
-    val Push = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+    // —— 曲线词典（《墨色禅定 · 动效与触感圣经》§2.1）——
+    /** 落墨：新元素进入视野——起步快、收尾长而柔。 */
+    val E = CubicBezierEasing(0.20f, 0.00f, 0.00f, 1.00f)
+    /** 行笔：导航、展开、位置变化——有方向、可被打断。 */
+    val S = CubicBezierEasing(0.40f, 0.00f, 0.20f, 1.00f)
+    /** 收笔：局部元素退出——干脆离场，不回头。 */
+    val X = CubicBezierEasing(0.40f, 0.00f, 1.00f, 1.00f)
+    /** 轻触：按压、选择、状态切换。 */
+    val Q = CubicBezierEasing(0.20f, 0.00f, 0.20f, 1.00f)
+    /** 匀速：进度驱动、一次性扫光。 */
+    val L = LinearEasing
 
-    /** 微交互（提示条、图标出现） */
+    // —— 时间词典（毫秒 · §2.2）——
+    const val D80 = 80      // 按下、图标退场
+    const val D120 = 120    // 释放、轻量关闭
+    const val D160 = 160    // 选择、完成、局部状态
+    const val D180 = 180    // 卡片/对话框进入、旧页收束
+    const val D240 = 240    // 展开、底部表单
+    const val D280 = 280    // 标准返回
+    const val D320 = 320    // 主导航、全屏浮层
+
+    /** 迁移期别名：Push 与 E 是同一根曲线；新代码直接用 E。 */
+    val Push = E
     const val FAST = 160
-
-    /** 浮层进出场 */
     const val BASE = 240
+    const val SCREEN = 320
 
-    /** 整屏切换 */
-    const val SCREEN = 300
+    // ——《指挥有据》v2 §2：空间弹簧（位置/尺寸/形变）——
+    // 参数以 stiffness / dampingRatio 表达；速度档是感知目标，不用固定 duration 伪装弹簧。
+    /** 分段底板、局部定位；过冲目标 ≤2dp。 */
+    val SpatialSnappy = spring<Float>(dampingRatio = 0.80f, stiffness = 800f)
+    /** 有界展开、浮层停靠；常规静止起步无过冲。 */
+    val SpatialCalm = spring<Float>(dampingRatio = 1.00f, stiffness = 500f)
+    /** 新成果的微量舒展；仅 4–8dp 行程，不作用于正文。 */
+    val SpatialHero = spring<Float>(dampingRatio = 0.82f, stiffness = 300f)
+    /** 停止控制、安全相关形变；不允许视觉越界。 */
+    val SpatialCritical = spring<Float>(dampingRatio = 1.00f, stiffness = 1400f)
+    /** 应用内层级导航（页面位移）；不允许页面穿过终点露底。 */
+    val SpatialNavigation = spring<IntOffset>(dampingRatio = 1.00f, stiffness = 650f)
+
+    // —— v2 §2.2 效果动画（颜色/透明度/图标状态；不继承空间速度）——
+    /** 图标与状态层。 */
+    val EffectsFast = spring<Float>(dampingRatio = 1.00f, stiffness = 2400f)
+    /** 颜色、局部透明度。 */
+    val EffectsDefault = spring<Float>(dampingRatio = 1.00f, stiffness = 1400f)
+
+    // —— v2 §2.3 精确编排（只保留三种）——
+    /** 按下。 */
+    const val PRESS_MS = 50
+    /** 释放（默认无过冲）。 */
+    const val RELEASE_MS = 100
+    /** 业务确认节拍总长。 */
+    const val CONFIRM_MS = 300
 }
 
 /**

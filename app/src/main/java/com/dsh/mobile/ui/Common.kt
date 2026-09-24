@@ -52,12 +52,33 @@ import com.dsh.mobile.ui.theme.LocalDsh
 import kotlinx.coroutines.delay
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.Icons
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
 
 /**
  * The ChatGPT-mobile component set: round surface-filled icon buttons, context
  * pills, a floating dock, sheets with a drag handle. Everything lives on the
  * two measured tokens — canvas + `surface` — so screens stay flat and quiet.
  */
+
+/**
+ * 按压反馈（《指挥有据》v2 §4.1）：按下 50ms 收至 [pressedScale]，释放 100ms 回位；
+ * 默认 0.97（图标按钮），主行动按钮传 0.96。中断即从当前值继续，不强制播完。
+ * 必须与 clickable 共用同一个 [interaction]；图形层放在链首（外层）才能连背景一起缩放。
+ */
+@Composable
+fun Modifier.pressEffect(interaction: MutableInteractionSource, pressedScale: Float = 0.97f): Modifier {
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) pressedScale else 1f,
+        animationSpec = tween(if (pressed) Motion.PRESS_MS else Motion.RELEASE_MS, easing = Motion.E),
+        label = "press",
+    )
+    return this.graphicsLayer { scaleX = scale; scaleY = scale }
+}
 
 /** Round icon button filled with `surface` (ChatGPT's 40dp circles). */
 @Composable
@@ -71,12 +92,19 @@ fun CircleButton(
     onClick: () -> Unit,
 ) {
     val palette = LocalDsh.current
+    val interaction = remember { MutableInteractionSource() }
     Box(
         modifier
+            .pressEffect(interaction)
             .size(size)
             .clip(CircleShape)
             .background(palette.surface)
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(
+                interactionSource = interaction,
+                indication = LocalIndication.current,
+                enabled = enabled,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -355,12 +383,18 @@ fun PrimaryCta(
     onClick: () -> Unit,
 ) {
     val palette = LocalDsh.current
+    val interaction = remember { MutableInteractionSource() }
     Row(
         Modifier
+            .pressEffect(interaction, pressedScale = 0.96f)
             .height(50.dp)
             .clip(RoundedCornerShape(999.dp))
             .background(palette.accent)
-            .clickable(onClick = onClick)
+            .clickable(
+                interactionSource = interaction,
+                indication = LocalIndication.current,
+                onClick = onClick,
+            )
             .then(if (label.isNotBlank()) Modifier.semantics { contentDescription = label } else Modifier)
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,

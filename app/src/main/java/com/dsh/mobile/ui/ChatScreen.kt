@@ -14,6 +14,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -748,8 +749,21 @@ private fun MessageList(
                     }
                 }
                 is DispEntry.Trace -> Box(Modifier.animateItem()) {
-                    TraceSummary(label = entry.block.label, open = entry.open, live = entry.live) {
-                        expanded[entry.block.start] = !entry.open
+                    val b = entry.block
+                    val main = when {
+                        entry.live -> if (b.steps > 0) "正在执行 · 已完成 ${b.steps} 步" else "正在执行"
+                        b.steps > 0 -> "执行完成 · 共 ${b.steps} 步"
+                        else -> b.label.substringBefore(" · ")
+                    }
+                    val sub = when {
+                        entry.live -> listOfNotNull(
+                            b.lastAction?.let { "当前：$it" },
+                            b.durText?.let { "已用时 $it" },
+                        ).joinToString(" · ").ifBlank { null }
+                        else -> b.durText?.let { "用时 $it" }
+                    }
+                    TraceSummary(main = main, sub = sub, open = entry.open, live = entry.live) {
+                        expanded[b.start] = !entry.open
                     }
                 }
             }
@@ -948,11 +962,13 @@ private fun buildDisplay(
 }
 
 /**
- * 折叠的执行记录：一行灰字摘要（「执行 9 步 · 6 分 20 秒」），点开才铺开每一步。
- * 正在跑的是蓝点 + 蓝字——「它还在干活」要一眼看得出来。
+ * 折叠的执行记录（《指挥有据》v2 §4.4 两级结构）：
+ *   主行——「正在执行 · 已完成 7 步」/「执行完成 · 共 8 步」；
+ *   次行——「当前：读取项目文件 · 已用时 2 分 18 秒」/「用时 2 分 41 秒」。
+ * 正在跑的是朱砂点 + 朱砂主行——「它还在干活」一眼可见；不画推测进度条。
  */
 @Composable
-private fun TraceSummary(label: String, open: Boolean, live: Boolean, onToggle: () -> Unit) {
+private fun TraceSummary(main: String, sub: String?, open: Boolean, live: Boolean, onToggle: () -> Unit) {
     val palette = LocalDsh.current
     Row(
         Modifier
@@ -963,9 +979,9 @@ private fun TraceSummary(label: String, open: Boolean, live: Boolean, onToggle: 
             Modifier
                 .clip(RoundedCornerShape(10.dp))
                 .clickable(onClick = onToggle)
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (live) {
                 Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
@@ -977,11 +993,22 @@ private fun TraceSummary(label: String, open: Boolean, live: Boolean, onToggle: 
                     modifier = Modifier.size(14.dp),
                 )
             }
-            Text(
-                label,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (live) palette.accent else palette.textSecondary,
-            )
+            Column(Modifier.weight(1f, fill = false)) {
+                Text(
+                    main,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (live) palette.accent else palette.textSecondary,
+                )
+                if (sub != null) {
+                    Text(
+                        sub,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             Icon(
                 if (open) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
                 contentDescription = if (open) "收起执行记录" else "展开执行记录",
@@ -1888,12 +1915,19 @@ private fun CircleAction(
     iconSize: androidx.compose.ui.unit.Dp = 19.dp,
     onClick: () -> Unit,
 ) {
+    val interaction = remember { MutableInteractionSource() }
     Box(
         Modifier
+            .pressEffect(interaction)
             .size(size)
             .clip(CircleShape)
             .background(background)
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(
+                interactionSource = interaction,
+                indication = LocalIndication.current,
+                enabled = enabled,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(iconSize))

@@ -95,22 +95,21 @@ fun AppRoot(repo: BridgeRepository) {
                     //        能保持同一观感又不裁切的就是这一种）；
                     // 启动（LOADING）— 手里只有一枚 spinner，直接错峰淡换。
                     val forward = targetState.depth > initialState.depth
-                    // Both screens animate on purpose. A screen whose exit has no
-                    // motion (ExitTransition.None, a zero-offset slide, even
-                    // KeepUntilTransitionsFinished) gets dropped while the incoming
-                    // slide is still ~20% short of covering it, and the frame goes
-                    // black where the old page was. Scaling the outgoing keeps it in
-                    // the composition for the whole transition without translating it
-                    // sideways (a translation is what clips a left-aligned list).
-                    val recede = scaleOut(tween(Motion.SCREEN, easing = PushEasing), targetScale = 0.96f)
+                    // 《指挥有据》v2 §3.2（首轮实测修订）：层级推进 = 新页整幅 W→0 滑入
+                    // （Spatial.Navigation 弹簧：可打断、无过冲、无固定时长），旧页 0→±0.08W 微退
+                    // ——真实位移让退场层全程存活且不被裁切。已删除人为 24ms 延迟与全局 0.96 缩放
+                    // （缩放在 AnimatedContent 的层序下读起来就是硬切，首轮录屏实证）。两页根 alpha
+                    // 恒为 1.0，无双重曝光。
                     when {
                         initialState == Screen.LOADING || targetState == Screen.LOADING ->
-                            fadeIn(tween(Motion.BASE, delayMillis = 120, easing = PushEasing)) togetherWith
-                                fadeOut(tween(140, easing = PushEasing))
+                            fadeIn(tween(Motion.BASE, delayMillis = 120, easing = Motion.E)) togetherWith
+                                fadeOut(tween(140, easing = Motion.E))
                         forward ->
-                            slideInHorizontally(tween(Motion.SCREEN, easing = PushEasing)) { it } togetherWith recede
+                            slideInHorizontally(Motion.SpatialNavigation) { it } togetherWith
+                                androidx.compose.animation.slideOutHorizontally(Motion.SpatialNavigation) { -(it * 0.08f).toInt() }
                         else ->
-                            slideInHorizontally(tween(Motion.SCREEN, easing = PushEasing)) { -it } togetherWith recede
+                            slideInHorizontally(Motion.SpatialNavigation) { -it } togetherWith
+                                androidx.compose.animation.slideOutHorizontally(Motion.SpatialNavigation) { (it * 0.08f).toInt() }
                     }
                 },
                 label = "screen",

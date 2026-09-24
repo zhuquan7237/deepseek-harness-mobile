@@ -531,6 +531,23 @@ class WireTest {
     }
 
     @Test
+    fun traceBlocksExposeStepsDurationAndLastAction() {
+        val rows = listOf(
+            ChatRow(Role.REASONING, "think", time = 2000),
+            ChatRow(Role.TOOL, "调用 pwsh", time = 3000),
+            ChatRow(Role.TOOL, "工具返回", time = 4000),
+            ChatRow(Role.TOOL, "调用 读取文件", time = 5000),
+            ChatRow(Role.ASSISTANT, "done", time = 20_000),
+        )
+        val blocks = Wire.traceBlocks(rows, endTime = 20_000)
+        assertEquals(1, blocks.size)
+        assertEquals(2, blocks[0].steps)
+        assertEquals("18 秒", blocks[0].durText)
+        // 「当前：…」优先取最近的「调用 …」动作行（而不是「工具返回」结果行），展示为「运行 <名>」。
+        assertEquals("运行 读取文件", blocks[0].lastAction)
+    }
+
+    @Test
     fun traceBlocksUseEndTimeForTail() {
         val rows = listOf(
             ChatRow(Role.USER, "go", time = 1000),

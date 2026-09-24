@@ -290,7 +290,17 @@ object Wire {
     }
 
     /** 一段连续的执行记录（思考 + 工具调用/返回），折叠成一行摘要后展示。 */
-    data class TraceBlock(val start: Int, val end: Int, val label: String)
+    data class TraceBlock(
+    val start: Int,
+    val end: Int,
+    val label: String,
+    /** 工具步骤数（「调用 …」行）。 */
+    val steps: Int = 0,
+    /** 该块内的时长文案，如「6 分 20 秒」；无法计算时为 null。 */
+    val durText: String? = null,
+    /** 最近一次工具动作（供「当前：…」行）；无工具步骤时为 null。 */
+    val lastAction: String? = null,
+)
 
     /** 「6 分 20 秒」这类时长文案。 */
     fun fmtDuration(ms: Long): String {
@@ -335,14 +345,26 @@ object Wire {
                     endTime > 0 -> endTime
                     else -> rows[j].time
                 }
+                val durText = if (startT > 0 && endT > startT) fmtDuration(endT - startT) else null
+                val lastAction = if (steps > 0) {
+                    // 优先「调用 …」的动作行；没有时退回任意工具行。「工具返回」这类结果行
+                    // 不适合当「当前动作」——展示为「运行 <名>」形态。
+                    val row = (j downTo i).firstOrNull { rows[it].who == Role.TOOL && rows[it].text.startsWith("调用") }
+                        ?: (j downTo i).firstOrNull { rows[it].who == Role.TOOL }
+                    row?.let {
+                        val clean = rows[it].text.removePrefix("调用").trim()
+                        val name = clean.substringBefore(' ').ifBlank { clean }
+                        "运行 $name".take(28)
+                    }
+                } else null
                 val label = buildString {
                     if (steps > 0) append("执行 $steps 步") else append("思考 ${thoughts.coerceAtLeast(1)} 段")
-                    if (startT > 0 && endT > startT) {
+                    if (durText != null) {
                         append(" · ")
-                        append(fmtDuration(endT - startT))
+                        append(durText)
                     }
                 }
-                out.add(TraceBlock(i, j, label))
+                out.add(TraceBlock(i, j, label, steps, durText, lastAction))
             }
             i = j + 1
         }

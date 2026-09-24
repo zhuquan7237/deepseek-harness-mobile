@@ -141,7 +141,7 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             color = palette.textPrimary,
         )
         Text(
-            "配对这台手机。会话、模型和干活都在电脑上，这里是随身的控制器。",
+            "任务在电脑上执行。连接后，你可以在手机上发任务、看进度、查看生成的文件。",
             style = MaterialTheme.typography.bodyLarge,
             color = palette.textSecondary,
         )
@@ -152,7 +152,7 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
                 label = "服务器地址",
                 value = base,
                 onValueChange = { base = it },
-                placeholder = "扫码自动填入，或填电脑地址",
+                placeholder = "粘贴电脑端显示的地址",
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             )
             DshField(
