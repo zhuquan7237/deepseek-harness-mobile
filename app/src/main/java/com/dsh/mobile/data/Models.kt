@@ -176,6 +176,8 @@ data class AppState(
     val toast: ToastMsg? = null,
     // models screen
     val modelsSaving: Boolean = false,
+    /** 正在让电脑端补全模型能力（model-vision 同步中）。 */
+    val modelsSyncing: Boolean = false,
     val repairing: Boolean = false,
     // self-update
     val version: String = "",

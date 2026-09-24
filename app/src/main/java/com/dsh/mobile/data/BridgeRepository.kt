@@ -1240,6 +1240,12 @@ class BridgeRepository(context: Context) {
                 // 保存成功后重新读一次：拿到新的 revision，顺手把缓存刷新
                 loadModels()
                 onSaved(true)
+                // 桥接会在保存后自动触发一次模型能力同步（几秒）；稍后再静默刷一次，
+                // 让上下文窗口/思考档位自己出现在列表里，不需要用户再点任何东西。
+                scope.launch {
+                    delay(9000)
+                    loadModels()
+                }
             } catch (error: BridgeException) {
                 _state.update { it.copy(modelsSaving = false) }
                 when (error.code) {
@@ -1259,6 +1265,32 @@ class BridgeRepository(context: Context) {
                 _state.update { it.copy(modelsSaving = false) }
                 fail("model", "保存模型失败：${error.message ?: "网络错误"}")
                 onSaved(false)
+            }
+        }
+    }
+
+    /**
+     * 让电脑端立刻补全模型能力（上下文窗口 / 视觉 / 思考档位）。
+     * 桥接保存后本就会自动同步一次，这是给用户的「马上要」按钮：
+     * 修完密钥、换网关之后不必多等。
+     */
+    fun syncModelCapabilities() {
+        val token = _state.value.token ?: return
+        if (_state.value.modelsSyncing) return
+        scope.launch {
+            _state.update { it.copy(modelsSyncing = true) }
+            try {
+                val result = api.syncModelCapabilities(token)
+                val applied = result.optInt("applied", 0)
+                _state.update { it.copy(modelsSyncing = false) }
+                toast(if (applied > 0) "模型能力已补全 $applied 项" else "模型能力已是最新")
+                loadModels()
+            } catch (error: BridgeException) {
+                _state.update { it.copy(modelsSyncing = false) }
+                handleApiError(error, "同步模型能力失败")
+            } catch (error: Exception) {
+                _state.update { it.copy(modelsSyncing = false) }
+                fail("model", "同步模型能力失败：${error.message ?: "网络错误"}")
             }
         }
     }

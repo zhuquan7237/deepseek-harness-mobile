@@ -143,6 +143,40 @@ class BridgeApi(private val client: OkHttpClient) {
     suspend fun putModels(token: String, body: JSONObject): JSONObject =
         call("PUT", "/mobile/models", token, body)
 
+    /**
+     * 让电脑端立刻把模型能力（上下文窗口 / 视觉 / 思考档位）同步补全。
+     * model-vision 的同步要逐条路由扫一遍，可能跑几秒到几十秒，
+     * 所以这条调用单独放宽读超时，别撞上默认的 30 秒。
+     */
+    suspend fun syncModelCapabilities(token: String): JSONObject = withContext(Dispatchers.IO) {
+        val root = base.trimEnd('/')
+        if (root.isEmpty()) throw BridgeException("E_NO_SERVER", "还没有设置服务器地址")
+        val slow = client.newBuilder().readTimeout(120, java.util.concurrent.TimeUnit.SECONDS).build()
+        val request = Request.Builder()
+            .url(root + "/mobile/models/sync")
+            .header("Authorization", "Bearer $token")
+            .post("{}".toRequestBody(jsonType))
+            .build()
+        slow.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            val json = try {
+                if (text.isBlank()) JSONObject() else JSONObject(text)
+            } catch (_: Exception) {
+                throw BridgeException("E_PROTOCOL", "同步响应无法解析（HTTP ${response.code}）")
+            }
+            if (response.code == 401) {
+                throw BridgeException("E_UNAUTHORIZED", json.optString("message").ifEmpty { "令牌已失效，请重新配对" })
+            }
+            if (json.optBoolean("ok", true).not()) {
+                throw BridgeException(
+                    json.optString("code").ifEmpty { "E_UNKNOWN" },
+                    json.optString("message").ifEmpty { "同步失败" },
+                )
+            }
+            json
+        }
+    }
+
     /** Write-only credential: the value never comes back. */
     suspend fun setCredential(token: String, ref: String, value: String): JSONObject =
         call(
