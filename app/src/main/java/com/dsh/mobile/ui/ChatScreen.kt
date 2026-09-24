@@ -755,16 +755,15 @@ private fun MessageList(
                 }
                 is DispEntry.Trace -> Box(Modifier.animateItem()) {
                     val b = entry.block
+                    // 运行状态与已用时由任务控制条统一承载（H1：摘要不重复运行状态与计时）；
+                    // 摘要只回答「做到哪了 / 当前在做什么」，完成后落「共 N 步 / 用时」。
                     val main = when {
-                        entry.live -> if (b.steps > 0) "正在执行 · 已完成 ${b.steps} 步" else "正在执行"
+                        entry.live -> if (b.steps > 0) "已完成 ${b.steps} 步" else "正在准备"
                         b.steps > 0 -> "执行完成 · 共 ${b.steps} 步"
                         else -> b.label.substringBefore(" · ")
                     }
                     val sub = when {
-                        entry.live -> listOfNotNull(
-                            b.lastAction?.let { "当前：$it" },
-                            b.durText?.let { "已用时 $it" },
-                        ).joinToString(" · ").ifBlank { null }
+                        entry.live -> b.lastAction?.let { "当前：$it" }
                         else -> b.durText?.let { "用时 $it" }
                     }
                     TraceSummary(main = main, sub = sub, open = entry.open, live = entry.live) {
@@ -1731,13 +1730,24 @@ private fun Composer(
                 if (draft.isNotBlank() && attachments.isEmpty()) {
                     var inboxMenu by remember { mutableStateOf(false) }
                     Box {
-                        CircleAction(
-                            background = palette.accent,
-                            icon = Icons.Outlined.ArrowUpward,
-                            tint = palette.onAccent,
-                            contentDescription = "追加消息",
-                            enabled = !state.sending,
-                        ) { inboxMenu = true }
+                        Row(
+                            Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .clickable(enabled = !state.sending) { inboxMenu = true }
+                                .heightIn(min = 48.dp)
+                                .padding(horizontal = 14.dp)
+                                .semantics { contentDescription = "插话" },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.ArrowUpward,
+                                contentDescription = null,
+                                tint = palette.primaryBtn,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text("插话", style = MaterialTheme.typography.labelLarge, color = palette.primaryBtn)
+                        }
                         DropdownMenu(
                             expanded = inboxMenu,
                             onDismissRequest = { inboxMenu = false },
@@ -1772,36 +1782,48 @@ private fun Composer(
             } else {
                 val ready = draft.isNotBlank() || attachments.isNotEmpty()
                 val sendBg by animateColorAsState(
-                    targetValue = if (ready) palette.accent else palette.surfaceHi,
+                    targetValue = if (ready) palette.primaryBtn else palette.surfaceHi,
                     animationSpec = tween(200),
                     label = "sendBg",
                 )
                 val sendTint by animateColorAsState(
-                    targetValue = if (ready) palette.onAccent else palette.textSecondary,
+                    targetValue = if (ready) palette.onPrimaryBtn else palette.textSecondary,
                     animationSpec = tween(200),
                     label = "sendTint",
                 )
-                CircleAction(
-                    background = sendBg,
-                    icon = Icons.Outlined.ArrowUpward,
-                    tint = sendTint,
-                    contentDescription = "发送",
-                    enabled = ready && !state.sending,
-                ) {
-                    val text = draft.trim()
-                    if (text.isNotEmpty() || attachments.isNotEmpty()) {
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        draft = ""
-                        composerExpanded = false
-                        if (attachments.isEmpty()) {
-                            scope.launch {
-                                val ok = repo.send(text)
-                                if (!ok) draft = text
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(sendBg)
+                        .clickable(enabled = ready && !state.sending) {
+                            val text = draft.trim()
+                            if (text.isNotEmpty() || attachments.isNotEmpty()) {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                draft = ""
+                                composerExpanded = false
+                                if (attachments.isEmpty()) {
+                                    scope.launch {
+                                        val ok = repo.send(text)
+                                        if (!ok) draft = text
+                                    }
+                                } else {
+                                    onSendWith(text, attachments)
+                                }
                             }
-                        } else {
-                            onSendWith(text, attachments)
                         }
-                    }
+                        .heightIn(min = 48.dp)
+                        .padding(horizontal = 16.dp)
+                        .semantics { contentDescription = "发送" },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.ArrowUpward,
+                        contentDescription = null,
+                        tint = sendTint,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text("发送", style = MaterialTheme.typography.labelLarge, color = sendTint)
                 }
             }
             }
@@ -1861,8 +1883,9 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
     Row(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = 64.dp)
             .padding(start = 12.dp, end = 12.dp, bottom = 2.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(palette.surface)
             .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1924,17 +1947,27 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                         color = palette.textTertiary,
                     )
                 }
-                CircleAction(
-                    background = palette.surfaceHi,
-                    icon = Icons.Outlined.Stop,
-                    tint = palette.textPrimary,
-                    contentDescription = "停止生成",
-                    enabled = true,
-                    size = 34.dp,
-                    iconSize = 18.dp,
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, palette.outline, RoundedCornerShape(10.dp))
+                        .clickable {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            repo.cancelTurn()
+                        }
+                        .heightIn(min = 48.dp)
+                        .padding(horizontal = 16.dp)
+                        .semantics { contentDescription = "停止生成" },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    repo.cancelTurn()
+                    Icon(
+                        Icons.Outlined.Stop,
+                        contentDescription = null,
+                        tint = palette.textPrimary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text("停止", style = MaterialTheme.typography.labelLarge, color = palette.textPrimary)
                 }
             }
             // ④ 无任务失联
