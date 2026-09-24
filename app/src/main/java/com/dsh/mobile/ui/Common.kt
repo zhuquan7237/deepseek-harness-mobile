@@ -316,20 +316,32 @@ fun Pill(
     text: String,
     onClick: () -> Unit,
     filled: Boolean = false,
+    enabled: Boolean = true,
+    danger: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalDsh.current
+    val background = when {
+        danger -> palette.danger.copy(alpha = if (enabled) 0.16f else 0.07f)
+        filled -> if (enabled) palette.primaryBtn else palette.surfaceHi
+        else -> palette.surfaceHi
+    }
+    val foreground = when {
+        danger -> palette.danger.copy(alpha = if (enabled) 1f else 0.38f)
+        filled -> if (enabled) palette.onPrimaryBtn else palette.textTertiary
+        else -> if (enabled) palette.textPrimary else palette.textTertiary
+    }
     Box(
         modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(if (filled) palette.primaryBtn else palette.surfaceHi)
-            .clickable(onClick = onClick)
+            .background(background)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 9.dp),
     ) {
         Text(
             text,
             style = MaterialTheme.typography.bodySmall,
-            color = if (filled) palette.onPrimaryBtn else palette.textPrimary,
+            color = foreground,
         )
     }
 }

@@ -8,6 +8,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -181,7 +182,17 @@ fun AddProviderScreen(
         )
     }
 
-    Box(Modifier.fillMaxSize().background(palette.bg)) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(palette.bg)
+            // 吃掉页内空白处的点击：AnimatedVisibility 是同级图层，命中测试会穿透到
+            // 下面的模型页（同步页实测踩过：空白点落到下层删除图标弹了删除框）；
+            // 顺带收起键盘。
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                focus.clearFocus()
+            }
+    ) {
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier
@@ -396,7 +407,18 @@ private fun ModelPickerScreen(
         val q = query.trim()
         if (q.isBlank()) models else models.filter { it.contains(q, ignoreCase = true) }
     }
-    Column(Modifier.fillMaxSize().background(palette.bg)) {
+    val focus = LocalFocusManager.current
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(palette.bg)
+            // imePadding：搜索时列表上移，不被键盘盖住。
+            .imePadding()
+            // 同全屏页规则：吃掉空白处点击，别漏到下面被盖住的表单上；顺带收起键盘。
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                focus.clearFocus()
+            }
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()

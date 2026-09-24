@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,6 +49,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -64,12 +66,12 @@ import com.dsh.mobile.data.ModelProvider
 import com.dsh.mobile.ui.theme.LocalDsh
 
 /**
- * 模型 = the phone's copy of the desktop's model document. Everything here is a
- * whole-document save: the bridge diffs it against the desktop's revision, so a
- * phone edit can never silently erase what the desktop changed meanwhile.
+ * 模型 = the phone's copy of the desktop's model document. Everything here goes
+ * through [BridgeRepository.mutateModels]（乐观更新 + 串行保存，见其注释），
+ * so a phone edit can never silently erase what the desktop changed meanwhile.
  *
- * Layout follows the ChatGPT settings register — quiet rows, section labels,
- * one bottom CTA — not a dashboard.
+ * 交互：每个提供商块展开后有搜索框 + 「选择」多选模式（全选/清空 + 批量
+ * 启用/停用/删除，一次保存）；同步上游在对比页里勾选要加的模型。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,7 +86,12 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
     var keyFor by remember { mutableStateOf<ModelProvider?>(null) }
     var deleteProvider by remember { mutableStateOf<ModelProvider?>(null) }
     var deleteModel by remember { mutableStateOf<ModelItem?>(null) }
+    var batchDelete by remember { mutableStateOf<Pair<ModelProvider, Set<String>>?>(null) }
     var expanded by remember { mutableStateOf(setOf<String>()) }
+    // 每个提供商块的搜索词 / 多选状态（按 provider.id 存），收起或完成时重置。
+    val searchQ = remember { mutableStateMapOf<String, String>() }
+    var selecting by remember { mutableStateOf(setOf<String>()) }
+    val picked = remember { mutableStateMapOf<String, Set<String>>() }
 
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
@@ -147,8 +154,36 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                                     provider = provider,
                                     rows = rows,
                                     open = provider.id in expanded,
+                                    query = searchQ[provider.id] ?: "",
+                                    selecting = provider.id in selecting,
+                                    picked = picked[provider.id] ?: emptySet(),
                                     onToggle = {
-                                        expanded = if (provider.id in expanded) expanded - provider.id else expanded + provider.id
+                                        val wasOpen = provider.id in expanded
+                                        expanded = if (wasOpen) expanded - provider.id else expanded + provider.id
+                                        if (wasOpen) {
+                                            selecting = selecting - provider.id
+                                            picked.remove(provider.id)
+                                        }
+                                    },
+                                    onQuery = { searchQ[provider.id] = it },
+                                    onSelecting = { on ->
+                                        selecting = if (on) selecting + provider.id else selecting - provider.id
+                                        picked[provider.id] = emptySet()
+                                    },
+                                    onPicked = { picked[provider.id] = it },
+                                    onBatchEnable = { enable ->
+                                        val ids = picked[provider.id].orEmpty()
+                                        selecting = selecting - provider.id
+                                        picked.remove(provider.id)
+                                        if (ids.isNotEmpty()) {
+                                            repo.mutateModels { items ->
+                                                items.map { if (it.id in ids) it.copy(enabled = enable) else it }
+                                            }
+                                        }
+                                    },
+                                    onBatchDelete = {
+                                        val ids = picked[provider.id].orEmpty()
+                                        if (ids.isNotEmpty()) batchDelete = provider to ids
                                     },
                                     onAddModel = { addModelTo = provider },
                                     onSyncUpstream = {
@@ -158,7 +193,10 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                                     onEditKey = { keyFor = provider },
                                     onDeleteProvider = { deleteProvider = provider },
                                     onToggleModel = { item ->
-                                        repo.saveModels(doc.items.map { if (it.id == item.id) it.copy(enabled = !it.enabled) else it })
+                                        // mutateModels 作用于最新文档：连点也不会互相覆盖（乐观更新）。
+                                        repo.mutateModels { items ->
+                                            items.map { if (it.id == item.id) it.copy(enabled = !it.enabled) else it }
+                                        }
                                     },
                                     onDeleteModel = { deleteModel = it },
                                 )
@@ -193,31 +231,31 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                 discover = { base, key, done -> repo.discoverModels(base, key, done) },
                 onDismiss = { addProvider = false },
                 onSave = { draft ->
-                    val doc = state.doc
-                    if (doc == null) {
-                        repo.toast("还没读到模型列表，稍后再试")
+                    if (draft.models.isEmpty()) {
+                        repo.toast("还没有选模型")
                     } else {
-                        val startOrder = (doc.items.maxOfOrNull { it.order } ?: -1) + 1
-                        val added = draft.models.mapIndexed { index, modelId ->
-                            ModelItem(
-                                id = draft.id + "::" + modelId,
-                                name = modelId,
-                                provider = draft.id,
-                                modelId = modelId,
-                                enabled = true,
-                                contextWindow = "—",
-                                imageInput = false,
-                                providerName = draft.name,
-                                order = startOrder + index,
-                                baseURL = draft.baseURL,
-                                apiMode = draft.apiMode,
-                                apiKeyRef = draft.keyRef,
-                            )
-                        }
-                        if (added.isNotEmpty()) {
-                            repo.saveModels(doc.items + added) { ok ->
-                                if (ok && draft.apiKey.isNotBlank()) repo.setCredential(draft.keyRef, draft.apiKey)
-                                if (ok) addProvider = false
+                        repo.mutateModels({ ok ->
+                            if (ok) {
+                                if (draft.apiKey.isNotBlank()) repo.setCredential(draft.keyRef, draft.apiKey)
+                                addProvider = false
+                            }
+                        }) { items ->
+                            val startOrder = (items.maxOfOrNull { it.order } ?: -1) + 1
+                            items + draft.models.mapIndexed { index, modelId ->
+                                ModelItem(
+                                    id = draft.id + "::" + modelId,
+                                    name = modelId,
+                                    provider = draft.id,
+                                    modelId = modelId,
+                                    enabled = true,
+                                    contextWindow = "—",
+                                    imageInput = false,
+                                    providerName = draft.name,
+                                    order = startOrder + index,
+                                    baseURL = draft.baseURL,
+                                    apiMode = draft.apiMode,
+                                    apiKeyRef = draft.keyRef,
+                                )
                             }
                         }
                     }
@@ -244,29 +282,29 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                         repo = repo,
                         onDismiss = { syncOpen = false },
                         onApply = { chosen ->
-                            val doc = state.doc
-                            if (doc != null && chosen.isNotEmpty()) {
-                                val startOrder = (doc.items.maxOfOrNull { it.order } ?: -1) + 1
-                                val added = chosen.mapIndexed { index, modelId ->
-                                    ModelItem(
-                                        id = provider.id + "::" + modelId,
-                                        name = modelId,
-                                        provider = provider.id,
-                                        modelId = modelId,
-                                        enabled = true,
-                                        contextWindow = "—",
-                                        imageInput = false,
-                                        providerName = provider.name,
-                                        order = startOrder + index,
-                                        baseURL = provider.baseURL,
-                                        apiMode = provider.apiMode,
-                                        apiKeyRef = provider.apiKeyRef,
-                                    )
-                                }
-                                repo.saveModels(doc.items + added) { ok ->
+                            if (chosen.isNotEmpty()) {
+                                repo.mutateModels({ ok ->
                                     if (ok) {
-                                        repo.toast("已添加 ${added.size} 个模型，能力稍后自动补齐")
+                                        repo.toast("已添加 ${chosen.size} 个模型，能力稍后自动补齐")
                                         syncOpen = false
+                                    }
+                                }) { items ->
+                                    val startOrder = (items.maxOfOrNull { it.order } ?: -1) + 1
+                                    items + chosen.mapIndexed { index, modelId ->
+                                        ModelItem(
+                                            id = provider.id + "::" + modelId,
+                                            name = modelId,
+                                            provider = provider.id,
+                                            modelId = modelId,
+                                            enabled = true,
+                                            contextWindow = "—",
+                                            imageInput = false,
+                                            providerName = provider.name,
+                                            order = startOrder + index,
+                                            baseURL = provider.baseURL,
+                                            apiMode = provider.apiMode,
+                                            apiKeyRef = provider.apiKeyRef,
+                                        )
                                     }
                                 }
                             }
@@ -284,23 +322,23 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
             confirm = "添加",
             onDismiss = { addModelTo = null },
             onConfirm = { modelId ->
-                val doc = state.doc
-                if (doc != null && modelId.isNotBlank()) {
-                    val item = ModelItem(
-                        id = provider.id + "::" + modelId.trim(),
-                        name = modelId.trim(),
-                        provider = provider.id,
-                        modelId = modelId.trim(),
-                        enabled = true,
-                        contextWindow = "—",
-                        imageInput = false,
-                        providerName = provider.name,
-                        order = (doc.items.maxOfOrNull { it.order } ?: -1) + 1,
-                        baseURL = provider.baseURL,
-                        apiMode = provider.apiMode,
-                        apiKeyRef = provider.apiKeyRef,
-                    )
-                    repo.saveModels(doc.items + item)
+                if (modelId.isNotBlank()) {
+                    repo.mutateModels { items ->
+                        items + ModelItem(
+                            id = provider.id + "::" + modelId.trim(),
+                            name = modelId.trim(),
+                            provider = provider.id,
+                            modelId = modelId.trim(),
+                            enabled = true,
+                            contextWindow = "—",
+                            imageInput = false,
+                            providerName = provider.name,
+                            order = (items.maxOfOrNull { it.order } ?: -1) + 1,
+                            baseURL = provider.baseURL,
+                            apiMode = provider.apiMode,
+                            apiKeyRef = provider.apiKeyRef,
+                        )
+                    }
                 }
                 addModelTo = null
             },
@@ -328,8 +366,7 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
             confirm = "删除",
             onDismiss = { deleteProvider = null },
             onConfirm = {
-                val doc = state.doc
-                if (doc != null) repo.saveModels(doc.items.filterNot { it.provider == provider.id })
+                repo.mutateModels { items -> items.filterNot { it.provider == provider.id } }
                 deleteProvider = null
             },
         )
@@ -342,9 +379,23 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
             confirm = "删除",
             onDismiss = { deleteModel = null },
             onConfirm = {
-                val doc = state.doc
-                if (doc != null) repo.saveModels(doc.items.filterNot { it.id == item.id })
+                repo.mutateModels { items -> items.filterNot { it.id == item.id } }
                 deleteModel = null
+            },
+        )
+    }
+
+    batchDelete?.let { (provider, ids) ->
+        ConfirmDialog(
+            title = "删除所选 ${ids.size} 个模型？",
+            body = "会从「${provider.name.ifBlank { provider.id }}」移除这些模型，其它模型不受影响。",
+            confirm = "删除",
+            onDismiss = { batchDelete = null },
+            onConfirm = {
+                repo.mutateModels { items -> items.filterNot { it.id in ids } }
+                selecting = selecting - provider.id
+                picked.remove(provider.id)
+                batchDelete = null
             },
         )
     }
@@ -379,7 +430,15 @@ private fun ProviderBlock(
     provider: ModelProvider,
     rows: List<ModelItem>,
     open: Boolean,
+    query: String,
+    selecting: Boolean,
+    picked: Set<String>,
     onToggle: () -> Unit,
+    onQuery: (String) -> Unit,
+    onSelecting: (Boolean) -> Unit,
+    onPicked: (Set<String>) -> Unit,
+    onBatchEnable: (Boolean) -> Unit,
+    onBatchDelete: () -> Unit,
     onAddModel: () -> Unit,
     onSyncUpstream: () -> Unit,
     onEditKey: () -> Unit,
@@ -388,6 +447,14 @@ private fun ProviderBlock(
     onDeleteModel: (ModelItem) -> Unit,
 ) {
     val palette = LocalDsh.current
+    val filtered = remember(rows, query) {
+        val q = query.trim()
+        if (q.isBlank()) {
+            rows
+        } else {
+            rows.filter { it.modelId.contains(q, ignoreCase = true) || it.name.contains(q, ignoreCase = true) }
+        }
+    }
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier
@@ -432,61 +499,201 @@ private fun ProviderBlock(
         }
         if (open) {
             Hairline(Modifier.padding(start = 20.dp, end = 20.dp))
-            rows.forEach { item ->
+            if (rows.isEmpty()) {
+                Text(
+                    "这家还没有模型",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textTertiary,
+                    modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 12.dp),
+                )
+            } else {
+                // 工具行：搜索 + 选择/完成
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(start = 20.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+                        .padding(start = 16.dp, end = 12.dp, top = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                        Text(
-                            item.name,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (item.enabled) palette.textPrimary else palette.textTertiary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        val meta = buildString {
-                            if (item.contextWindow.isNotBlank() && item.contextWindow != "—") append(item.contextWindow)
-                            if (item.modelId != item.name) {
-                                if (isNotEmpty()) append(" · ")
-                                append(item.modelId)
-                            }
-                        }
-                        if (meta.isNotEmpty()) {
-                            Text(meta, style = MaterialTheme.typography.labelSmall, color = palette.textTertiary, maxLines = 1)
-                        }
+                    ModelSearchField(query, "搜索模型…", Modifier.weight(1f)) { onQuery(it) }
+                    if (selecting) {
+                        Pill("完成", onClick = { onSelecting(false) })
+                    } else {
+                        Pill("选择", onClick = { onSelecting(true) })
                     }
-                    Switch(
-                        checked = item.enabled,
-                        onCheckedChange = { onToggleModel(item) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = palette.onPrimaryBtn,
-                            checkedTrackColor = palette.primaryBtn,
-                            uncheckedThumbColor = palette.textSecondary,
-                            uncheckedTrackColor = palette.surfaceHi,
-                        ),
-                    )
-                    Icon(
-                        Icons.Outlined.Delete,
-                        contentDescription = "删除 ${item.name}",
-                        tint = palette.textTertiary,
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable { onDeleteModel(item) }
-                            .padding(6.dp),
+                }
+                if (selecting) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = 20.dp, end = 12.dp, top = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "已选 ${picked.size} / ${filtered.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.textTertiary,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Pill("全选", onClick = { onPicked(filtered.map { it.id }.toSet()) })
+                        Pill("清空", onClick = { onPicked(emptySet()) })
+                    }
+                }
+                if (filtered.isEmpty()) {
+                    Text(
+                        "没有匹配「${query.trim()}」的模型",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textTertiary,
+                        modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 12.dp),
                     )
                 }
+                filtered.forEach { item ->
+                    if (selecting) {
+                        val checked = item.id in picked
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onPicked(if (checked) picked - item.id else picked + item.id) }
+                                .padding(start = 20.dp, end = 16.dp, top = 9.dp, bottom = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CheckSquare(checked)
+                            Spacer(Modifier.width(12.dp))
+                            ModelTexts(item, Modifier.weight(1f))
+                        }
+                    } else {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(start = 20.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ModelTexts(item, Modifier.weight(1f))
+                            Switch(
+                                checked = item.enabled,
+                                onCheckedChange = { onToggleModel(item) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = palette.onPrimaryBtn,
+                                    checkedTrackColor = palette.primaryBtn,
+                                    uncheckedThumbColor = palette.textSecondary,
+                                    uncheckedTrackColor = palette.surfaceHi,
+                                ),
+                            )
+                            Icon(
+                                Icons.Outlined.Delete,
+                                contentDescription = "删除 ${item.name}",
+                                tint = palette.textTertiary,
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onDeleteModel(item) }
+                                    .padding(6.dp),
+                            )
+                        }
+                    }
+                }
+                if (selecting) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Pill("启用", onClick = { onBatchEnable(true) }, enabled = picked.isNotEmpty())
+                        Pill("停用", onClick = { onBatchEnable(false) }, enabled = picked.isNotEmpty())
+                        Pill(
+                            "删除（${picked.size}）",
+                            onClick = onBatchDelete,
+                            enabled = picked.isNotEmpty(),
+                            danger = true,
+                        )
+                    }
+                }
             }
-            Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
-                SheetAction("从上游同步模型", caption = "拉取上游最新清单，把新增的模型加进来") { onSyncUpstream() }
-                SheetAction("添加模型", caption = "输入模型 ID，能力稍后自动同步") { onAddModel() }
-                SheetAction("写入 / 清除密钥", caption = provider.apiKeyRef.ifBlank { "（未设置凭据变量名）" }) { onEditKey() }
-                SheetAction("删除提供商", caption = "移除这家和它下面的全部模型", danger = true) { onDeleteProvider() }
+            if (!selecting) {
+                Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
+                    SheetAction("从上游同步模型", caption = "拉取上游最新清单，勾选要加的模型") { onSyncUpstream() }
+                    SheetAction("添加模型", caption = "输入模型 ID，能力稍后自动同步") { onAddModel() }
+                    SheetAction("写入 / 清除密钥", caption = provider.apiKeyRef.ifBlank { "（未设置凭据变量名）" }) { onEditKey() }
+                    SheetAction("删除提供商", caption = "移除这家和它下面的全部模型", danger = true) { onDeleteProvider() }
+                }
             }
         }
     }
     Hairline(Modifier.padding(start = 20.dp, end = 20.dp))
+}
+
+/** 多选行的勾选框（与同步页同款视觉）。 */
+@Composable
+private fun CheckSquare(checked: Boolean) {
+    val palette = LocalDsh.current
+    Box(
+        Modifier
+            .size(20.dp)
+            .clip(RoundedCornerShape(7.dp))
+            .then(
+                if (checked) {
+                    Modifier.background(palette.accent)
+                } else {
+                    Modifier.border(1.dp, palette.textTertiary.copy(alpha = 0.55f), RoundedCornerShape(7.dp))
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (checked) {
+            Icon(Icons.Outlined.Check, contentDescription = null, tint = palette.onAccent, modifier = Modifier.size(13.dp))
+        }
+    }
+}
+
+/** 提供商块内的小搜索框（搜模型 ID / 名称，大小写不敏感）。 */
+@Composable
+private fun ModelSearchField(value: String, hint: String, modifier: Modifier = Modifier, onChange: (String) -> Unit) {
+    val palette = LocalDsh.current
+    BasicTextField(
+        value = value,
+        onValueChange = onChange,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodySmall.copy(color = palette.textPrimary),
+        cursorBrush = SolidColor(palette.accent),
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(palette.surfaceHi)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        decorationBox = { inner ->
+            Box(contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty()) {
+                    Text(hint, style = MaterialTheme.typography.bodySmall, color = palette.textTertiary)
+                }
+                inner()
+            }
+        },
+    )
+}
+
+/** 模型行两行文字（名称 + 上下文/ID），选择行与普通行共用。 */
+@Composable
+private fun ModelTexts(item: ModelItem, modifier: Modifier = Modifier) {
+    val palette = LocalDsh.current
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(
+            item.name,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (item.enabled) palette.textPrimary else palette.textTertiary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        val meta = buildString {
+            if (item.contextWindow.isNotBlank() && item.contextWindow != "—") append(item.contextWindow)
+            if (item.modelId != item.name) {
+                if (isNotEmpty()) append(" · ")
+                append(item.modelId)
+            }
+        }
+        if (meta.isNotEmpty()) {
+            Text(meta, style = MaterialTheme.typography.labelSmall, color = palette.textTertiary, maxLines = 1)
+        }
+    }
 }

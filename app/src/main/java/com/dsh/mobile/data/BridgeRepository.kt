@@ -808,6 +808,15 @@ class BridgeRepository(context: Context) {
 
     // ----------------------------------------------------------------- models
 
+    // 模型保存队列状态（乐观更新 + 串行发送 + 排队合并）：见 queueModelSave。
+    // ack* = 服务器最近确认过的文档版本，用作三方合并的 base；乐观更新永远不动它。
+    private var modelSaveBusy = false
+    private var modelSavePending: List<ModelItem>? = null
+    private val modelSaveCallbacks = mutableListOf<(Boolean) -> Unit>()
+    private var modelAckItems: List<ModelItem>? = null
+    private var modelAckRevision: Long = 0L
+    private var modelAckOverlay: Long = 0L
+
     fun loadModels() {
         val token = _state.value.token ?: return
         scope.launch {
@@ -816,6 +825,17 @@ class BridgeRepository(context: Context) {
                 val json = api.models(token)
                 val raw = json.optJSONObject("doc")
                 val doc = raw?.let { Wire.parseModelDoc(it) }
+                // 保存队列在跑时跳过：迟到半步的服务器状态不能盖掉乐观修改，
+                // 也不能把三方合并的基准（ack）推前于用户编辑所基于的版本。
+                if (modelSaveBusy || modelSavePending != null) {
+                    _state.update { it.copy(modelsLoading = false) }
+                    return@launch
+                }
+                if (doc != null) {
+                    modelAckItems = doc.items
+                    modelAckRevision = doc.revision
+                    modelAckOverlay = doc.overlayRevision
+                }
                 _state.update { it.copy(doc = doc, modelsLoading = false) }
                 // 缓存下来：下次冷启动不用再跑一趟隧道，也不会显示"未读取"
                 if (raw != null) runCatching { store.saveModels(raw.toString()) }
@@ -1181,67 +1201,147 @@ class BridgeRepository(context: Context) {
 
     // ------------------------------------------------------------ model editing
 
-    /** Open the model screen; loads the document if it is not in memory yet. */
+    /**
+     * Open the model screen and refresh the document from the desktop.
+     *
+     * 缓存里的 doc 只是首屏占位：它没有修订号、也没建立三方合并的 ack。若跳过刷新，
+     * 保存时 base 会退化成「操作后的列表」→ 桥接判定无改动 → 静默空操作（实测踩过）。
+     * 所以这里每次都刷一遍；旧内容先展示，新文档到了自动替换。
+     */
     fun openModels() {
         _state.update { it.copy(view = View.MODELS) }
-        if (_state.value.doc == null) loadModels()
+        loadModels()
     }
 
     fun closeModels() {
         _state.update { it.copy(view = View.SETTINGS) }
     }
 
-    /** Save the phone's version of the whole model document. */
+    /**
+     * 保存整份模型文档（添加提供商/同步导入等整表场景）。
+     * 乐观 + 串行队列，见 [queueModelSave]。
+     */
     fun saveModels(items: List<ModelItem>, onSaved: (Boolean) -> Unit = {}) {
-        val token = _state.value.token ?: return
+        queueModelSave(items, onSaved)
+    }
+
+    /**
+     * 增量修改（开关、删除、批量操作都用它）：transform 作用于「当前最新」文档，
+     * 连点或排队时天然合并，不会互相覆盖。
+     */
+    fun mutateModels(onSaved: (Boolean) -> Unit = {}, transform: (List<ModelItem>) -> List<ModelItem>) {
         val doc = _state.value.doc
         if (doc == null) {
             toast("还没有读到模型列表，先刷新一次")
             onSaved(false)
             return
         }
+        queueModelSave(transform(doc.items), onSaved)
+    }
+
+    /**
+     * 乐观保存：本地文档立刻切到用户操作后的样子（界面即时响应，不再等网络），
+     * PUT 在后台串行执行；排队期间的新修改合并进来、只发最终态（连点几下=一次请求）。
+     * base 恒用「服务器最近确认过的版本（ack）」，三方合并语义不受乐观更新影响；
+     * 失败则回读服务器状态（回滚乐观修改）。
+     */
+    private fun queueModelSave(items: List<ModelItem>, onSaved: (Boolean) -> Unit = {}) {
+        val token = _state.value.token
+        if (token == null || _state.value.doc == null) {
+            toast("还没有读到模型列表，先刷新一次")
+            onSaved(false)
+            return
+        }
+        // ack 未就绪（只有缓存 doc、还没从电脑端读过）时拒绝保存：
+        // 没有 ack 就没有安全的 base，硬发会退化成「无改动」的静默空操作。
+        if (modelAckItems == null) {
+            toast("模型列表还在从电脑端读取，请稍后再试")
+            loadModels()
+            onSaved(false)
+            return
+        }
+        _state.update { it.copy(doc = it.doc?.copy(items = items), modelsSaving = true) }
+        modelSavePending = items
+        modelSaveCallbacks += onSaved
+        if (modelSaveBusy) return
         scope.launch {
-            _state.update { it.copy(modelsSaving = true) }
+            modelSaveBusy = true
+            var savedAny = false
             try {
-                val body = JSONObject()
-                    .put("baseRevision", doc.revision)
-                    .put("overlayRevision", doc.overlayRevision)
-                    // base = 手机上次看到的原样文档。桥接用它做三方合并：即使中途
-                    // 电脑端改过配置，手机这次编辑也能安全并入、桌面侧新增不丢。
-                    .put("base", Wire.modelItemsJson(doc.items))
-                    .put("items", Wire.modelItemsJson(items))
-                val result = api.putModels(token, body)
-                val fresh = result.optJSONObject("doc")?.let { Wire.parseModelDoc(it) }
-                _state.update { it.copy(modelsSaving = false, doc = fresh ?: it.doc) }
-                toast("模型配置已保存")
-                // 保存成功后重新读一次：拿到新的 revision，顺手把缓存刷新
-                loadModels()
-                onSaved(true)
-                // 桥接会在保存后自动触发一次模型能力同步（几秒）；稍后再静默刷一次，
-                // 让上下文窗口/思考档位自己出现在列表里，不需要用户再点任何东西。
-                scope.launch {
-                    delay(9000)
-                    loadModels()
+                while (true) {
+                    val next = modelSavePending ?: break
+                    modelSavePending = null
+                    val callbacks = modelSaveCallbacks.toList()
+                    modelSaveCallbacks.clear()
+                    try {
+                        val baseItems = modelAckItems
+                        val body = JSONObject()
+                            .put("baseRevision", modelAckRevision)
+                            .put("overlayRevision", modelAckOverlay)
+                            // base = 服务器最近确认过的原样文档（ack，上面已保证非空）。
+                            // 桥接用它做三方合并：即使中途电脑端改过配置，手机这次编辑
+                            // 也能安全并入、桌面侧新增不丢。
+                            .put("base", Wire.modelItemsJson(baseItems ?: emptyList()))
+                            .put("items", Wire.modelItemsJson(next))
+                        val result = api.putModels(token, body)
+                        val fresh = result.optJSONObject("doc")?.let { Wire.parseModelDoc(it) }
+                        if (fresh != null) {
+                            modelAckItems = fresh.items
+                            modelAckRevision = fresh.revision
+                            modelAckOverlay = fresh.overlayRevision
+                        }
+                        // 队列里还有更新的修改时先不贴服务器文档（会把乐观修改闪回去），
+                        // 交给下一轮处理；队列清空才贴。
+                        if (modelSavePending == null) {
+                            _state.update { it.copy(doc = fresh ?: it.doc) }
+                        }
+                        savedAny = true
+                        callbacks.forEach { it(true) }
+                    } catch (error: BridgeException) {
+                        modelSavePending = null
+                        val queued = modelSaveCallbacks.toList()
+                        modelSaveCallbacks.clear()
+                        queued.forEach { it(false) }
+                        callbacks.forEach { it(false) }
+                        when (error.code) {
+                            // The desktop changed underneath us: reload and let the user redo it.
+                            "E_REVISION" -> {
+                                toast("电脑端也改过配置，已重新读取，请再操作一次")
+                                loadModels()
+                            }
+                            "E_EMPTY_DOC" -> {
+                                toast(error.message)
+                                loadModels()
+                            }
+                            else -> {
+                                handleApiError(error, "保存模型失败")
+                                loadModels() // 回滚乐观修改
+                            }
+                        }
+                        break
+                    } catch (error: Exception) {
+                        modelSavePending = null
+                        val queued = modelSaveCallbacks.toList()
+                        modelSaveCallbacks.clear()
+                        queued.forEach { it(false) }
+                        callbacks.forEach { it(false) }
+                        fail("model", "保存模型失败：${error.message ?: "网络错误"}")
+                        loadModels()
+                        break
+                    }
                 }
-            } catch (error: BridgeException) {
-                _state.update { it.copy(modelsSaving = false) }
-                when (error.code) {
-                    // The desktop changed underneath us: reload and let the user redo it.
-                    "E_REVISION" -> {
-                        toast("电脑端也改过配置，已重新读取，请再操作一次")
+                if (savedAny) {
+                    toast("模型配置已保存")
+                    // 桥接会在保存后自动触发一次模型能力同步（几秒）；稍后再静默刷一次，
+                    // 让上下文窗口/思考档位自己出现在列表里，不需要用户再点任何东西。
+                    scope.launch {
+                        delay(9000)
                         loadModels()
                     }
-                    "E_EMPTY_DOC" -> {
-                        toast(error.message)
-                        loadModels()
-                    }
-                    else -> handleApiError(error, "保存模型失败")
                 }
-                onSaved(false)
-            } catch (error: Exception) {
+            } finally {
+                modelSaveBusy = false
                 _state.update { it.copy(modelsSaving = false) }
-                fail("model", "保存模型失败：${error.message ?: "网络错误"}")
-                onSaved(false)
             }
         }
     }

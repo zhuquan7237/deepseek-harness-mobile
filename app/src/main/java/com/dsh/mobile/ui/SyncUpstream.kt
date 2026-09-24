@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -38,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,6 +66,7 @@ fun SyncUpstreamScreen(
     onApply: (List<String>) -> Unit,
 ) {
     val palette = LocalDsh.current
+    val focus = LocalFocusManager.current
     BackHandler { onDismiss() }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -77,7 +81,8 @@ fun SyncUpstreamScreen(
             loading = false
             if (models != null) {
                 upstream = models
-                picked = models.filterNot { it in existingIds }.toSet()
+                // 默认不勾选：由用户自己挑要加哪些（配合「全选新增」一键全勾）。
+                picked = emptySet()
             } else {
                 error = message ?: "拉取失败"
             }
@@ -93,8 +98,20 @@ fun SyncUpstreamScreen(
         if (q.isBlank()) sorted else sorted.filter { it.contains(q, ignoreCase = true) }
     }
 
-    Box(Modifier.fillMaxSize().background(palette.bg)) {
-    Column(Modifier.fillMaxSize()) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(palette.bg)
+            // 全屏页必须吃掉页内空白处的点击：AnimatedVisibility 是同级图层，
+            // 命中测试会穿透到下面的模型页（实测：点空白处落在下层「删除模型」
+            // 图标上，弹出删除框）。子控件先于本节点处理，不受影响。
+            // 顺带：点空白 = 收起键盘（搜索后底部按钮被输入法盖住的常见场景）。
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                focus.clearFocus()
+            }
+    ) {
+    // imePadding：搜索框弹键盘时整页上移，保证底部「添加所选」始终可点
+    Column(Modifier.fillMaxSize().imePadding()) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -194,7 +211,13 @@ fun SyncUpstreamScreen(
                         Pill("清空", onClick = { picked = emptySet() })
                         Spacer(Modifier.weight(1f))
                         Text(
-                            if (fresh.isEmpty()) "上游没有新模型（已是最新）" else "将添加 ${picked.size} 个",
+                            if (fresh.isEmpty()) {
+                                "上游没有新模型（已是最新）"
+                            } else if (picked.isEmpty()) {
+                                "勾选要添加的模型"
+                            } else {
+                                "将添加 ${picked.size} 个"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = palette.textTertiary,
                         )
