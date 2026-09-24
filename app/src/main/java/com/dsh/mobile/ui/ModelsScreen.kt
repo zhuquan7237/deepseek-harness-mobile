@@ -125,10 +125,10 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
             }
             else -> {
                 val doc = state.doc
-                Box(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize()) {
                     LazyColumn(
-                        Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 104.dp),
+                        Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(bottom = 12.dp),
                     ) {
                         item {
                             Text(
@@ -165,13 +165,14 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                             }
                         }
                     }
+                    // 底栏是布局元素、不再悬浮在列表上：悬浮 CTA 会盖住最后几行
+                    // 的可点区域（实测：第 4 个动作行「删除提供商」的中心被按钮
+                    // 吸走、点击无声失效——列表栏与按钮重叠的经典坑）。
                     Row(
                         Modifier
-                            .align(Alignment.BottomCenter)
                             .fillMaxWidth()
-                            .imePadding()
                             .navigationBarsPadding()
-                            .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp),
                         horizontalArrangement = Arrangement.Center,
                     ) {
                         PrimaryCta(Icons.Outlined.Add, "添加提供商") { addProvider = true }

@@ -227,6 +227,10 @@ class ModelsManagementTest {
             }
             error("tapping «$providerLabel» ($labels nodes with that text, $windows windows) did not open the provider block.\n$trees")
         }
+        // 展开的动作表可能延伸到屏幕外：先把目标滚进视野再点，否则点击会落在
+        // 屏幕外坐标上、什么都不会发生（曾经把一次真实回归伪装成"随机失败"）。
+        composeRule.onAllNodesWithText("删除提供商")[0].performScrollTo()
+        composeRule.waitForIdle()
         composeRule.onAllNodesWithText("删除提供商")[0].performClick()
         composeRule.waitUntil(15_000) { anyText("删除提供商 " + providerLabel + "？") }
         composeRule.onAllNodesWithText("删除")[0].performClick()
