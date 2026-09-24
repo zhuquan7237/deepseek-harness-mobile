@@ -240,6 +240,7 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                             .filter { it.provider == provider.id }
                             .map { it.modelId }
                             .toSet(),
+                        saving = state.modelsSaving,
                         repo = repo,
                         onDismiss = { syncOpen = false },
                         onApply = { chosen ->
@@ -263,10 +264,12 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                                     )
                                 }
                                 repo.saveModels(doc.items + added) { ok ->
-                                    if (ok) repo.toast("已添加 ${added.size} 个模型，能力稍后自动补齐")
+                                    if (ok) {
+                                        repo.toast("已添加 ${added.size} 个模型，能力稍后自动补齐")
+                                        syncOpen = false
+                                    }
                                 }
                             }
-                            syncOpen = false
                         },
                     )
                 }

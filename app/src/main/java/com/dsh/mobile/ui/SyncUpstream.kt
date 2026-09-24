@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dsh.mobile.data.BridgeRepository
@@ -56,6 +57,7 @@ import com.dsh.mobile.ui.theme.LocalDsh
 fun SyncUpstreamScreen(
     provider: ModelProvider,
     existingIds: Set<String>,
+    saving: Boolean,
     repo: BridgeRepository,
     onDismiss: () -> Unit,
     onApply: (List<String>) -> Unit,
@@ -91,6 +93,7 @@ fun SyncUpstreamScreen(
         if (q.isBlank()) sorted else sorted.filter { it.contains(q, ignoreCase = true) }
     }
 
+    Box(Modifier.fillMaxSize().background(palette.bg)) {
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier
@@ -125,21 +128,31 @@ fun SyncUpstreamScreen(
             loading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     CircularProgressIndicator(color = palette.accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
-                    Text("正在从上游读取模型清单…", style = MaterialTheme.typography.bodyMedium, color = palette.textSecondary)
+                    Text("正在从上游拉取「${provider.name.ifBlank { provider.id }}」的模型清单…", style = MaterialTheme.typography.bodyMedium, color = palette.textSecondary, textAlign = TextAlign.Center)
+                    Text("由电脑端用它保存的密钥请求上游接口，可能要几秒", style = MaterialTheme.typography.bodySmall, color = palette.textTertiary)
                 }
             }
             error != null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                val err = error ?: ""
                 Column(
                     Modifier.padding(horizontal = 28.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text("⚠️ $error", style = MaterialTheme.typography.bodyMedium, color = palette.danger)
+                    Text("拉取失败", style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
                     Text(
-                        "电脑端会用这家提供商的密钥去请求它的模型接口；如果提示密钥没配置，先在「写入 / 清除密钥」里填上。",
+                        prettyUpstreamError(err),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.textSecondary,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        "电脑端用这家提供商保存的密钥请求上游接口；如果提示密钥没配置，先在「写入 / 清除密钥」里填上。",
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.textTertiary,
+                        textAlign = TextAlign.Center,
                     )
+                    Spacer(Modifier.height(2.dp))
                     Pill("重试", onClick = { pull() })
                 }
             }
@@ -181,7 +194,7 @@ fun SyncUpstreamScreen(
                         Pill("清空", onClick = { picked = emptySet() })
                         Spacer(Modifier.weight(1f))
                         Text(
-                            if (fresh.isEmpty()) "上游没有新模型" else "将添加 ${picked.size} 个",
+                            if (fresh.isEmpty()) "上游没有新模型（已是最新）" else "将添加 ${picked.size} 个",
                             style = MaterialTheme.typography.labelSmall,
                             color = palette.textTertiary,
                         )
@@ -252,15 +265,19 @@ fun SyncUpstreamScreen(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
-                            .background(if (picked.isEmpty()) palette.surface else palette.accent)
-                            .clickable(enabled = picked.isNotEmpty()) { onApply(upstream.filter { it in picked }) }
+                            .background(if (picked.isEmpty() || saving) palette.surface else palette.accent)
+                            .clickable(enabled = picked.isNotEmpty() && !saving) { onApply(upstream.filter { it in picked }) }
                             .padding(vertical = 13.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            if (picked.isEmpty()) "没有要添加的模型" else "添加所选（${picked.size}）",
+                            when {
+                                saving -> "正在添加…"
+                                picked.isEmpty() -> "没有要添加的模型"
+                                else -> "添加所选（${picked.size}）"
+                            },
                             style = MaterialTheme.typography.labelLarge,
-                            color = if (picked.isEmpty()) palette.textSecondary else palette.onAccent,
+                            color = if (picked.isEmpty() || saving) palette.textSecondary else palette.onAccent,
                         )
                     }
                     Spacer(Modifier.height(14.dp))
@@ -268,4 +285,15 @@ fun SyncUpstreamScreen(
             }
         }
     }
+    }
+}
+
+/** 上游报错常带嵌套 JSON（如网关 403 的 {"error":{"message":…}}）：抽出来给用户看人话。 */
+private fun prettyUpstreamError(raw: String): String {
+    val code = Regex("上游返回\\s*(\\d{3})").find(raw)?.groupValues?.get(1)
+    val inner = Regex("\"message\"\\s*:\\s*\"([^\"]+)\"").find(raw)?.groupValues?.get(1)
+    val detail = (inner ?: raw)
+        .replace(Regex("\\s*\\(request id:[^)]*\\)"), "")
+        .trim()
+    return if (code != null) "上游拒绝了请求（HTTP $code）：$detail" else detail
 }
