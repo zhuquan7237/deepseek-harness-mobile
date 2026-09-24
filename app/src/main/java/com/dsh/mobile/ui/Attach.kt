@@ -183,7 +183,7 @@ fun PhotoEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> Unit
     var saturation by remember { mutableFloatStateOf(1f) }
     val ratio = CROP_RATIOS[ratioIndex].second
 
-    Box(Modifier.fillMaxSize().background(Color(0xF2000000))) {
+    Box(Modifier.fillMaxSize().background(palette.bg)) {
         Column(
             Modifier
                 .fillMaxSize()
@@ -194,11 +194,11 @@ fun PhotoEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> Unit
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("编辑图片", style = androidx.compose.material3.MaterialTheme.typography.titleMedium, color = Color.White)
+                Text("编辑图片", style = androidx.compose.material3.MaterialTheme.typography.titleMedium, color = palette.textPrimary)
                 Spacer(Modifier.weight(1f))
                 Text(
                     "取消",
-                    color = Color(0xFFAFAFAF),
+                    color = palette.textSecondary,
                     modifier = Modifier.clickable(onClick = onCancel).padding(8.dp),
                 )
                 Text(
@@ -228,7 +228,7 @@ fun PhotoEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> Unit
                         .clip(RoundedCornerShape(10.dp)),
                 )
             }
-            Column(Modifier.fillMaxWidth().background(Color(0xFF141414)).padding(16.dp)) {
+            Column(Modifier.fillMaxWidth().background(palette.surface).padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     EditorButton(Icons.Outlined.RotateLeft, "左转") {
                         rotate = (rotate + 270) % 360
@@ -244,10 +244,10 @@ fun PhotoEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> Unit
                         Text(
                             label,
                             fontSize = 12.sp,
-                            color = if (on) palette.onAccent else Color(0xFFAFAFAF),
+                            color = if (on) palette.onAccent else palette.textSecondary,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(999.dp))
-                                .background(if (on) palette.accent else Color(0xFF262626))
+                                .background(if (on) palette.accent else palette.surfaceHi)
                                 .clickable { ratioIndex = index }
                                 .padding(horizontal = 10.dp, vertical = 5.dp),
                         )
@@ -259,7 +259,7 @@ fun PhotoEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> Unit
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Text(
                         "重置",
-                        color = Color(0xFFAFAFAF),
+                        color = palette.textSecondary,
                         fontSize = 13.sp,
                         modifier = Modifier
                             .clickable {
@@ -279,19 +279,21 @@ fun PhotoEditor(original: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> Unit
 
 @Composable
 private fun SliderRow(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+    val palette = LocalDsh.current
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = Color(0xFFAFAFAF), fontSize = 12.sp, modifier = Modifier.width(44.dp))
+        Text(label, color = palette.textSecondary, fontSize = 12.sp, modifier = Modifier.width(44.dp))
         Slider(value = value, onValueChange = onChange, valueRange = range, modifier = Modifier.weight(1f))
     }
 }
 
 @Composable
 private fun EditorButton(icon: ImageVector, label: String, onClick: () -> Unit) {
+    val palette = LocalDsh.current
     Box(
-        Modifier.size(34.dp).clip(CircleShape).background(Color(0xFF262626)).clickable(onClick = onClick),
+        Modifier.size(34.dp).clip(CircleShape).background(palette.surfaceHi).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = Color(0xFFE8E8E8), modifier = Modifier.size(17.dp))
+        Icon(icon, contentDescription = label, tint = palette.textPrimary, modifier = Modifier.size(17.dp))
     }
 }
 
@@ -312,7 +314,7 @@ fun AttachmentSheet(
             enter = fadeIn(tween(180)),
             exit = fadeOut(tween(160)),
         ) {
-            Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable(onClick = onDismiss)) {}
+            Box(Modifier.fillMaxSize().background(palette.scrim).clickable(onClick = onDismiss)) {}
         }
         AnimatedVisibility(
             visible = visible,

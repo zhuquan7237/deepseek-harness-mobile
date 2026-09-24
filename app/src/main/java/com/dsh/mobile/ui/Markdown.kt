@@ -409,12 +409,14 @@ private fun TableBlock(table: MdBlock.Table, surface: Color, textColor: Color) {
 }
 
 /** 行内片段 → AnnotatedString。 */
+@Composable
 private fun annotated(text: String, color: Color, style: androidx.compose.ui.text.TextStyle): AnnotatedString {
+    val palette = LocalDsh.current
     val spans = Markdown.inlines(text)
     return buildAnnotatedString {
         spans.forEach { span ->
             val s = SpanStyle(
-                color = if (span.link != null) Color(0xFF3A83F7) else color,
+                color = if (span.link != null) palette.link else color,
                 fontWeight = if (span.bold) FontWeight.Bold else null,
                 fontStyle = if (span.italic) FontStyle.Italic else null,
                 fontFamily = if (span.code) FontFamily.Monospace else null,

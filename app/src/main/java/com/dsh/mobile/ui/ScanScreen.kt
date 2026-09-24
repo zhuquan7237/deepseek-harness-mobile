@@ -60,8 +60,8 @@ import com.dsh.mobile.ui.theme.LocalDsh
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** The gold of every scanner ever shipped; kept, because it reads on any photo. */
-private val BracketGold = Color(0xFFE9A93C)
+/** 旧金（墨色禅定）：任何照片底色上都读得清。 */
+private val BracketGold = Color(0xFFD9B879)
 
 /**
  * The scanner, in the app's own language rather than zxing's stock capture

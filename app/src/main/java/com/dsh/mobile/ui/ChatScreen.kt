@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -120,6 +121,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.viewinterop.AndroidView
 import com.dsh.mobile.R
 import com.dsh.mobile.data.AppState
@@ -785,11 +791,14 @@ private fun MessageList(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     if (!imeOpen) {
-                        WhaleMascot(
-                            resId = R.drawable.whale_face_normal,
-                            size = 112.dp,
-                            contentDescription = "鲸鱼娘",
-                        )
+                        Box(contentAlignment = Alignment.Center) {
+                            InkEnso(dim = 152.dp, palette = palette)
+                            WhaleMascot(
+                                resId = R.drawable.whale_face_normal,
+                                size = 104.dp,
+                                contentDescription = "鲸鱼娘",
+                            )
+                        }
                         Spacer(Modifier.height(8.dp))
                     }
                     Text(
@@ -2333,13 +2342,53 @@ private fun PeekAction(
     Text(
         label,
         style = MaterialTheme.typography.labelLarge,
-        color = if (danger) Color(0xFFFF6B6B) else Color.White,
+        color = if (danger) palette.danger else Color.White,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
             .background(Color.White.copy(alpha = 0.16f))
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 10.dp),
     )
+}
+
+/**
+ * 空态的一笔禅环（墨色禅定 · 艺术时刻 1）：左下起笔、留约 30° 缺口，
+ * 只画一次（重进会话不重播）；最后落下一点朱砂。不做无限旋转加载器。
+ */
+@Composable
+private fun InkEnso(dim: androidx.compose.ui.unit.Dp, palette: com.dsh.mobile.ui.theme.DshPalette, modifier: Modifier = Modifier) {
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        progress.animateTo(1f, animationSpec = tween(650, easing = Motion.Push))
+    }
+    Canvas(modifier.size(dim)) {
+        val stroke = size.minDimension * 0.024f
+        val inset = stroke / 2f
+        drawArc(
+            color = palette.textPrimary.copy(alpha = 0.36f),
+            startAngle = 116f,
+            sweepAngle = 312f * progress.value,
+            useCenter = false,
+            topLeft = Offset(inset, inset),
+            size = Size(size.width - stroke, size.height - stroke),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+        drawArc(
+            color = palette.textPrimary.copy(alpha = 0.14f),
+            startAngle = 120f,
+            sweepAngle = 300f * progress.value,
+            useCenter = false,
+            topLeft = Offset(inset + stroke * 1.5f, inset + stroke * 1.5f),
+            size = Size(size.width - stroke * 4f, size.height - stroke * 4f),
+            style = Stroke(width = stroke * 0.34f, cap = StrokeCap.Round),
+        )
+        val d = size.minDimension
+        drawCircle(
+            color = palette.seal.copy(alpha = 0.95f * progress.value),
+            radius = d * 0.018f,
+            center = Offset(d * 0.9f, d * 0.6f),
+        )
+    }
 }
 
 /** 运行中追加消息的菜单项：标题一行、说明一行，选之前就把后果讲清楚。 */
