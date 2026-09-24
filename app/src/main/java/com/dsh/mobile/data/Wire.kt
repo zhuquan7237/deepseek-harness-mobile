@@ -596,6 +596,7 @@ fun isInjectedContext(text: String): Boolean =
                     apiMode = raw.optString("apiMode"),
                     apiKeyRef = raw.optString("apiKeyRef"),
                     keyConfigured = raw.optBoolean("apiKeyConfigured", false),
+                    network = raw.optString("network").let { if (it == "proxy" || it == "direct") it else "" },
                 )
             )
         }

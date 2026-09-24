@@ -42,6 +42,27 @@ class WireTest {
         assertNull(Wire.parsePairPayload(""))
     }
 
+    // ------------------------------------------------------- model document
+
+    @Test
+    fun parsesProviderNetworkRoute() {
+        val doc = JSONObject()
+            .put(
+                "providers",
+                JSONArray()
+                    .put(JSONObject().put("id", "xai").put("network", "proxy"))
+                    .put(JSONObject().put("id", "wawa").put("network", "direct"))
+                    .put(JSONObject().put("id", "plain"))
+                    .put(JSONObject().put("id", "weird").put("network", "bogus")),
+            )
+            .put("items", JSONArray())
+        val parsed = Wire.parseModelDoc(doc)
+        assertEquals("proxy", parsed.providers.first { it.id == "xai" }.network)
+        assertEquals("direct", parsed.providers.first { it.id == "wawa" }.network)
+        assertEquals("", parsed.providers.first { it.id == "plain" }.network)
+        assertEquals("", parsed.providers.first { it.id == "weird" }.network)
+    }
+
     // --------------------------------------------------------------- chunks
 
     @Test

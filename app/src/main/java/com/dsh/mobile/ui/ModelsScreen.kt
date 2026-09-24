@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -46,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -56,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -85,6 +88,8 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
     var addModelTo by remember { mutableStateOf<ModelProvider?>(null) }
     var keyFor by remember { mutableStateOf<ModelProvider?>(null) }
     var deleteProvider by remember { mutableStateOf<ModelProvider?>(null) }
+    var networkFor by remember { mutableStateOf<ModelProvider?>(null) }
+    var restartAsk by remember { mutableStateOf(false) }
     var deleteModel by remember { mutableStateOf<ModelItem?>(null) }
     var batchDelete by remember { mutableStateOf<Pair<ModelProvider, Set<String>>?>(null) }
     var expanded by remember { mutableStateOf(setOf<String>()) }
@@ -196,6 +201,7 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                                         syncOpen = true
                                     },
                                     onEditKey = { keyFor = provider },
+                                    onNetwork = { networkFor = provider },
                                     onDeleteProvider = { deleteProvider = provider },
                                     onToggleModel = { item ->
                                         // mutateModels 作用于最新文档：连点也不会互相覆盖（乐观更新）。
@@ -393,6 +399,34 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
         )
     }
 
+    networkFor?.let { provider ->
+        NetworkPickerDialog(
+            providerName = provider.name.ifBlank { provider.id },
+            current = provider.network,
+            onDismiss = { networkFor = null },
+            onConfirm = { route ->
+                val changed = route != provider.network
+                networkFor = null
+                repo.setProviderNetwork(provider.id, route) { ok ->
+                    if (ok && changed) restartAsk = true
+                }
+            },
+        )
+    }
+
+    if (restartAsk) {
+        ConfirmDialog(
+            title = "已保存 · 需重启电脑端生效",
+            body = "网络路由要重启电脑端才会生效（引擎只认启动时的网络环境）。重启约 10 秒，手机端会自动重连。",
+            confirm = "立即重启",
+            onDismiss = { restartAsk = false },
+            onConfirm = {
+                restartAsk = false
+                repo.requestEngineRestart()
+            },
+        )
+    }
+
     deleteModel?.let { item ->
         ConfirmDialog(
             title = "删除模型 ${item.name}？",
@@ -461,6 +495,7 @@ private fun ProviderBlock(
     onAddModel: () -> Unit,
     onSyncUpstream: () -> Unit,
     onEditKey: () -> Unit,
+    onNetwork: () -> Unit,
     onDeleteProvider: () -> Unit,
     onToggleModel: (ModelItem) -> Unit,
     onDeleteModel: (ModelItem) -> Unit,
@@ -501,6 +536,10 @@ private fun ProviderBlock(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            if (provider.network.isNotEmpty()) {
+                MiniTag(if (provider.network == "proxy") "代理" else "直连", palette.textSecondary)
+                Spacer(Modifier.width(8.dp))
             }
             if (provider.apiKeyRef.isNotBlank()) {
                 MiniTag(
@@ -618,12 +657,88 @@ private fun ProviderBlock(
                     SheetAction("从上游同步模型", caption = "拉取上游最新清单，勾选要加的模型") { onSyncUpstream() }
                     SheetAction("添加模型", caption = "输入模型 ID，能力稍后自动同步") { onAddModel() }
                     SheetAction("写入 / 清除密钥", caption = provider.apiKeyRef.ifBlank { "（未设置凭据变量名）" }) { onEditKey() }
+                    SheetAction(
+                        "网络：" + when (provider.network) {
+                            "proxy" -> "代理（必须走代理）"
+                            "direct" -> "直连（绕过代理）"
+                            else -> "自动"
+                        },
+                        caption = "有的提供商必须走代理、有的必须直连；改动需重启电脑端",
+                    ) { onNetwork() }
                     SheetAction("删除提供商", caption = "移除这家和它下面的全部模型", danger = true) { onDeleteProvider() }
                 }
             }
         }
     }
     Hairline(Modifier.padding(start = 20.dp, end = 20.dp))
+}
+
+/** 网络路由三选一：自动（默认走代理）/ 代理 / 直连。 */
+@Composable
+private fun NetworkPickerDialog(
+    providerName: String,
+    current: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val palette = LocalDsh.current
+    var choice by remember { mutableStateOf(if (current == "proxy" || current == "direct") current else "") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        containerColor = palette.surface,
+        title = { Text("${providerName} 的网络", color = palette.textPrimary, style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                NetworkSegmented(choice) { choice = it }
+                Text(
+                    when (choice) {
+                        "proxy" -> "这家必须经代理才能访问（代理地址在电脑端「设置 → 手机配对」页配置）。"
+                        "direct" -> "这家直连更快；国内中转、自家域名一般选直连。"
+                        else -> "跟随全局：默认走代理。个别提供商连不上时再单独改。"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textTertiary,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(choice) }) { Text("保存", color = palette.textPrimary) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = palette.textSecondary) } },
+    )
+}
+
+/** 等宽分段控件（与外观页同款：选中 = 实心胶囊）。 */
+@Composable
+private fun NetworkSegmented(current: String, onPick: (String) -> Unit) {
+    val palette = LocalDsh.current
+    val options = listOf("" to "自动", "proxy" to "代理", "direct" to "直连")
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(999.dp))
+            .background(palette.surfaceHi)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        options.forEach { (value, label) ->
+            val selected = current == value
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (selected) palette.primaryBtn else Color.Transparent)
+                    .clickable { onPick(value) }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selected) palette.onPrimaryBtn else palette.textSecondary,
+                )
+            }
+        }
+    }
 }
 
 /** 多选行的勾选框（与同步页同款视觉）。 */

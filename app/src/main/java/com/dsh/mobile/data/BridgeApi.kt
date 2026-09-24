@@ -177,6 +177,20 @@ class BridgeApi(private val client: OkHttpClient) {
         }
     }
 
+    /** 保存某提供商的网络路由（"" = 自动 / "proxy" / "direct"）；改动需重启电脑端生效。 */
+    suspend fun setProviderNetwork(token: String, provider: String, route: String): JSONObject =
+        call(
+            "POST", "/mobile/network", token,
+            JSONObject().apply {
+                put("provider", provider)
+                put("route", if (route.isBlank()) JSONObject.NULL else route)
+            },
+        )
+
+    /** 请求电脑端重启引擎，让网络路由生效（约 10 秒后自动重连）。 */
+    suspend fun requestEngineRestart(token: String): JSONObject =
+        call("POST", "/mobile/network/restart", token, JSONObject())
+
     /**
      * 从提供商上游拉最新模型清单：桥接替手机 resolve 密钥再请求 {baseURL}/models
      * （密钥只在电脑端，手机自己拉不了）。上游慢时可能几十秒，单独放宽读超时。

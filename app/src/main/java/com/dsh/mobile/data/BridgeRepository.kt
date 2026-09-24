@@ -1428,6 +1428,43 @@ class BridgeRepository(context: Context) {
         }
     }
 
+    /**
+     * 保存某提供商的网络路由（"" = 自动走代理 / "proxy" / "direct"）。
+     * 改动要重启电脑端引擎才生效；成功后刷新文档让选择回显。
+     */
+    fun setProviderNetwork(provider: String, route: String, onSaved: (Boolean) -> Unit = {}) {
+        val token = _state.value.token ?: return
+        scope.launch {
+            try {
+                api.setProviderNetwork(token, provider, route)
+                toast("网络路由已保存")
+                loadModels()
+                onSaved(true)
+            } catch (error: BridgeException) {
+                handleApiError(error, "保存网络路由失败")
+                onSaved(false)
+            } catch (error: Exception) {
+                fail("model", "保存网络路由失败：${error.message ?: "网络错误"}")
+                onSaved(false)
+            }
+        }
+    }
+
+    /** 请求电脑端重启引擎让网络路由生效（约 10 秒，之后自动重连）。 */
+    fun requestEngineRestart() {
+        val token = _state.value.token ?: return
+        scope.launch {
+            try {
+                api.requestEngineRestart(token)
+                toast("已请求重启：电脑端约 10 秒后恢复")
+            } catch (error: BridgeException) {
+                handleApiError(error, "请求重启失败")
+            } catch (error: Exception) {
+                fail("model", "请求重启失败：${error.message ?: "网络错误"}")
+            }
+        }
+    }
+
     /** Write (or clear) one provider's API key. Values are never read back. */
     fun setCredential(ref: String, value: String, onDone: (Boolean) -> Unit = {}) {
         val token = _state.value.token ?: return

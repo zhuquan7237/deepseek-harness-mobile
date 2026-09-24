@@ -97,6 +97,8 @@ data class ModelProvider(
     val apiMode: String = "",
     val apiKeyRef: String = "",
     val keyConfigured: Boolean = false,
+    /** 网络路由："" = 自动（默认走代理）；"proxy" = 必须走代理；"direct" = 直连绕过代理。 */
+    val network: String = "",
 )
 
 data class ModelDoc(
