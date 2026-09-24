@@ -629,9 +629,6 @@ class BridgeRepository(context: Context) {
             // JSON 解析放到后台：大会话（几百条、每条带着几十 KB 的思考）在手机上
             // 不是零成本，放在主线程解析就是「点进去顿一下」的来源。
             val parsed = withContext(Dispatchers.Default) { Wire.parseHistory(json, sid) }
-            // 历史里的失败行也要有日志：App 不在场时发生的回合靠这里补录。
-            // id 是确定性的（session+seq），实时路径已记过的不会重复。
-            backfillLogs(parsed.rows, sid)
             val selection = Wire.parseModelSelection(json)
             _state.update { current ->
                 if (current.sessionId != sid) {
@@ -990,25 +987,10 @@ class BridgeRepository(context: Context) {
             "turn/end" -> {
                 // 失败/被截断的回合不会再有 assistant/message，常规重载不会触发 ——
                 // 单独补一次，让 Wire.parseHistory 生成的 ERROR / 截断提示行显示出来。
-                // 同时在这里落错误日志：聊天里那条 ERROR 行和日志仓库是同一条（同一编号）。
+                // 对话失败属于上游模型/网络问题，**不进错误日志仓库**（用户定的分级规则：
+                // 日志只收应用自身的问题——崩溃/配对/连接等）。聊天里照常显示原因行。
                 val turnError = Wire.turnEndError(data)
                 val turnCut = Wire.turnEndTruncated(data)
-                if (turnError != null) {
-                    val logId = Wire.errorLogId(sid, "turn", turnError)
-                    Log.i(TAG, "live error log $logId")
-                    ErrorLog.record(
-                        id = logId,
-                        cat = "turn", msg = turnError, detail = turnDetail(sid, data),
-                    )
-                    refreshLogCounts()
-                }
-                if (turnCut != null) {
-                    ErrorLog.record(
-                        id = Wire.errorLogId(sid, "trunc", turnCut),
-                        cat = "turn", msg = turnCut, detail = turnDetail(sid, data),
-                    )
-                    refreshLogCounts()
-                }
                 val failed = turnError != null || turnCut != null
                 if (failed) scheduleHistoryReload() else completionPending = true
                 // 这一回合可能产出了新文件：静默刷新本会话的生成文件列表（卡片随之出现）
@@ -1107,6 +1089,19 @@ class BridgeRepository(context: Context) {
         refreshLogCounts()
     }
 
+    /** 用户删除所选日志（只删本机显示；之前发送出去的副本仍在接收端）。 */
+    fun deleteLogs(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        ErrorLog.delete(ids)
+        refreshLogCounts()
+    }
+
+    /** 清空全部日志（用户的"全部删除"入口）。 */
+    fun clearLogs() {
+        ErrorLog.clearAll()
+        refreshLogCounts()
+    }
+
     fun refreshLogCounts() {
         val (pending, total) = ErrorLog.counts()
         _state.update {
@@ -1116,27 +1111,6 @@ class BridgeRepository(context: Context) {
                 it
             }
         }
-    }
-
-    /** 失败回合的日志细节（会话/模型/原始 reason 摘要；不含聊天内容）。 */
-    private fun turnDetail(sid: String, data: JSONObject): String {
-        val model = listOf(_state.value.modelProvider, _state.value.modelId)
-            .filter { it.isNotBlank() }.joinToString("/")
-        val reason = data.optJSONObject("reason")?.toString().orEmpty().take(2500)
-        return "session=$sid\nmodel=$model\nreason=$reason"
-    }
-
-    /** 历史回放的失败行补录（确定性 id，天然去重）。 */
-    private fun backfillLogs(rows: List<ChatRow>, sid: String) {
-        var changed = false
-        for (row in rows) {
-            val id = row.logId ?: continue
-            if (ErrorLog.exists(id)) continue
-            Log.i(TAG, "backfill log $id")
-            ErrorLog.record(id = id, cat = "turn", msg = row.text, detail = "会话 $sid（打开会话时从历史补录）")
-            changed = true
-        }
-        if (changed) refreshLogCounts()
     }
 
     // ------------------------------------------------------------ 错误日志（诊断）
@@ -1232,6 +1206,9 @@ class BridgeRepository(context: Context) {
                 val body = JSONObject()
                     .put("baseRevision", doc.revision)
                     .put("overlayRevision", doc.overlayRevision)
+                    // base = 手机上次看到的原样文档。桥接用它做三方合并：即使中途
+                    // 电脑端改过配置，手机这次编辑也能安全并入、桌面侧新增不丢。
+                    .put("base", Wire.modelItemsJson(doc.items))
                     .put("items", Wire.modelItemsJson(items))
                 val result = api.putModels(token, body)
                 val fresh = result.optJSONObject("doc")?.let { Wire.parseModelDoc(it) }
@@ -1291,6 +1268,35 @@ class BridgeRepository(context: Context) {
             } catch (error: Exception) {
                 _state.update { it.copy(modelsSyncing = false) }
                 fail("model", "同步模型能力失败：${error.message ?: "网络错误"}")
+            }
+        }
+    }
+
+    /**
+     * 从上游拉这个提供商的模型清单（桥接代拉，密钥只在电脑端）。
+     * 结果在回调里给：(models, null) 或 (null, errorMessage)。
+     * 拉取失败不进错误日志——常见原因是密钥/网络，同步页当场展示让用户处理。
+     */
+    fun pullUpstreamModels(provider: ModelProvider, onResult: (List<String>?, String?) -> Unit) {
+        val token = _state.value.token
+        if (token == null) {
+            onResult(null, "还没有连接电脑端")
+            return
+        }
+        scope.launch {
+            try {
+                val result = api.pullUpstreamModels(token, provider.id)
+                val arr = result.optJSONArray("models") ?: JSONArray()
+                val models = buildList {
+                    for (i in 0 until arr.length()) {
+                        arr.optString(i).takeIf { it.isNotBlank() }?.let(::add)
+                    }
+                }
+                onResult(models, null)
+            } catch (error: BridgeException) {
+                onResult(null, error.message)
+            } catch (error: Exception) {
+                onResult(null, error.message ?: "网络错误")
             }
         }
     }

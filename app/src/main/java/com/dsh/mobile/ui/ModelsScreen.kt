@@ -47,6 +47,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,6 +78,8 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
     BackHandler { repo.closeModels() }
 
     var addProvider by remember { mutableStateOf(false) }
+    var syncOpen by remember { mutableStateOf(false) }
+    var syncTarget by remember { mutableStateOf<ModelProvider?>(null) }
     var addModelTo by remember { mutableStateOf<ModelProvider?>(null) }
     var keyFor by remember { mutableStateOf<ModelProvider?>(null) }
     var deleteProvider by remember { mutableStateOf<ModelProvider?>(null) }
@@ -148,6 +151,10 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                                         expanded = if (provider.id in expanded) expanded - provider.id else expanded + provider.id
                                     },
                                     onAddModel = { addModelTo = provider },
+                                    onSyncUpstream = {
+                                        syncTarget = provider
+                                        syncOpen = true
+                                    },
                                     onEditKey = { keyFor = provider },
                                     onDeleteProvider = { deleteProvider = provider },
                                     onToggleModel = { item ->
@@ -215,6 +222,54 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                     }
                 },
             )
+        }
+
+        // 从上游同步：推进来的整页（与全应用转场同向）。内容用 key 隔离状态；
+        // 关闭时保留 syncTarget 一帧给退出动画渲染（照 OverlayHost 的教训）。
+        AnimatedVisibility(
+            visible = syncOpen,
+            enter = slideInHorizontally(tween(Motion.SCREEN, easing = Motion.Push)) { it },
+            exit = slideOutHorizontally(tween(Motion.BASE, easing = Motion.Push)) { it },
+        ) {
+            syncTarget?.let { provider ->
+                key(provider.id) {
+                    SyncUpstreamScreen(
+                        provider = provider,
+                        existingIds = state.doc?.items.orEmpty()
+                            .filter { it.provider == provider.id }
+                            .map { it.modelId }
+                            .toSet(),
+                        repo = repo,
+                        onDismiss = { syncOpen = false },
+                        onApply = { chosen ->
+                            val doc = state.doc
+                            if (doc != null && chosen.isNotEmpty()) {
+                                val startOrder = (doc.items.maxOfOrNull { it.order } ?: -1) + 1
+                                val added = chosen.mapIndexed { index, modelId ->
+                                    ModelItem(
+                                        id = provider.id + "::" + modelId,
+                                        name = modelId,
+                                        provider = provider.id,
+                                        modelId = modelId,
+                                        enabled = true,
+                                        contextWindow = "—",
+                                        imageInput = false,
+                                        providerName = provider.name,
+                                        order = startOrder + index,
+                                        baseURL = provider.baseURL,
+                                        apiMode = provider.apiMode,
+                                        apiKeyRef = provider.apiKeyRef,
+                                    )
+                                }
+                                repo.saveModels(doc.items + added) { ok ->
+                                    if (ok) repo.toast("已添加 ${added.size} 个模型，能力稍后自动补齐")
+                                }
+                            }
+                            syncOpen = false
+                        },
+                    )
+                }
+            }
         }
     }
 
@@ -322,6 +377,7 @@ private fun ProviderBlock(
     open: Boolean,
     onToggle: () -> Unit,
     onAddModel: () -> Unit,
+    onSyncUpstream: () -> Unit,
     onEditKey: () -> Unit,
     onDeleteProvider: () -> Unit,
     onToggleModel: (ModelItem) -> Unit,
@@ -421,6 +477,7 @@ private fun ProviderBlock(
                 }
             }
             Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
+                SheetAction("从上游同步模型", caption = "拉取上游最新清单，把新增的模型加进来") { onSyncUpstream() }
                 SheetAction("添加模型", caption = "输入模型 ID，能力稍后自动同步") { onAddModel() }
                 SheetAction("写入 / 清除密钥", caption = provider.apiKeyRef.ifBlank { "（未设置凭据变量名）" }) { onEditKey() }
                 SheetAction("删除提供商", caption = "移除这家和它下面的全部模型", danger = true) { onDeleteProvider() }

@@ -60,8 +60,6 @@ data class ChatRow(
     val raw: String = "",
     /** 事件时间（epoch ms）；执行记录折叠后靠它算「这一段用了多久」。 */
     val time: Long = 0L,
-    /** 失败行对应的错误日志编号（错误卡上显示 + 发送入口；其余行为 null）。 */
-    val logId: String? = null,
 )
 
 /** One in-flight assistant bubble, keyed by `turn:step`. */

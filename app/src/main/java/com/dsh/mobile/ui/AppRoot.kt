@@ -136,7 +136,7 @@ fun AppRoot(repo: BridgeRepository) {
                 }
             }
             ToastHost(state.toast)
-            // 「发送日志」的同意弹窗放在这里：聊天错误卡和日志页都会触发它，
+            // 「发送日志」的同意弹窗放在这里：日志页触发它（发送前必须用户确认），
             // 用户在确认框里明确选一次"发/不发"（用户要求：可以选择是否发送）。
             if (state.logAsk != null) {
                 SendLogsDialog(

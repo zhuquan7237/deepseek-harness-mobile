@@ -177,6 +177,42 @@ class BridgeApi(private val client: OkHttpClient) {
         }
     }
 
+    /**
+     * 从提供商上游拉最新模型清单：桥接替手机 resolve 密钥再请求 {baseURL}/models
+     * （密钥只在电脑端，手机自己拉不了）。上游慢时可能几十秒，单独放宽读超时。
+     */
+    suspend fun pullUpstreamModels(token: String, provider: String): JSONObject = withContext(Dispatchers.IO) {
+        val root = base.trimEnd('/')
+        if (root.isEmpty()) throw BridgeException("E_NO_SERVER", "还没有设置服务器地址")
+        val slow = client.newBuilder().readTimeout(90, java.util.concurrent.TimeUnit.SECONDS).build()
+        val request = Request.Builder()
+            .url(root + "/mobile/models/pull")
+            .header("Authorization", "Bearer $token")
+            .post(JSONObject().put("provider", provider).toString().toRequestBody(jsonType))
+            .build()
+        slow.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            val json = try {
+                if (text.isBlank()) JSONObject() else JSONObject(text)
+            } catch (_: Exception) {
+                throw BridgeException("E_PROTOCOL", "拉取响应无法解析（HTTP ${response.code}）")
+            }
+            if (response.code == 401) {
+                throw BridgeException("E_UNAUTHORIZED", json.optString("message").ifEmpty { "令牌已失效，请重新配对" })
+            }
+            if (response.code == 404) {
+                throw BridgeException("E_UPGRADE", "电脑端版本较旧，暂不支持从上游同步；把电脑端升级到 0.5.26 及以上即可")
+            }
+            if (json.optBoolean("ok", true).not()) {
+                throw BridgeException(
+                    json.optString("code").ifEmpty { "E_UNKNOWN" },
+                    json.optString("message").ifEmpty { "拉取失败" },
+                )
+            }
+            json
+        }
+    }
+
     /** Write-only credential: the value never comes back. */
     suspend fun setCredential(token: String, ref: String, value: String): JSONObject =
         call(

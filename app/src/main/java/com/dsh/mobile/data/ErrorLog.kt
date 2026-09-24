@@ -192,6 +192,22 @@ object ErrorLog {
         }
     }
 
+    /** 用户删除所选（本机从此不显示；之前发送出去的副本仍留在接收端，用于排查）。 */
+    fun delete(ids: Collection<String>) {
+        synchronized(lock) {
+            ids.forEach { entries.remove(it) }
+            rewriteLocked()
+        }
+    }
+
+    /** 清空全部（用户的"全部删除"入口）。 */
+    fun clearAll() {
+        synchronized(lock) {
+            entries.clear()
+            rewriteLocked()
+        }
+    }
+
     private fun ensureFileLocked() {
         if (file == null) {
             val c = appCtx ?: return
@@ -222,6 +238,43 @@ object ErrorLog {
         val old = entries.keys.take(excess)
         old.forEach { entries.remove(it) }
         rewriteLocked()
+    }
+
+    /**
+     * 面向用户的通俗标题（日志列表只显示它——用户在找"哪类问题"时一眼能看懂；
+     * 技术原文点开卡片才看）。发送时也带上，让维护者知道用户看到的是什么说法。
+     */
+    fun logTitle(cat: String, msg: String): String = when (cat) {
+        "crash" -> "应用崩溃"
+        "pair" -> "配对失败"
+        "api" -> "与电脑通信失败"
+        "auth" -> "登录状态失效"
+        "model" -> "模型配置操作失败"
+        "session" -> "会话操作失败"
+        "sessions" -> "会话列表加载失败"
+        "history" -> "聊天记录读取失败"
+        "files" -> "文件操作失败"
+        "send" -> "消息发送失败"
+        "update" -> "更新失败"
+        "turn" -> "对话请求被上游拒绝"
+        else -> "出现错误"
+    }
+
+    /** 面向用户的一两句解释（点开卡片时显示在技术细节上方，替代术语堆砌）。 */
+    fun logExplain(cat: String): String = when (cat) {
+        "crash" -> "应用内部出现了异常。技术细节里有崩溃时的堆栈，发送给开发者可以直接定位。"
+        "pair" -> "手机和电脑没能建立连接。常见原因：配对码过期、电脑端不在线、或网络不通；重试一次往往就好。"
+        "api" -> "和电脑端的通信失败了。可能是网络断了、电脑端没开，或电脑端返回了错误。"
+        "auth" -> "登录状态失效了。重新配对一次即可恢复。"
+        "model" -> "模型配置相关的操作失败了。常见于电脑端不在线或两端配置冲突。"
+        "session" -> "会话操作失败了。"
+        "sessions" -> "读取会话列表失败了。"
+        "history" -> "读取聊天记录失败了。"
+        "files" -> "文件操作失败了。"
+        "send" -> "消息没能成功送到电脑端。检查电脑端是否在线。"
+        "update" -> "检查更新或下载失败了。"
+        "turn" -> "这个回合被上游拒绝了——属于模型提供方的问题，不是手机应用自身的问题。"
+        else -> "应用记录了一个错误。"
     }
 
     private fun serialize(e: ErrEntry): String {
@@ -297,6 +350,8 @@ object LogUplink {
                     .put("id", e.id)
                     .put("time", e.time)
                     .put("cat", e.cat)
+                    .put("level", "alert")
+                    .put("title", ErrorLog.logTitle(e.cat, e.msg))
                     .put("msg", e.msg)
                     .put("detail", e.detail),
             )
