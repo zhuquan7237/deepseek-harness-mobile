@@ -93,6 +93,18 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
     var selecting by remember { mutableStateOf(setOf<String>()) }
     val picked = remember { mutableStateMapOf<String, Set<String>>() }
 
+    // 批量启用/停用：一次保存，退出选择模式（批量栏在页面底栏，见下）。
+    fun batchEnable(providerId: String, enable: Boolean) {
+        val ids = picked[providerId].orEmpty()
+        selecting = selecting - providerId
+        picked.remove(providerId)
+        if (ids.isNotEmpty()) {
+            repo.mutateModels { items ->
+                items.map { if (it.id in ids) it.copy(enabled = enable) else it }
+            }
+        }
+    }
+
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -167,24 +179,17 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                                     },
                                     onQuery = { searchQ[provider.id] = it },
                                     onSelecting = { on ->
-                                        selecting = if (on) selecting + provider.id else selecting - provider.id
-                                        picked[provider.id] = emptySet()
-                                    },
-                                    onPicked = { picked[provider.id] = it },
-                                    onBatchEnable = { enable ->
-                                        val ids = picked[provider.id].orEmpty()
-                                        selecting = selecting - provider.id
-                                        picked.remove(provider.id)
-                                        if (ids.isNotEmpty()) {
-                                            repo.mutateModels { items ->
-                                                items.map { if (it.id in ids) it.copy(enabled = enable) else it }
-                                            }
+                                        if (on) {
+                                            // 一次只让一个提供商进多选（底栏批量栏只有一个）。
+                                            selecting = setOf(provider.id)
+                                            picked.clear()
+                                            picked[provider.id] = emptySet()
+                                        } else {
+                                            selecting = selecting - provider.id
+                                            picked[provider.id] = emptySet()
                                         }
                                     },
-                                    onBatchDelete = {
-                                        val ids = picked[provider.id].orEmpty()
-                                        if (ids.isNotEmpty()) batchDelete = provider to ids
-                                    },
+                                    onPicked = { picked[provider.id] = it },
                                     onAddModel = { addModelTo = provider },
                                     onSyncUpstream = {
                                         syncTarget = provider
@@ -203,17 +208,33 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                             }
                         }
                     }
-                    // 底栏是布局元素、不再悬浮在列表上：悬浮 CTA 会盖住最后几行
-                    // 的可点区域（实测：第 4 个动作行「删除提供商」的中心被按钮
-                    // 吸走、点击无声失效——列表栏与按钮重叠的经典坑）。
+                    // 底栏：默认是「添加提供商」CTA；进入多选时换成批量操作栏
+                    //（常驻可见，不必滚到块尾找按钮——用户反馈「删起来不丝滑」的根因之一）。
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .navigationBarsPadding()
                             .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp),
-                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        PrimaryCta(Icons.Outlined.Add, "添加提供商") { addProvider = true }
+                        val barProvider = doc.providers.firstOrNull { it.id in selecting }
+                        if (barProvider == null) {
+                            Spacer(Modifier.weight(1f))
+                            PrimaryCta(Icons.Outlined.Add, "添加提供商") { addProvider = true }
+                            Spacer(Modifier.weight(1f))
+                        } else {
+                            val ids = picked[barProvider.id].orEmpty()
+                            Pill("启用", onClick = { batchEnable(barProvider.id, true) }, enabled = ids.isNotEmpty())
+                            Pill("停用", onClick = { batchEnable(barProvider.id, false) }, enabled = ids.isNotEmpty())
+                            Spacer(Modifier.weight(1f))
+                            Pill(
+                                "删除（${ids.size}）",
+                                onClick = { if (ids.isNotEmpty()) batchDelete = barProvider to ids },
+                                enabled = ids.isNotEmpty(),
+                                danger = true,
+                            )
+                        }
                     }
                 }
             }
@@ -437,8 +458,6 @@ private fun ProviderBlock(
     onQuery: (String) -> Unit,
     onSelecting: (Boolean) -> Unit,
     onPicked: (Set<String>) -> Unit,
-    onBatchEnable: (Boolean) -> Unit,
-    onBatchDelete: () -> Unit,
     onAddModel: () -> Unit,
     onSyncUpstream: () -> Unit,
     onEditKey: () -> Unit,
@@ -593,24 +612,6 @@ private fun ProviderBlock(
                         }
                     }
                 }
-                if (selecting) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Pill("启用", onClick = { onBatchEnable(true) }, enabled = picked.isNotEmpty())
-                        Pill("停用", onClick = { onBatchEnable(false) }, enabled = picked.isNotEmpty())
-                        Pill(
-                            "删除（${picked.size}）",
-                            onClick = onBatchDelete,
-                            enabled = picked.isNotEmpty(),
-                            danger = true,
-                        )
-                    }
-                }
             }
             if (!selecting) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
@@ -692,8 +693,12 @@ private fun ModelTexts(item: ModelItem, modifier: Modifier = Modifier) {
                 append(item.modelId)
             }
         }
-        if (meta.isNotEmpty()) {
-            Text(meta, style = MaterialTheme.typography.labelSmall, color = palette.textTertiary, maxLines = 1)
-        }
+        // 固定占一行：没有 meta 时留空行，保证所有模型行等高（多选时勾选框对齐也更整齐）。
+        Text(
+            meta.ifEmpty { " " },
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.textTertiary,
+            maxLines = 1,
+        )
     }
 }
