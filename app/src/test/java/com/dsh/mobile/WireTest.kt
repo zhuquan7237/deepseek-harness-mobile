@@ -245,6 +245,29 @@ class WireTest {
         assertFalse(parsed.running)
     }
 
+    @Test
+    fun historyRunningTurnExposesItsStartTime() {
+        // 重进正在跑的会话：秒数要用 turn/start 的真实时间续，不能从 0 重数。
+        val items = JSONArray()
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "turn/start").put("data", JSONObject())
+                        .put("time", 1_790_000_100L),
+                ),
+            )
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "assistant/message").put("time", 1_790_000_140L)
+                        .put("data", JSONObject().put("message", JSONObject().put("text", "…"))),
+                ),
+            )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertTrue(parsed.running)
+        assertEquals(1_790_000_100_000L, parsed.runningSince)
+    }
+
     // -------------------------------------------------------------- sessions
 
     @Test

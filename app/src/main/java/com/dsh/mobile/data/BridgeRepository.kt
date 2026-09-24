@@ -642,11 +642,13 @@ class BridgeRepository(context: Context) {
                         history = parsed.rows,
                         historyEndTime = parsed.endTime,
                         running = parsed.running,
-                        // 重进正在跑的会话要把"进行态"也恢复出来，否则看起来像卡住/没反应
+                        // 重进正在跑的会话要把"进行态"也恢复出来，否则看起来像卡住/没反应；
+                        // 秒数用历史里 turn/start 的真实时间续上——不从 0 重数（用户实测提问过）。
                         thinking = parsed.running,
                         thinkingSince = when {
                             !parsed.running -> 0L
                             current.thinkingSince > 0L -> current.thinkingSince
+                            parsed.runningSince > 0L -> parsed.runningSince
                             else -> System.currentTimeMillis()
                         },
                         historyLoading = false,
@@ -998,7 +1000,22 @@ class BridgeRepository(context: Context) {
     private fun handleEvent(frame: JSONObject) {
         val s = _state.value
         val sid = frame.optString("sessionId")
-        if (sid.isNotEmpty() && sid != s.sessionId) return
+        if (sid.isNotEmpty() && sid != s.sessionId) {
+            // 别的会话在动：列表页要保持「实时」——先把运行标识就地翻过去（马上能看到
+            // 「正在执行」胶囊），再节流重读一次列表（排序/时间戳/文件数跟上）。
+            val type = frame.optString("type")
+            if (type == "turn/start" || type == "turn/end") {
+                _state.update { cur ->
+                    cur.copy(
+                        sessions = cur.sessions.map {
+                            if (it.sessionId == sid) it.copy(running = type == "turn/start") else it
+                        },
+                    )
+                }
+                scheduleSessionsReload()
+            }
+            return
+        }
         val data = frame.optJSONObject("data") ?: JSONObject()
         when (frame.optString("type")) {
             "turn/start" -> _state.update {
@@ -1053,6 +1070,16 @@ class BridgeRepository(context: Context) {
         reloadJob = scope.launch {
             delay(250)
             reloadHistoryNow(sid)
+        }
+    }
+
+    /** 别的会话的回合动态（turn/start|end）触发的列表重读：合并连发、延迟一小段执行。 */
+    private var sessionsReloadJob: Job? = null
+    private fun scheduleSessionsReload() {
+        if (sessionsReloadJob?.isActive == true) return
+        sessionsReloadJob = scope.launch {
+            delay(800)
+            loadSessions()
         }
     }
 

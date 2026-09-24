@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -243,6 +244,16 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                     val raw = cached ?: repo.fetchFileBytes(file)?.toString(Charsets.UTF_8)?.also { PreviewCache.putText(key, it) }
                     viewingText = raw?.let {
                         if (it.length > 800_000) it.take(800_000) + "\n\n……（内容过大，仅预览前 800 KB，完整内容请下载查看）" else it
+                    }
+                }
+                kind == "svg" -> {
+                    // SVG 走「内联 data 页」：之前的「深色页 + <img src=远端>」在这台设备
+                    // 上渲染不出来（内容区全黑）。内联后不依赖子资源请求，稳。
+                    val svg = runCatching { repo.fetchFileBytes(file)?.toString(Charsets.UTF_8) }.getOrNull()
+                    viewingUrl = if (svg != null && svg.isNotBlank() && svg.length <= 800_000) {
+                        dataUrlPage(inlineSvgPage(svg))
+                    } else {
+                        repo.fileUrlFor(file.path)
                     }
                 }
                 else -> viewingUrl = repo.fileUrlFor(file.path)
@@ -557,10 +568,10 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
         )
     }
 
-    preview?.let { artifact ->
-        PreviewSheet(
+    OverlayHost(preview) { artifact ->
+        GraphicPreviewOverlay(
             artifact = artifact,
-            onDismiss = { preview = null },
+            onClose = { preview = null },
             onCopy = {
                 clipboard.setText(AnnotatedString(artifact.markup))
                 repo.toast("源码已复制")
@@ -1362,33 +1373,29 @@ private fun MessageAction(icon: ImageVector, label: String, onClick: () -> Unit)
 
 /**
  * Renders what the agent drew: SVG is wrapped in a page that scales it to the
- * sheet, HTML runs as a page. The WebView gets no JS bridge and no file access,
- * so markup produced by the agent cannot reach the device.
+ * viewer, HTML runs as a page. The WebView gets no JS bridge, so markup
+ * produced by the agent cannot reach the device.
+ *
+ * ❗不用 ModalBottomSheet：M3 的 sheet 是**独立窗口**，它里面的 WebView 内容
+ * 能加载（dom/内容高度都正常）但永远合成不上屏——用户真机与模拟器都是纯白。
+ * 改成和文件查看器同款的全屏浮层（普通窗口），WebView 渲染一切正常（3D 页面都行）。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PreviewSheet(artifact: Wire.Artifact, onDismiss: () -> Unit, onCopy: () -> Unit) {
+private fun GraphicPreviewOverlay(artifact: Wire.Artifact, onClose: () -> Unit, onCopy: () -> Unit) {
     val palette = LocalDsh.current
-    // 之前是半展开的"吊在半空"，图贴在 420dp 高的框顶 —— 现在直接全屏展开、内容居中。
-    // M3 1.2 起 skipPartiallyExpanded 在 SheetState 上，不在 ModalBottomSheet 参数里。
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = palette.surface,
-        dragHandle = { SheetHandle() },
-    ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .fillMaxHeight()
-                .padding(horizontal = 16.dp)
-                .navigationBarsPadding(),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+    Box(Modifier.fillMaxSize().background(palette.bg)) {
+        Column(Modifier.fillMaxSize().systemBarsPadding()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircleButton(Icons.Outlined.Close, "关闭") { onClose() }
+                Spacer(Modifier.width(10.dp))
                 Text(
                     if (artifact.kind == "svg") "图形预览" else "网页预览",
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     color = palette.textPrimary,
                     modifier = Modifier.weight(1f),
                 )
@@ -1402,11 +1409,12 @@ private fun PreviewSheet(artifact: Wire.Artifact, onDismiss: () -> Unit, onCopy:
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
-            Spacer(Modifier.height(12.dp))
             Box(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
+                    .padding(horizontal = 10.dp)
+                    .padding(bottom = 10.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .border(
                         1.dp,
@@ -1415,43 +1423,48 @@ private fun PreviewSheet(artifact: Wire.Artifact, onDismiss: () -> Unit, onCopy:
                     )
                     .background(Color.White),
             ) {
-                key(artifact.markup) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { context ->
-                            WebView(context).apply {
-                                settings.javaScriptEnabled = artifact.kind == "html"
-                                settings.domStorageEnabled = true
-                                settings.allowFileAccess = false
-                                settings.allowContentAccess = false
-                                settings.loadWithOverviewMode = true
-                                settings.useWideViewPort = true
-                                setBackgroundColor(android.graphics.Color.WHITE)
-                                loadDataWithBaseURL(
-                                    null,
-                                    artifactPage(artifact),
-                                    "text/html",
-                                    "utf-8",
-                                    null,
-                                )
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { context ->
+                        WebView(context).apply {
+                            settings.javaScriptEnabled = artifact.kind == "html"
+                            settings.domStorageEnabled = true
+                            settings.allowFileAccess = false
+                            settings.allowContentAccess = false
+                            settings.loadWithOverviewMode = true
+                            settings.useWideViewPort = true
+                            setBackgroundColor(android.graphics.Color.WHITE)
+                            val page = artifactPage(artifact)
+                            if (page.length <= 800_000) {
+                                loadUrl(dataUrlPage(page))
+                            } else {
+                                // 超大页面走临时文件（data: URL 有长度限制）
+                                settings.allowFileAccess = true
+                                val f = java.io.File(context.cacheDir, "preview/artifact.html")
+                                f.parentFile?.mkdirs()
+                                f.writeText(page)
+                                loadUrl("file://" + f.absolutePath.replace('\\', '/'))
                             }
-                        },
-                    )
-                }
+                        }
+                    },
+                )
             }
-            Spacer(Modifier.height(16.dp))
         }
     }
 }
 
-/** SVG needs a page around it before a WebView will scale it to the sheet. */
+/**
+ * SVG needs a page around it before a WebView will scale it to the viewer.
+ *
+ * ❗别用「flex 居中 + height:100% + svg{max-height:100%;height:auto}」那套 CSS：
+ * Android WebView 里该组合会把 SVG 算成 0 尺寸（内容全白），而同一页面在桌面 Chrome
+ * 正常——实测二分定位到 CSS，不是 SVG 内容的问题。text-align:center + max-width:96vw 稳。
+ */
 private fun artifactPage(artifact: Wire.Artifact): String = if (artifact.kind != "svg") {
     artifact.markup
 } else {
-    """<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>html,body{margin:0;height:100%;background:#ffffff;}
-body{display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;}
-svg{max-width:100%;max-height:100%;height:auto;width:auto;display:block;}</style></head><body>${artifact.markup}</body></html>"""
+    """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{margin:0;background:#ffffff;text-align:center;} svg{max-width:96vw;height:auto;}</style></head><body>${artifact.markup}</body></html>"""
 }
 
 /**

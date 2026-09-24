@@ -538,7 +538,7 @@ private fun WebPreview(
                 if (ticket.isNotEmpty()) {
                     CookieManager.getInstance().setCookie(url.substringBefore("?t="), "dsht=$ticket")
                 }
-                if (kind == "html") {
+                if (kind == "html" || url.startsWith("data:")) {
                     web.loadUrl(url)
                 } else {
                     web.loadDataWithBaseURL(url, filePage(url), "text/html", "utf-8", null)
@@ -562,7 +562,26 @@ private fun WebPreview(
 private fun filePage(url: String): String =
     """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>html,body{margin:0;height:100%;background:#101114;}
-body{display:flex;align-items:center;justify-content:center;overflow:hidden;}
-img{max-width:100%;max-height:100%;object-fit:contain;display:block;}</style></head>
+<style>html,body{margin:0;background:#101114;text-align:center;}
+img{max-width:96vw;height:auto;}</style></head>
 <body><img src="$url"></body></html>"""
+
+/**
+ * 把一段完整 HTML 打成 data: URL —— 聊天里的图形/网页预览与内联 SVG 文件预览都走它。
+ * 比 loadDataWithBaseURL 稳：不依赖 base URL/子资源请求，整页一次性交给 WebView。
+ */
+fun dataUrlPage(html: String): String {
+    val b64 = android.util.Base64.encodeToString(html.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+    return "data:text/html;charset=utf-8;base64,$b64"
+}
+
+/**
+ * SVG 文件预览页：把 svg 直接内联进深色页（不再用 <img src=远端>）。
+ * CSS 与 artifactPage 同理——**绝不用 flex+height:100%+max-height 那套**（WebView 会把 SVG 算成 0）。
+ */
+fun inlineSvgPage(svg: String): String =
+    """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{margin:0;background:#101114;text-align:center;}
+svg{max-width:96vw;height:auto;}</style></head>
+<body>$svg</body></html>"""

@@ -116,7 +116,13 @@ object Wire {
         return id.take(8).ifEmpty { "会话" }
     }
 
-    data class HistoryParse(val rows: List<ChatRow>, val running: Boolean, val endTime: Long = 0L)
+    data class HistoryParse(
+        val rows: List<ChatRow>,
+        val running: Boolean,
+        val endTime: Long = 0L,
+        /** 还在跑的回合的 turn/start 时间——重进会话时用它当天花板，秒数不会从 0 重数。 */
+        val runningSince: Long = 0L,
+    )
 
     /** One content block inside an assistant/user message. */
     private data class Part(
@@ -162,6 +168,8 @@ object Wire {
         val rows = ArrayList<ChatRow>()
         var lastTurn: String? = null
         var stepStart = 0L
+        // 最近一次 turn/start 的时间（重进正在跑的会话时，正在思考的秒数要从这里续）
+        var runningSince = 0L
         // 历史里最后一个事件的时间：折叠的执行记录靠它算「这一段到哪结束」
         var endTime = 0L
         val seenCalls = HashSet<String>()
@@ -179,6 +187,7 @@ object Wire {
                 "turn/start" -> {
                     lastTurn = "start"
                     stepStart = time
+                    runningSince = time
                 }
                 "turn/end" -> {
                     lastTurn = "end"
@@ -277,7 +286,7 @@ object Wire {
         // 待生效的消息挂在末尾：它们还没进入回合，但用户必须看得见
         inbox["next-step"]?.forEach { (_, text) -> rows.add(ChatRow(Role.STEER, text)) }
         inbox["next-turn"]?.forEach { (_, text) -> rows.add(ChatRow(Role.QUEUED, text)) }
-        return HistoryParse(rows, lastTurn == "start", endTime)
+        return HistoryParse(rows, lastTurn == "start", endTime, runningSince)
     }
 
     /** 一段连续的执行记录（思考 + 工具调用/返回），折叠成一行摘要后展示。 */
