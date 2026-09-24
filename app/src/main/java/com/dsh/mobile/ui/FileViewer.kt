@@ -558,13 +558,17 @@ private fun WebPreview(
     }
 }
 
-/** 图片/SVG 包一层深色页并居中 —— 预览时它就"在窗口中间"，而不是贴在顶上。 */
+/**
+ * 图片包一层深色页并两轴居中（ghost 行内技法：不用 flex/table/vh——见 artifactPage 的雷区注释）。
+ */
 private fun filePage(url: String): String =
     """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>html,body{margin:0;background:#101114;text-align:center;}
-img{max-width:96vw;height:auto;}</style></head>
-<body><img src="$url"></body></html>"""
+<style>html,body{margin:0;padding:0;background:#101114;}
+.center{position:fixed;top:0;left:0;right:0;bottom:0;text-align:center;white-space:nowrap;}
+.center::before{content:"";display:inline-block;height:100%;width:0;vertical-align:middle;}
+img{display:inline-block;vertical-align:middle;max-width:92vw;height:auto;}</style></head>
+<body><div class="center"><img src="$url"></div></body></html>"""
 
 /**
  * 把一段完整 HTML 打成 data: URL —— 聊天里的图形/网页预览与内联 SVG 文件预览都走它。
@@ -577,11 +581,13 @@ fun dataUrlPage(html: String): String {
 
 /**
  * SVG 文件预览页：把 svg 直接内联进深色页（不再用 <img src=远端>）。
- * CSS 与 artifactPage 同理——**绝不用 flex+height:100%+max-height 那套**（WebView 会把 SVG 算成 0）。
+ * CSS 与 artifactPage 同理（ghost 行内居中；不用 flex/table/vh——WebView 的 vh 会算成 0）。
  */
 fun inlineSvgPage(svg: String): String =
     """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>html,body{margin:0;background:#101114;text-align:center;}
-svg{max-width:96vw;height:auto;}</style></head>
-<body>$svg</body></html>"""
+<style>html,body{margin:0;padding:0;background:#101114;}
+.center{position:fixed;top:0;left:0;right:0;bottom:0;text-align:center;white-space:nowrap;}
+.center::before{content:"";display:inline-block;height:100%;width:0;vertical-align:middle;}
+svg{display:inline-block;vertical-align:middle;max-width:92vw;height:auto;}</style></head>
+<body><div class="center">$svg</div></body></html>"""

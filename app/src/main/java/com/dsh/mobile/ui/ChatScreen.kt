@@ -395,7 +395,10 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 repo.toast("已复制")
             },
             onRegenerate = { repo.regenerate() },
-            onPreview = { preview = it },
+            onPreview = {
+                keyboard?.hide()
+                preview = it
+            },
             onQuickSend = { line -> scope.launch { repo.send(line) } },
             onRevealDone = { repo.revealConsumed() },
             onOpenFiles = {
@@ -1020,7 +1023,7 @@ private fun MessageRow(
     val palette = LocalDsh.current
     when (row.who) {
         Role.ERROR -> Box(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
             Surface(color = palette.danger.copy(alpha = 0.12f), shape = RoundedCornerShape(14.dp)) {
@@ -1036,7 +1039,7 @@ private fun MessageRow(
             }
         }
         Role.TRUNCATED -> Box(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
             Surface(color = palette.warn.copy(alpha = 0.14f), shape = RoundedCornerShape(14.dp)) {
@@ -1077,7 +1080,7 @@ private fun MessageRow(
         Role.USER -> Column(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp),
+                .padding(start = 24.dp, end = 24.dp, top = 6.dp, bottom = 14.dp),
             horizontalAlignment = Alignment.End,
         ) {
             Box(
@@ -1103,7 +1106,7 @@ private fun MessageRow(
         Role.STEER, Role.QUEUED -> Column(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 14.dp),
+                .padding(start = 24.dp, end = 24.dp, top = 10.dp, bottom = 14.dp),
             horizontalAlignment = Alignment.End,
         ) {
             Text(
@@ -1138,7 +1141,7 @@ private fun MessageRow(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
+                    .padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 6.dp),
             ) {
                 // 正文与代码块分开排：代码单独装进卡片（等宽、横向滚动、可复制/保存），
                 // 不再和正文混在一起看着像乱码
@@ -1332,7 +1335,7 @@ private fun CompletionCard(line: String, onDismiss: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 2.dp)
+            .padding(horizontal = 24.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(palette.surface)
             .border(1.dp, palette.accent.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
@@ -1383,6 +1386,7 @@ private fun MessageAction(icon: ImageVector, label: String, onClick: () -> Unit)
 @Composable
 private fun GraphicPreviewOverlay(artifact: Wire.Artifact, onClose: () -> Unit, onCopy: () -> Unit) {
     val palette = LocalDsh.current
+    // 全屏浮层（用户定稿：全屏比 3/4 小窗好看，要的是「预览内容居中」——由 artifactPage 的 CSS 负责）
     Box(Modifier.fillMaxSize().background(palette.bg)) {
         Column(Modifier.fillMaxSize().systemBarsPadding()) {
             Row(
@@ -1456,15 +1460,21 @@ private fun GraphicPreviewOverlay(artifact: Wire.Artifact, onClose: () -> Unit, 
 /**
  * SVG needs a page around it before a WebView will scale it to the viewer.
  *
- * ❗别用「flex 居中 + height:100% + svg{max-height:100%;height:auto}」那套 CSS：
- * Android WebView 里该组合会把 SVG 算成 0 尺寸（内容全白），而同一页面在桌面 Chrome
- * 正常——实测二分定位到 CSS，不是 SVG 内容的问题。text-align:center + max-width:96vw 稳。
+ * ❗Android WebView 两个雷（都实测复现）：
+ *  1) **vh 单位不可靠**（模拟器上 8vh 探针塌成 0）——`max-height:86vh` 会把 SVG 直接算成 0 高度（整页白）；
+ *  2) **flex / table 包 SVG 布局异常**（Chrome 正常、WebView 不）。
+ * 因此居中用 **ghost 行内技法**：.center 全高 + ::before 占位 + svg{vertical-align:middle}——
+ * 纯行内流布局，只用 vw 封宽（vw 实测可用）。改这段 CSS 前必须先在模拟器实测渲染。
  */
 private fun artifactPage(artifact: Wire.Artifact): String = if (artifact.kind != "svg") {
     artifact.markup
 } else {
-    """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>html,body{margin:0;background:#ffffff;text-align:center;} svg{max-width:96vw;height:auto;}</style></head><body>${artifact.markup}</body></html>"""
+                """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{margin:0;padding:0;background:#ffffff;}
+.center{position:fixed;top:0;left:0;right:0;bottom:0;text-align:center;white-space:nowrap;}
+.center::before{content:"";display:inline-block;height:100%;width:0;vertical-align:middle;}
+svg{display:inline-block;vertical-align:middle;max-width:92vw;height:auto;}</style></head>
+<body><div class="center">${artifact.markup}</div></body></html>"""
 }
 
 /**
@@ -1507,7 +1517,7 @@ private fun LiveRow(bubble: LiveBubble, first: Boolean) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
+                .padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 6.dp),
         ) {
             if (first) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
