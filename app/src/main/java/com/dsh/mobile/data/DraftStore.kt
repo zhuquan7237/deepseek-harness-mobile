@@ -67,6 +67,7 @@ object DraftStore {
             pendingKey(sessionId),
             JSONObject()
                 .put("requestId", requestId).put("text", text).put("mode", mode)
+                .put("stage", "attempted")
                 .put("ts", System.currentTimeMillis()).toString(),
         ).apply()
     }

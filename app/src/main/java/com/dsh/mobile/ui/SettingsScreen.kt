@@ -158,6 +158,8 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
                     if (state.update != null) showUpdate = true else repo.checkUpdate(manual = true)
                 },
             )
+            // N1 0.2.64 P1：审批能力诚实说明——不给假闭环。
+            SettingsValue("手机审批", "暂不支持，请在电脑端处理")
 
             // 调试用的原始信息收进「诊断」：连的是哪台电脑、事件流状态、桥接版本
             SectionHeader("诊断信息", Modifier.padding(start = 0.dp))

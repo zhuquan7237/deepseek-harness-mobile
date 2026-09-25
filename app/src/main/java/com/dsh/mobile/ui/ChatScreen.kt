@@ -1393,6 +1393,8 @@ private fun CompletionCard(line: String, onDismiss: () -> Unit) {
             .clip(RoundedCornerShape(14.dp))
             .background(palette.surface)
             .border(1.dp, palette.accent.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+            // M4 第 5 条：完成只做一次礼貌播报（读"任务已完成"），正文留给用户主动阅读。
+            .semantics { liveRegion = LiveRegionMode.Polite }
             .clickable(onClick = onDismiss)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,

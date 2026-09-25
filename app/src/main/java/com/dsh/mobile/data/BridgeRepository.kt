@@ -482,6 +482,10 @@ class BridgeRepository(context: Context) {
      * mode = "queue"：排队 —— 等当前回合结束后自动作为新回合发送。
      * 两种都由引擎收件箱承载，历史里的 spliced 事件会渲染成"待生效"气泡。
      */
+    /** N1 0.2.64 P0：单飞闸门——同一提交意图只允许一个本地派发流程（连点/IME/重入都走它）。 */
+    @Volatile
+    private var submitInFlight = false
+
     /**
      * M4 0.2.61：提交回执标识。同一会话同文本的重试复用原 requestId（不生成"新任务"），
      * 内容变化才换新；成功后清除。桌面端回执可据此关联与去重。
@@ -498,6 +502,9 @@ class BridgeRepository(context: Context) {
         val token = s.token ?: return false
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
+        // N1 0.2.64 P0：单飞闸门。
+        if (submitInFlight) return false
+        submitInFlight = true
         val reqId = submissionId(sid, trimmed)
         DraftStore.savePending(appContext, sid, reqId, trimmed, mode)
         return try {
@@ -511,6 +518,8 @@ class BridgeRepository(context: Context) {
         } catch (error: Exception) {
             fail("send", "追加消息失败：${error.message ?: "网络错误"}")
             false
+        } finally {
+            submitInFlight = false
         }
     }
 
@@ -705,6 +714,9 @@ class BridgeRepository(context: Context) {
         val trimmed = text.trim()
         if (trimmed.isEmpty() && images.isEmpty()) return false
         val label = trimmed.ifEmpty { "（图片 ×${images.size}）" }
+        // N1 0.2.64 P0：单飞闸门。
+        if (submitInFlight) return false
+        submitInFlight = true
         val reqId = submissionId(sid, label)
         DraftStore.savePending(appContext, sid, reqId, label, "queue")
         _state.update {
@@ -740,6 +752,8 @@ class BridgeRepository(context: Context) {
             if (error is BridgeException) handleApiError(error, "发送失败")
             else fail("send", "发送失败：${error.message ?: "网络错误"}")
             false
+        } finally {
+            submitInFlight = false
         }
     }
 
@@ -751,6 +765,9 @@ class BridgeRepository(context: Context) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
         EventTrail.add("send ${trimmed.length} chars sid=${sid.take(8)}")
+        // N1 0.2.64 P0：单飞闸门。
+        if (submitInFlight) return false
+        submitInFlight = true
         val reqId = submissionId(sid, trimmed)
         DraftStore.savePending(appContext, sid, reqId, trimmed, "queue")
         _state.update {
@@ -776,6 +793,8 @@ class BridgeRepository(context: Context) {
             if (error is BridgeException) handleApiError(error, "发送失败")
             else fail("send", "发送失败：${error.message ?: "网络错误"}")
             false
+        } finally {
+            submitInFlight = false
         }
     }
 
