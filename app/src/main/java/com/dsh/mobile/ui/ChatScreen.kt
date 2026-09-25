@@ -375,7 +375,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .height(60.dp)
+                // 200% 系统字体下两行胶囊会长高：用最小高而不是固定高，否则模型行被垂直裁掉（大字体检实测）。
+                .heightIn(min = 60.dp)
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -735,7 +736,8 @@ private fun MessageList(
         modifier = Modifier.fillMaxSize(),
         // 底部给她留位置：鲸鱼娘趴在输入框上沿，不留的话最后一条内容
         //（尤其是「生成的文件」卡片右侧的「查看」）会被她盖住、点不准
-        contentPadding = PaddingValues(top = 6.dp, bottom = 52.dp),
+        // 底部余量要盖住鲸鱼停靠带 + 大字时更高的输入区，最后一条才不会被压住（0.2.62 大字体检）。
+        contentPadding = PaddingValues(top = 6.dp, bottom = 76.dp),
     ) {
         items(
             display,
