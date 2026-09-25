@@ -29,6 +29,36 @@ class WireTest {
         assertEquals("http://192.168.1.9:17731", payload?.base)
     }
 
+    // 中继形态：路径里的 /m/<设备密钥> 必须保住 —— 丢掉它配对请求就会
+    // 打到服务器根上（2026-09-25 真机用户扫码连不上的根因）。
+    @Test
+    fun parsesRelayPairingUrlKeepingDevicePath() {
+        val payload = Wire.parsePairPayload("https://cn.zhuquan.xyz:8443/m/ab12cd34ef/mobile/?pair=ABCD-EFGH")
+        assertEquals("ABCDEFGH", payload?.code)
+        assertEquals("https://cn.zhuquan.xyz:8443/m/ab12cd34ef", payload?.base)
+    }
+
+    @Test
+    fun parsesCloudflareRelayUrlKeepingDevicePath() {
+        val payload = Wire.parsePairPayload("https://relay.zhuquan.xyz/m/ab12cd34ef/mobile/#pair=abcd")
+        assertEquals("ABCD", payload?.code)
+        assertEquals("https://relay.zhuquan.xyz/m/ab12cd34ef", payload?.base)
+    }
+
+    @Test
+    fun alternateRelayBaseSwapsLinesOnlyForRelayHosts() {
+        assertEquals(
+            "https://relay.zhuquan.xyz/m/ab12cd34ef",
+            Wire.alternateRelayBase("https://cn.zhuquan.xyz:8443/m/ab12cd34ef"),
+        )
+        assertEquals(
+            "https://cn.zhuquan.xyz:8443/m/ab12cd34ef",
+            Wire.alternateRelayBase("https://relay.zhuquan.xyz/m/ab12cd34ef"),
+        )
+        assertNull(Wire.alternateRelayBase("http://10.0.2.2:17731"))
+        assertNull(Wire.alternateRelayBase("https://m.zhuquan.xyz"))
+    }
+
     @Test
     fun parsesBareCode() {
         val payload = Wire.parsePairPayload(" abcd-EFGH ")

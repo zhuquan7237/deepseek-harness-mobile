@@ -762,11 +762,11 @@ fun isInjectedContext(text: String): Boolean =
         val pair = Regex("pair=([A-Za-z0-9_-]+)").find(value)
         if (pair != null) {
             code = pair.groupValues[1]
-            base = originOf(value)
+            base = baseOf(value)
         } else if (Regex("^https?://", RegexOption.IGNORE_CASE).containsMatchIn(value)) {
             val alt = Regex("[?&#]code=([A-Za-z0-9_-]+)").find(value)
             code = alt?.groupValues?.get(1)
-            base = originOf(value)
+            base = baseOf(value)
         } else {
             if (!Regex("^[A-Za-z0-9-]{4,12}$").matches(value)) return null
             code = value
@@ -774,6 +774,45 @@ fun isInjectedContext(text: String): Boolean =
         val normalized = normalizeCode(code ?: return null)
         if (normalized.length !in 4..12) return null
         return ScanPayload(base, normalized)
+    }
+
+    /**
+     * 配对链接的基地址 = origin + `/mobile` 之前的路径。
+     *
+     * 中继链接形如 `https://cn.zhuquan.xyz:8443/m/<设备密钥>/mobile/?pair=X` ——
+     * `/m/<设备密钥>` 是路由的一部分，属于基地址。只取 origin 会丢掉它，
+     * 配对请求就会打到服务器根路径上（实测：2026-09-25 真机用户扫码报
+     * “connection closed”，且中继日志零请求记录，就是这个丢路径的洞）。
+     */
+    fun baseOf(url: String): String? {
+        val origin = originOf(url) ?: return null
+        val path = try {
+            URI(url).path.orEmpty()
+        } catch (_: Exception) {
+            return origin
+        }
+        val match = Regex("/mobile(/|$)").find(path) ?: return origin
+        return (origin + path.substring(0, match.range.first)).trimEnd('/')
+    }
+
+    /**
+     * 手机到中继服务器的两条线路互为备份：
+     *   `cn.zhuquan.xyz:8443`（国内直连） ⇄ `relay.zhuquan.xyz`（Cloudflare）。
+     * 某一条被当地网络掐掉时（TLS 中断/连接被关），换另一条再试一次。
+     * 非中继地址返回 null（不改行为）。
+     */
+    fun alternateRelayBase(base: String): String? {
+        val uri = try {
+            URI(base)
+        } catch (_: Exception) {
+            return null
+        }
+        val path = uri.path.orEmpty().trimEnd('/')
+        return when (uri.host) {
+            "cn.zhuquan.xyz" -> "https://relay.zhuquan.xyz$path"
+            "relay.zhuquan.xyz" -> "https://cn.zhuquan.xyz:8443$path"
+            else -> null
+        }
     }
 
     /** Uppercase alphanumerics only — the bridge normalizes the same way. */

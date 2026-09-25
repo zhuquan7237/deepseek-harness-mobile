@@ -188,6 +188,7 @@ class BridgeRepository(context: Context) {
         if (_state.value.pairing) return
         _state.update { it.copy(pairing = true) }
         scope.launch {
+            val tried = ArrayList<String>()
             try {
                 val scopes = buildList {
                     add("read")
@@ -195,26 +196,47 @@ class BridgeRepository(context: Context) {
                     // config is what lets the phone edit models and write API keys
                     if (withConfig) add("config")
                 }
-                val result = api.pair(
-                    base,
-                    normalized,
-                    deviceName.ifBlank { "Android 手机" },
-                    "Android ${Build.MODEL}",
-                    scopes,
-                )
+                // 中继两条线路（国内直连 cn:8443 / Cloudflare relay 域名）互为备份：
+                // 第一条被当地网络掐掉时（TLS 被中断——用户侧表现为"连不上"，例如
+                // connection closed），自动换另一条再试一次；桥接已经明确回话
+                //（配对码不对、电脑没开远程访问等）则不换线，避免误导。
+                var used = base
+                val result = try {
+                    tried += base
+                    api.pair(
+                        base,
+                        normalized,
+                        deviceName.ifBlank { "Android 手机" },
+                        "Android ${Build.MODEL}",
+                        scopes,
+                    )
+                } catch (blocked: BridgeException) {
+                    throw blocked
+                } catch (network: Exception) {
+                    val alt = Wire.alternateRelayBase(base) ?: throw network
+                    tried += alt
+                    used = alt
+                    api.pair(
+                        alt,
+                        normalized,
+                        deviceName.ifBlank { "Android 手机" },
+                        "Android ${Build.MODEL}",
+                        scopes,
+                    )
+                }
                 val token = result.optString("token")
                 val device = result.optJSONObject("device")
                 if (token.isBlank() || device == null) {
                     throw BridgeException("E_PAIRING", "配对响应不完整，请重试")
                 }
-                store.savePair(base, token, device)
-                api.base = base
+                store.savePair(used, token, device)
+                api.base = used
                 _state.update {
                     it.copy(
                         pairing = false,
                         repairing = false,
                         view = View.SESSIONS,
-                        base = base,
+                        base = used,
                         token = token,
                         device = Wire.parseDevice(device),
                         scopes = Wire.parseDevice(device).scopes,
@@ -231,7 +253,17 @@ class BridgeRepository(context: Context) {
                 loadSessions()
             } catch (error: Exception) {
                 _state.update { it.copy(pairing = false) }
-                fail("pair", "配对失败：${error.message ?: "网络错误"}")
+                val message = if (error is BridgeException) {
+                    error.message
+                } else {
+                    // 网络层失败：给出人话 + 原始原因（原始原因进日志详情，便于定位）
+                    "连不上服务器（${error.message ?: "网络错误"}）"
+                }
+                fail(
+                    "pair",
+                    "配对失败：$message",
+                    "尝试过的地址：${if (tried.isEmpty()) base else tried.joinToString("、")}\n原始异常：$error",
+                )
             }
         }
     }
