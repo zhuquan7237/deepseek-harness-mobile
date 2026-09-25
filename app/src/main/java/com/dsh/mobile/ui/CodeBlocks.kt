@@ -158,9 +158,20 @@ fun codeExtension(lang: String): String = when (lang.lowercase()) {
  */
 fun saveTextToDownloads(context: Context, fileName: String, content: String): String? = runCatching {
     if (Build.VERSION.SDK_INT >= 29) {
+        // 0.2.66：MIME 按扩展名给——之前一律 text/plain，MediaStore 会把 .svg 存成 .svg.txt。
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        val mime = when (ext) {
+            "svg" -> "image/svg+xml"
+            "html", "htm" -> "text/html"
+            "md" -> "text/markdown"
+            "json" -> "application/json"
+            "xml" -> "application/xml"
+            "txt" -> "text/plain"
+            else -> "application/octet-stream"
+        }
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-            put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+            put(MediaStore.Downloads.MIME_TYPE, mime)
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val resolver = context.contentResolver

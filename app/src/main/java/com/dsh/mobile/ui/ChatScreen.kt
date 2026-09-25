@@ -1533,6 +1533,9 @@ private fun ArtifactCard(
                             settings.allowContentAccess = false
                             settings.domStorageEnabled = false
                             setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                            // 静态缩略图，不需要任何交互；WebView 默认会拦截触摸事件
+                            isClickable = false
+                            isFocusable = false
                             val page = artifactPage(artifact)
                             if (page.length <= 800_000) loadUrl(dataUrlPage(page))
                         }
@@ -1551,6 +1554,16 @@ private fun ArtifactCard(
                     Text("放大查看", style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
                     Icon(Icons.Outlined.OpenInFull, contentDescription = null, tint = palette.textSecondary, modifier = Modifier.size(14.dp))
                 }
+                // 0.2.66 修复：WebView 会吃掉触摸事件，「放大查看」点不了。
+                // 顶层放一张透明点击层接管整个预览区（与角标共用一个点击目标）。
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onOpen() },
+                )
             }
         }
         Spacer(Modifier.height(4.dp))
