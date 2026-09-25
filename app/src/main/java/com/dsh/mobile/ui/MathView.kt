@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +47,7 @@ import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * 数学公式渲染。
@@ -85,9 +87,17 @@ object MathRender {
     private val retried = HashSet<String>()
     private val queue = ArrayDeque<Job>()
 
-    /** 固定画布尺寸（px）。只在装不下时向大调整，绝不缩回 —— 缩尺寸会惹缩放漂移。 */
-    private const val FIXED_W = 1160
-    private const val FIXED_H = 780
+    /** 固定画布尺寸（px）。2x 超采样后最宽的公式约 1900px，这里留足余量、几乎不再触发增长；
+     *  只在真装不下时向大调整，绝不缩回 —— 缩尺寸会惹缩放漂移。 */
+    private const val FIXED_W = 2200
+    private const val FIXED_H = 900
+
+    /**
+     * 超采样倍数：按 2x 渲染再缩回 1x。
+     * Android 软件光栅的分层会让细笔画看起来"伪粗/发钝"（对比桌面端 KaTeX 很明显），
+     * 2x 渲染 + 双线性缩回能把这些毛边平均掉，得到接近桌面的细腻笔画。
+     */
+    private const val SS = 2
 
     /** 有没有人要用渲染器 —— 有才把隐藏 WebView 挂进组合树（省掉不用公式的启动开销）。 */
     var wanted by mutableStateOf(false)
@@ -102,6 +112,9 @@ object MathRender {
     private var web: WebView? = null
     private var ready = false
     private var rendering = false
+
+    /** 抓图用的画布位图，复用免 GC 抖动（capture 里每次擦净重画）。 */
+    private var scratchCanvas: Bitmap? = null
 
     private data class Job(
         val key: String,
@@ -123,6 +136,43 @@ object MathRender {
     fun peek(key: String): ImageBitmap? {
         tickState.intValue
         return cache[key]
+    }
+
+    /**
+     * 预渲染：把一段消息里的公式提前排进后台渲染队列（幂等，重复调用零成本）。
+     * 历史一加载完就调用，用户翻到哪儿都是成品 —— 不再是"滚到眼前才当场编译"。
+     * 只用正文/块级两种标准字号预排（标题里的公式等真正上屏时再渲染，代价可忽略）。
+     */
+    fun prefetch(text: String, color: Int, fontScale: Float, densityScale: Float) {
+        if (!text.contains('\\') && !text.contains('$')) return
+        val blocks = try {
+            Markdown.parse(text)
+        } catch (_: Exception) {
+            return
+        }
+        val pad = (3 * densityScale).roundToInt()
+        val bodyCss = (16f * fontScale).toInt().coerceIn(10, 48)
+        val blockCss = (17.5f * fontScale).toInt().coerceIn(10, 48)
+        fun inlineSpans(s: String) {
+            for (span in Markdown.inlines(s)) {
+                if (span.math) ensure(span.text, span.display, color, bodyCss, pad)
+            }
+        }
+        for (block in blocks) {
+            when (block) {
+                is MdBlock.Formula -> ensure(block.latex, true, color, blockCss, pad)
+                is MdBlock.Para -> inlineSpans(block.text)
+                is MdBlock.Heading -> inlineSpans(block.text)
+                is MdBlock.Quote -> inlineSpans(block.text)
+                is MdBlock.Bullets -> block.items.forEach { inlineSpans(it) }
+                is MdBlock.Numbers -> block.items.forEach { inlineSpans(it) }
+                is MdBlock.Table -> {
+                    block.header.forEach { inlineSpans(it) }
+                    block.rows.forEach { row -> row.forEach { inlineSpans(it) } }
+                }
+                MdBlock.Rule -> Unit
+            }
+        }
     }
 
     /** 请求渲染（幂等）。失败过的不再重试，界面保留原文，绝不空转。 */
@@ -213,7 +263,7 @@ object MathRender {
     private fun render(wv: WebView, job: Job) {
         val b64 = Base64.encodeToString(job.latex.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         val color = String.format(Locale.US, "#%06X", job.color and 0xFFFFFF)
-        val js = "JSON.stringify(window.__render(window._u('$b64'), ${job.display}, '$color', ${job.sizePx}))"
+        val js = "JSON.stringify(window.__render(window._u('$b64'), ${job.display}, '$color', ${job.sizePx * SS}))"
         wv.evaluateJavascript(js) { raw ->
             val obj = unpack(raw)
             val w = obj?.optInt("w") ?: 0
@@ -310,15 +360,22 @@ object MathRender {
             finish(job, null)
             return
         }
-        val full = try {
-            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        } catch (e: OutOfMemoryError) {
-            null
+        // 画布位图复用（每次新建 8MB 会制造大量 GC 抖动）；每次都擦干净再画
+        var full = scratchCanvas
+        if (full == null || full.width < w || full.height < h) {
+            full?.recycle()
+            full = try {
+                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            } catch (e: OutOfMemoryError) {
+                null
+            }
+            scratchCanvas = full
         }
         if (full == null) {
             finish(job, null)
             return
         }
+        full.eraseColor(0)
         wv.draw(Canvas(full))
 
         val right = (crop.left + crop.width).coerceAtMost(w)
@@ -326,17 +383,23 @@ object MathRender {
         val cw = right - crop.left
         val ch = bottom - crop.top
         if (cw <= 0 || ch <= 0) {
-            full.recycle()
             finish(job, null)
             return
         }
         val bmp = Bitmap.createBitmap(full, crop.left, crop.top, cw, ch)
-        full.recycle()
-        val tight = trimToInk(bmp)
-        if (tight == null) {
+        val trimmed = trimToInk(bmp)
+        if (trimmed == null) {
             bmp.recycle()
             finish(job, null)
             return
+        }
+        // 超采样缩回 1x：平滑掉软件光栅的描边膨胀，笔画更接近桌面端的细腻
+        val tight = if (SS > 1 && trimmed.width > SS && trimmed.height > SS) {
+            val scaled = Bitmap.createScaledBitmap(trimmed, trimmed.width / SS, trimmed.height / SS, true)
+            if (scaled !== trimmed) trimmed.recycle()
+            scaled
+        } else {
+            trimmed
         }
 
         // debug 构建：把抓到的原图落盘，方便 adb 拉出来直接看（release 不写）
@@ -403,7 +466,8 @@ object MathRender {
             y++
         }
         if (maxX < minX || maxY < minY) return null
-        val pad = 3
+        // 余量按【成品尺寸】算：裁剪发生在 2x 图上，这里乘 SS 才能在缩回后留住 4px 白边
+        val pad = 4 * SS
         val l = (minX - pad).coerceAtLeast(0)
         val t = (minY - pad).coerceAtLeast(0)
         val r = (maxX + pad + 1).coerceAtMost(w)
@@ -447,7 +511,10 @@ fun MathRenderHost() {
     val w = MathRender.hostWidth
     val h = MathRender.hostHeight
     val sizeModifier = if (w > 0 && h > 0) {
-        with(density) { Modifier.size(w.toDp(), h.toDp()) }
+        // requiredSize：无视父约束。用 size() 会被父容器（屏幕宽度）钳住 ——
+        // 模拟器 1080px 宽的屏曾把 2200px 的画布压到 1080，宽公式全被右缘切掉，
+        // 还会让 awaitHostSize 永远等不到目标尺寸、每条公式白等 1s。
+        with(density) { Modifier.requiredSize(w.toDp(), h.toDp()) }
     } else {
         Modifier.size(1.dp)
     }
@@ -469,8 +536,8 @@ fun MathRenderHost() {
 fun MathFormulaBlock(latex: String, color: Color, modifier: Modifier = Modifier) {
     val palette = LocalDsh.current
     val density = LocalDensity.current
-    // CSS px（WebView 的布局单位）：16.5 CSS px ≈ 正文视觉大小，WebView 自己按 density 放大
-    val sizeCss = (16.5f * density.fontScale).toInt()
+    // CSS px（WebView 的布局单位）：17.5 CSS px ≈ 略大于正文，块级公式更舒展；WebView 自己按 density 放大
+    val sizeCss = (17.5f * density.fontScale).toInt()
     val pad = with(density) { 4.dp.roundToPx() }
     val cacheKey = MathRender.key(latex, true, color.toArgb(), sizeCss)
 

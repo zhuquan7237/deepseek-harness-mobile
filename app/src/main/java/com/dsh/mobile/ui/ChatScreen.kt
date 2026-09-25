@@ -131,6 +131,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -225,6 +226,18 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     var showSettings by remember { mutableStateOf(false) }
     var showCompanion by remember { mutableStateOf(false) }
     var readerDoc by remember { mutableStateOf<SourceDoc?>(null) }
+
+    // 公式预渲染：历史一到位就把消息里的公式排进后台渲染队列（幂等）——
+    // 翻到哪一条都是成品，不再是"滚到眼前才当场编译"。
+    val pfDensity = LocalDensity.current
+    LaunchedEffect(state.sessionId, state.running, state.history.size, palette.dark) {
+        val argb = palette.textPrimary.toArgb()
+        state.history.forEach { row ->
+            if (row.who == Role.ASSISTANT && row.text.isNotEmpty()) {
+                MathRender.prefetch(row.text, argb, pfDensity.fontScale, pfDensity.density)
+            }
+        }
+    }
     // ---- 生成的文件：列表 + 全屏预览 ----
     var filesSheet by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<SessionFile?>(null) }

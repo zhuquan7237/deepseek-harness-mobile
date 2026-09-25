@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -326,9 +327,17 @@ class BridgeRepository(context: Context) {
 
     // --------------------------------------------------------------- sessions
 
+    private var sessionsJob: Job? = null
+
+    /** 新建会话的默认模型选择：后台套用，首条消息发送前等它落地（保住默认模型语义）。 */
+    private var modelSelectJob: Job? = null
+    private var modelSelectSid: String? = null
+
     fun loadSessions(query: String = _state.value.search) {
         val token = _state.value.token ?: return
-        scope.launch {
+        // 并发合并：上一次列表还在路上就直接换成最新的一次，避免多个 300KB 请求排队
+        sessionsJob?.cancel()
+        sessionsJob = scope.launch {
             _state.update { it.copy(sessionsLoading = true) }
             try {
                 val json = api.sessions(token, query)
@@ -338,6 +347,7 @@ class BridgeRepository(context: Context) {
                 _state.update { it.copy(sessionsLoading = false) }
                 handleApiError(error, "读取会话失败")
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _state.update { it.copy(sessionsLoading = false) }
                 fail("sessions", "读取会话失败：${error.message ?: "网络错误"}")
             }
@@ -362,17 +372,19 @@ class BridgeRepository(context: Context) {
                     fail("session", "新建会话没有返回 id")
                     return@launch
                 }
-                // 用户设了"新对话默认模型"就套上：这样新会话不用每次手选模型
-                val wanted = defaultModel
-                if (wanted != null) {
-                    runCatching { api.selectModel(token, id, wanted.first, wanted.second) }
-                        .onFailure { fail("model", "默认模型没套上：${it.message ?: "网络错误"}") }
-                }
-                loadSessions()
+                // 先把对话页打开 —— 点「新建」不该再等第二趟网络；默认模型在后台
+                // 套上，首条消息发送前会等它落地（见 send 里的 join），语义不变。
                 openSession(id)
+                loadSessions()
+                val wanted = defaultModel
                 if (wanted != null) {
                     _state.update {
                         it.copy(modelProvider = wanted.first, modelId = wanted.second, modelLabel = wanted.third)
+                    }
+                    modelSelectSid = id
+                    modelSelectJob = scope.launch {
+                        runCatching { api.selectModel(token, id, wanted.first, wanted.second) }
+                            .onFailure { fail("model", "默认模型没套上：${it.message ?: "网络错误"}") }
                     }
                 }
             } catch (error: BridgeException) {
@@ -776,6 +788,13 @@ class BridgeRepository(context: Context) {
         val token = s.token ?: return false
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
+        // 新会话的默认模型如果还在后台套用中，先等它落地（最多 4s）——
+        // 不然第一条消息可能跑在电脑端当前的模型上
+        if (modelSelectSid != null && modelSelectSid == sid) {
+            withTimeoutOrNull(4000) { modelSelectJob?.join() }
+            modelSelectJob = null
+            modelSelectSid = null
+        }
         EventTrail.add("send ${trimmed.length} chars sid=${sid.take(8)}")
         // N1 0.2.64 P0：单飞闸门。
         if (submitInFlight) return false

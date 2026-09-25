@@ -87,7 +87,9 @@ class BridgeApi(private val client: OkHttpClient) {
     suspend fun approvals(token: String): JSONObject = call("GET", "/mobile/approvals", token)
 
     suspend fun sessions(token: String, query: String): JSONObject {
-        val suffix = if (query.isBlank()) "" else "?query=" + URLEncoder.encode(query, "UTF-8")
+        // view=lite：桥接 0.2.23 起服务端只回手机用的字段（载荷 ~1/4.5）；
+        // 老桥接忽略未知参数、还回全量，解析端兼容两种形状。
+        val suffix = if (query.isBlank()) "?view=lite" else "?view=lite&query=" + URLEncoder.encode(query, "UTF-8")
         return call("GET", "/mobile/sessions$suffix", token)
     }
 
