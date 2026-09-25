@@ -55,6 +55,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.ArrowDownward
@@ -71,7 +72,6 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material.icons.outlined.CloseFullscreen
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -110,6 +110,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import com.dsh.mobile.data.DraftStore
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
@@ -1582,7 +1583,11 @@ private fun Composer(
     onSendWith: (String, List<AttachImage>) -> Unit,
 ) {
     val palette = LocalDsh.current
-    var draft by rememberSaveable { mutableStateOf("") }
+    val draftContext = LocalContext.current
+    val draftSid = state.sessionId ?: ""
+    // K4 复评 0.2.59「输入不丢」：草稿按会话持久化，重启后恢复。
+    var draft by rememberSaveable(draftSid) { mutableStateOf(DraftStore.load(draftContext, draftSid)) }
+    LaunchedEffect(draft) { DraftStore.save(draftContext, draftSid, draft) }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     // 各家手机字体（小米 MiSans / Roboto / 思源）的 ascent/descent 差很多，
@@ -1737,7 +1742,7 @@ private fun Composer(
                                 composerExpanded = false
                                 scope.launch {
                                     val ok = repo.sendInbox(text, "steer")
-                                    if (!ok) draft = text
+                                    if (!ok) draft = if (draft.isBlank()) text else text + "\n" + draft
                                 }
                             }
                             .heightIn(min = 48.dp)
@@ -1785,7 +1790,7 @@ private fun Composer(
                                 if (attachments.isEmpty()) {
                                     scope.launch {
                                         val ok = repo.send(text)
-                                        if (!ok) draft = text
+                                        if (!ok) draft = if (draft.isBlank()) text else text + "\n" + draft
                                     }
                                 } else {
                                     onSendWith(text, attachments)
@@ -1847,7 +1852,7 @@ private fun Composer(
                                     composerExpanded = false
                                     scope.launch {
                                         val ok = repo.sendInbox(text, "queue")
-                                        if (!ok) draft = text
+                                        if (!ok) draft = if (draft.isBlank()) text else text + "\n" + draft
                                     }
                                 }
                                 .heightIn(min = 48.dp)
@@ -1858,7 +1863,7 @@ private fun Composer(
                             horizontalArrangement = Arrangement.Center,
                         ) {
                             Icon(
-                                Icons.Outlined.PlaylistAdd,
+                                Icons.AutoMirrored.Outlined.PlaylistAdd,
                                 contentDescription = null,
                                 tint = palette.textPrimary,
                                 modifier = Modifier.size(18.dp),
@@ -1913,8 +1918,9 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                     Text(
                         when {
                             state.stopSendFailed -> "停止请求未发送成功"
+                            !state.connected -> "连接中断，结束状态待核实"
                             !state.stopAcked -> "正在发送停止请求…"
-                            else -> "电脑已收到请求，正在停止…"
+                            else -> "电脑已收到停止请求，等待本轮结束"
                         },
                         style = MaterialTheme.typography.labelMedium,
                         color = palette.textPrimary,
@@ -1922,8 +1928,8 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                     Text(
                         when {
                             state.stopSendFailed -> "任务可能仍在电脑上执行。"
-                            !state.connected -> "请勿将断线视为已停止。"
-                            stopWait >= 10_000L -> "尚未确认停止，任务可能仍在执行。"
+                            !state.connected -> "恢复连接后核对本轮结果。"
+                            stopWait >= 10_000L -> "尚未确认本轮结束，任务可能仍在执行。"
                             else -> "已执行的操作不会自动撤销。"
                         },
                         style = MaterialTheme.typography.labelSmall,

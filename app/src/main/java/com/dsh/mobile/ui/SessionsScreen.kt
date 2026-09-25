@@ -32,6 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Search
@@ -164,6 +165,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
                             items(group.sessions, key = { it.sessionId }) { session ->
                                 Box(Modifier.animateItem()) {
                                     SessionRow(
+                connected = state.connected,
                                         session = session,
                                         onClick = { repo.openSession(session.sessionId) },
                                         onLongClick = { renameTarget = session },
@@ -416,7 +418,12 @@ private fun groupSessions(sessions: List<SessionSummary>): List<SessionGroup> {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SessionRow(session: SessionSummary, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun SessionRow(
+    session: SessionSummary,
+    connected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     val palette = LocalDsh.current
     val time = Wire.timeText(session.updatedAt)
     Row(
@@ -461,13 +468,18 @@ private fun SessionRow(session: SessionSummary, onClick: () -> Unit, onLongClick
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
+                            // K4 复评：断线后不冒认「正在执行」——降为「状态待核实」。
                             Icon(
-                                Icons.Outlined.PlayCircleOutline,
+                                if (connected) Icons.Outlined.PlayCircleOutline else Icons.Outlined.CloudOff,
                                 contentDescription = null,
                                 tint = palette.textSecondary,
                                 modifier = Modifier.size(14.dp),
                             )
-                            Text("正在执行", style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
+                            Text(
+                                if (connected) "正在执行" else "状态待核实",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.textSecondary,
+                            )
                         }
                     }
                     if (session.fileCount > 0) {

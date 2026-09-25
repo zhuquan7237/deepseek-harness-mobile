@@ -490,7 +490,7 @@ class BridgeRepository(context: Context) {
         if (trimmed.isEmpty()) return false
         return try {
             api.prompt(token, sid, trimmed, mode)
-            toast(if (mode == "steer") "已插话：当前任务下一步生效" else "已排队：当前任务结束后发送")
+            toast(if (mode == "steer") "电脑已收到插话，将在可插入步骤生效" else "电脑已收到排队，本轮结束后发送")
             true
         } catch (error: BridgeException) {
             handleApiError(error, "追加消息失败")
@@ -792,7 +792,7 @@ class BridgeRepository(context: Context) {
         scope.launch {
             try {
                 api.cancel(token, sid)
-                _state.update { it.copy(stopAcked = true) }
+                _state.update { if (it.stopping && it.running) it.copy(stopAcked = true) else it }
             } catch (error: Exception) {
                 _state.update { it.copy(stopSendFailed = true) }
             }
