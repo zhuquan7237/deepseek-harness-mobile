@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
@@ -141,7 +142,35 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
                 onRefresh = { repo.loadSessions() },
                 modifier = Modifier.fillMaxSize(),
             ) {
-                if (state.sessions.isEmpty()) {
+                if (state.sessions.isEmpty() && state.sessionsLoading) {
+                    // I6 切片：正在读取 ≠ 确实为空（冷启动不再闪"开始一个新会话"）。
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        ListPlaceholder(
+                            icon = Icons.Outlined.Schedule,
+                            title = "正在读取任务…",
+                            caption = "正在从电脑取回任务列表",
+                        )
+                    }
+                } else if (state.sessions.isEmpty() && !state.connected) {
+                    // I6 切片：断线且无缓存——说清为什么看不到。
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        ListPlaceholder(
+                            icon = Icons.Outlined.CloudOff,
+                            title = "连接后查看任务",
+                            caption = "任务、模型和干活都在电脑上；连上就能看到。",
+                        )
+                    }
+                } else if (state.sessions.isEmpty()) {
                     Box(
                         Modifier
                             .fillMaxSize()
@@ -283,6 +312,34 @@ private fun GreetingCard(state: AppState) {
                 color = palette.textSecondary,
             )
         }
+    }
+}
+
+@Composable
+private fun ListPlaceholder(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    caption: String,
+) {
+    val palette = LocalDsh.current
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(horizontal = 32.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = palette.textSecondary, modifier = Modifier.size(20.dp))
+        Text(
+            title,
+            style = MaterialTheme.typography.titleLarge,
+            color = palette.textPrimary,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            caption,
+            style = MaterialTheme.typography.bodyMedium,
+            color = palette.textSecondary,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

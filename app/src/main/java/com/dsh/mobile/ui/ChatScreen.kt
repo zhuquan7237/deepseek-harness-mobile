@@ -205,6 +205,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     val clipboard = LocalClipboardManager.current
 
     var showActions by remember { mutableStateOf(false) }
+    // I6/M3：推荐提问只填入输入框（不替用户直接开跑）；发送由用户自己按。
+    var quickFill by remember { mutableStateOf<String?>(null) }
     var showModels by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -412,7 +414,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 keyboard?.hide()
                 preview = it
             },
-            onQuickSend = { line -> scope.launch { repo.send(line) } },
+            onQuickSend = { line -> quickFill = line },
             onRevealDone = { repo.revealConsumed() },
             onOpenFiles = {
                 filesSheet = true
@@ -460,6 +462,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             Composer(
                 state = state,
                 repo = repo,
+                fillRequest = quickFill,
+                onFillConsumed = { quickFill = null },
                 onOpenModels = {
                     showModels = true
                     if (state.doc == null) repo.loadModels()
@@ -1593,6 +1597,8 @@ private fun Composer(
     onOpenAttachment: (Int) -> Unit,
     onAddAttachment: () -> Unit,
     onSendWith: (String, List<AttachImage>) -> Unit,
+    fillRequest: String? = null,
+    onFillConsumed: () -> Unit = {},
 ) {
     val palette = LocalDsh.current
     val draftContext = LocalContext.current
@@ -1607,6 +1613,13 @@ private fun Composer(
     LaunchedEffect(draft, attachments.size, missingAttach) {
         if (draft.isBlank() || attachments.isNotEmpty()) missingAttach = 0
         DraftStore.save(draftContext, draftSid, draft, maxOf(missingAttach, attachments.size))
+    }
+    // 推荐提问填进草稿：只填不发，用户可改完再按发送。
+    LaunchedEffect(fillRequest) {
+        if (!fillRequest.isNullOrBlank()) {
+            draft = fillRequest
+            onFillConsumed()
+        }
     }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
