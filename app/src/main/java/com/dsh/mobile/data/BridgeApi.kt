@@ -83,6 +83,9 @@ class BridgeApi(private val client: OkHttpClient) {
 
     suspend fun meta(token: String): JSONObject = call("GET", "/mobile/meta", token)
 
+    /** 审批（K2-A 只读列表）。 */
+    suspend fun approvals(token: String): JSONObject = call("GET", "/mobile/approvals", token)
+
     suspend fun sessions(token: String, query: String): JSONObject {
         val suffix = if (query.isBlank()) "" else "?query=" + URLEncoder.encode(query, "UTF-8")
         return call("GET", "/mobile/sessions$suffix", token)

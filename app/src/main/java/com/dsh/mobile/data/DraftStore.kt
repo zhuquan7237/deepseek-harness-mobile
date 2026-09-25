@@ -76,4 +76,93 @@ object DraftStore {
         if (sessionId.isEmpty()) return
         prefs(ctx).edit().remove(pendingKey(sessionId)).apply()
     }
+
+    // ------------------------------------------------- 62-4：附件本体（可恢复副本）
+    // 加入草稿的附件写进应用私有目录；重启后能恢复就恢复，恢复不出来才落到
+    // 「N 个附件需要重新选择」的横幅。**不做部分恢复**——全有才给，避免
+    // 悄悄改变用户原本要发的附件组合。
+
+    /** 一份可恢复的附件（名字 + 类型 + 正文 base64）。 */
+    data class Attachment(val name: String, val mediaType: String, val base64: String)
+
+    private fun attachKey(sessionId: String) = "$sessionId.attachmentFiles"
+    private const val MAX_ATTACH_FILES = 6
+    private const val MAX_ATTACH_BYTES = 12L * 1024 * 1024
+
+    private fun attachmentsDir(ctx: Context, sessionId: String) = java.io.File(ctx.filesDir, "drafts/$sessionId")
+
+    /**
+     * 全量重写当前草稿附件。返回 false = 有附件没能存下（超上限 / 写失败）——
+     * 调用方必须如实告知，不能显示「已保存」的假成功。
+     */
+    fun saveAttachments(ctx: Context, sessionId: String, items: List<Attachment>): Boolean {
+        if (sessionId.isEmpty()) return items.isEmpty()
+        val dir = attachmentsDir(ctx, sessionId)
+        return try {
+            if (items.isEmpty()) {
+                dir.deleteRecursively()
+                prefs(ctx).edit().remove(attachKey(sessionId)).apply()
+                return true
+            }
+            var total = 0L
+            for (item in items) total += item.base64.length.toLong() / 4 * 3
+            if (items.size > MAX_ATTACH_FILES || total > MAX_ATTACH_BYTES) {
+                // 超上限：不写半套，清掉旧副本，界面走「重新选择」。
+                dir.deleteRecursively()
+                prefs(ctx).edit().remove(attachKey(sessionId)).apply()
+                return false
+            }
+            dir.mkdirs()
+            val keep = HashSet<String>()
+            val meta = org.json.JSONArray()
+            items.forEachIndexed { index, item ->
+                val file = java.io.File(dir, "att_$index.bin")
+                java.io.FileOutputStream(file).use {
+                    it.write(android.util.Base64.decode(item.base64, android.util.Base64.NO_WRAP))
+                }
+                keep.add(file.name)
+                meta.put(
+                    JSONObject().put("name", item.name).put("mediaType", item.mediaType).put("file", file.name),
+                )
+            }
+            dir.listFiles()?.forEach { if (it.name !in keep) it.delete() }
+            prefs(ctx).edit().putString(attachKey(sessionId), meta.toString()).apply()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 读回草稿附件；有任何缺失（元数据在、文件不在）返回 null。 */
+    fun loadAttachments(ctx: Context, sessionId: String): List<Attachment>? {
+        if (sessionId.isEmpty()) return null
+        val raw = prefs(ctx).getString(attachKey(sessionId), null) ?: return null
+        return try {
+            val array = org.json.JSONArray(raw)
+            if (array.length() == 0) return null
+            val dir = attachmentsDir(ctx, sessionId)
+            val out = ArrayList<Attachment>(array.length())
+            for (i in 0 until array.length()) {
+                val item = array.getJSONObject(i)
+                val file = java.io.File(dir, item.getString("file"))
+                if (!file.exists()) return null
+                out.add(
+                    Attachment(
+                        name = item.optString("name"),
+                        mediaType = item.optString("mediaType", "image/jpeg"),
+                        base64 = android.util.Base64.encodeToString(file.readBytes(), android.util.Base64.NO_WRAP),
+                    ),
+                )
+            }
+            out
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun clearAttachments(ctx: Context, sessionId: String) {
+        if (sessionId.isEmpty()) return
+        attachmentsDir(ctx, sessionId).deleteRecursively()
+        prefs(ctx).edit().remove(attachKey(sessionId)).apply()
+    }
 }

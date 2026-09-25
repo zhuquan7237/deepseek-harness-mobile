@@ -815,6 +815,28 @@ class BridgeRepository(context: Context) {
         }
     }
 
+    /** 空回复的「重试」：把上一条用户消息原样再发一遍（比发「继续」更贴语义）。 */
+    fun retryLastPrompt() {
+        val s = _state.value
+        val sid = s.sessionId ?: return
+        val token = s.token ?: return
+        val lastUser = s.history.lastOrNull { it.who == Role.USER }?.text
+        if (lastUser.isNullOrBlank()) {
+            toast("找不到可重发的消息")
+            return
+        }
+        scope.launch {
+            try {
+                api.prompt(token, sid, lastUser, "queue")
+                _state.update { it.copy(running = true) }
+            } catch (error: BridgeException) {
+                handleApiError(error, "重试失败")
+            } catch (error: Exception) {
+                fail("send", "重试失败：${error.message ?: "网络错误"}")
+            }
+        }
+    }
+
     fun cancelTurn() {
         val s = _state.value
         val sid = s.sessionId ?: return
@@ -921,6 +943,49 @@ class BridgeRepository(context: Context) {
 
     fun openSettings() {
         _state.update { it.copy(view = View.SETTINGS) }
+        loadApprovals(quiet = true)
+    }
+
+    fun openApprovals() {
+        _state.update { it.copy(view = View.APPROVALS) }
+        loadApprovals(quiet = false)
+    }
+
+    fun closeApprovals() {
+        _state.update { it.copy(view = View.SETTINGS) }
+    }
+
+    /** 审批（K2-A 只读）：桥接端为权威；本机只展示，不提供任何裁决入口。 */
+    fun loadApprovals(quiet: Boolean = true) {
+        val token = _state.value.token ?: return
+        scope.launch {
+            try {
+                val doc = api.approvals(token)
+                val (pending, recent) = Wire.parseApprovals(doc)
+                _state.update {
+                    it.copy(
+                        approvals = pending,
+                        approvalsRecent = recent,
+                        approvalsLoaded = true,
+                        approvalsComplete = doc.optBoolean("complete", false),
+                    )
+                }
+            } catch (error: BridgeException) {
+                _state.update { it.copy(approvalsLoaded = true, approvalsComplete = false) }
+                if (!quiet) handleApiError(error, "读取审批失败")
+            } catch (error: Exception) {
+                _state.update { it.copy(approvalsLoaded = true, approvalsComplete = false) }
+                if (!quiet) fail("api", "读取审批失败：${error.message ?: "网络错误"}")
+            }
+        }
+    }
+
+    private var lastApprovalsReload = 0L
+    private fun scheduleApprovalsReload() {
+        val now = System.currentTimeMillis()
+        if (now - lastApprovalsReload < 800) return
+        lastApprovalsReload = now
+        loadApprovals(quiet = true)
     }
 
     fun openScan() {
@@ -1066,6 +1131,14 @@ class BridgeRepository(context: Context) {
     private fun handleEvent(frame: JSONObject) {
         val s = _state.value
         val sid = frame.optString("sessionId")
+        // 审批只读（K2-A）：任何会话的审批事实都刷新本机审批视图；发生在当前会话里的
+        // 审批同时触发历史重读（聊天里出现「等待你在电脑上审批」行）。
+        val evType = frame.optString("type")
+        if (evType == "approval/asked" || evType == "approval/decided") {
+            scheduleApprovalsReload()
+            if (sid.isNotEmpty() && sid == s.sessionId) scheduleHistoryReload()
+            return
+        }
         if (sid.isNotEmpty() && sid != s.sessionId) {
             // 别的会话在动：列表页要保持「实时」——先把运行标识就地翻过去（马上能看到
             // 「正在执行」胶囊），再节流重读一次列表（排序/时间戳/文件数跟上）。

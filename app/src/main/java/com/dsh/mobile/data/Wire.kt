@@ -199,6 +199,13 @@ object Wire {
                     turnEndTruncated(data)?.let { rows.add(ChatRow(Role.TRUNCATED, it)) }
                 }
                 "step/start" -> stepStart = time
+                "approval/asked" -> {
+                    val toolName = data.optString("toolName")
+                    rows.add(ChatRow(Role.APPROVAL, "等待你在电脑上审批 · ${approvalTitleOf(toolName)}", time = time))
+                }
+                "approval/decided" -> {
+                    rows.add(ChatRow(Role.NOTICE, "审批已处理：${approvalResolutionText(data.optString("outcome"))}", time = time))
+                }
                 "user/message" -> {
                     val text = extractText(data)
                     // The engine injects runtime context and skill reminders as
@@ -231,6 +238,12 @@ object Wire {
                         )
                     }
                     if (answer.isNotEmpty()) rows.add(ChatRow(Role.ASSISTANT, answer, time = time))
+                    // 空回复是真实的故障模式：上游只回空文本块时，用户既看不到输出也看不到报错，
+                    // 对话静默断掉（实测：图片生成输出被引擎丢弃时就是这个形状，引擎侧已修）。
+                    // 这里兜底成可见提示行，只认「无正文 + 无思考 + 无工具调用」的最保守情形。
+                    else if (reasoning.isEmpty() && parts.none { it.type == "tool-call" }) {
+                        rows.add(ChatRow(Role.EMPTY_REPLY, "这条回复为空（模型或上游异常）", time = time))
+                    }
                     // Tool calls can arrive inside the message or as their own
                     // event; whichever shows up first wins, the other is skipped.
                     for (call in parts.filter { it.type == "tool-call" }) {
@@ -768,6 +781,52 @@ fun isInjectedContext(text: String): Boolean =
         } else null
     } catch (_: Exception) {
         null
+    }
+
+    /** 审批列表（GET /mobile/approvals）→ (待审批, 最近已处理)。 */
+    fun parseApprovals(doc: JSONObject): Pair<List<ApprovalInfo>, List<ApprovalInfo>> {
+        fun parse(array: JSONArray?): List<ApprovalInfo> {
+            if (array == null) return emptyList()
+            val out = ArrayList<ApprovalInfo>(array.length())
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                out.add(
+                    ApprovalInfo(
+                        approvalId = item.optString("approvalId"),
+                        sessionId = item.optString("sessionId"),
+                        kind = item.optString("kind"),
+                        title = item.optString("title"),
+                        toolName = item.optString("toolName"),
+                        status = item.optString("status", "pending"),
+                        resolution = item.optString("resolution"),
+                        openedAt = item.optLong("openedAt"),
+                        closedAt = item.optLong("closedAt"),
+                    )
+                )
+            }
+            return out
+        }
+        return parse(doc.optJSONArray("pending")) to parse(doc.optJSONArray("recent"))
+    }
+
+    /** 工具名 → 概括文案（与桥接端同一套，只暴露「要审批什么类型」）。 */
+    fun approvalTitleOf(toolName: String): String {
+        val name = toolName.lowercase()
+        return when {
+            name == "pwsh" || name == "bash" || "shell" in name || "terminal" in name -> "执行命令需要审批"
+            "fs" in name || "file" in name || "editor" in name || "write" in name -> "修改文件需要审批"
+            "web" in name || "fetch" in name || "http" in name -> "联网访问需要审批"
+            else -> "执行操作需要审批"
+        }
+    }
+
+    /** 审批结果的中文（allowed-once | rejected | cancelled | unavailable）。 */
+    fun approvalResolutionText(resolution: String): String = when (resolution) {
+        "allowed-once" -> "已批准（仅本次）"
+        "rejected" -> "已拒绝"
+        "cancelled" -> "已取消"
+        "unavailable" -> "已失效"
+        else -> "已处理"
     }
 
     /** Human "time ago", same shape as the PWA. */

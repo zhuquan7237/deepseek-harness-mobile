@@ -62,6 +62,7 @@ import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.PendingActions
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Computer
@@ -116,6 +117,8 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+// 62-4：草稿附件恢复解码用
+import android.util.Base64
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.liveRegion
@@ -287,6 +290,39 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     }
     // ---- 附件：待发图片、缩略图、编辑中的图、来源弹层 ----
     var attachments by remember { mutableStateOf<List<AttachImage>>(emptyList()) }
+    // 62-4：草稿附件本体——加入草稿时把字节写进应用私有目录，重启后从那里恢复；
+    // 恢复不出来才落到「N 个附件需要重新选择」横幅（绝不静默降级成纯文本）。
+    var attachmentsRestoredFor by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.sessionId) {
+        val sid = state.sessionId ?: return@LaunchedEffect
+        if (attachmentsRestoredFor == sid) return@LaunchedEffect
+        if (attachments.isEmpty()) {
+            val loaded = withContext(Dispatchers.IO) { DraftStore.loadAttachments(context, sid) }
+            if (!loaded.isNullOrEmpty() && attachments.isEmpty()) {
+                attachments = loaded.map {
+                    AttachImage(
+                        it.mediaType,
+                        it.base64,
+                        it.name,
+                        Base64.decode(it.base64, Base64.NO_WRAP).size,
+                    )
+                }
+            }
+        }
+        attachmentsRestoredFor = sid
+    }
+    LaunchedEffect(state.sessionId, attachments, attachmentsRestoredFor) {
+        val sid = state.sessionId ?: return@LaunchedEffect
+        if (attachmentsRestoredFor != sid) return@LaunchedEffect
+        val saved = withContext(Dispatchers.IO) {
+            DraftStore.saveAttachments(
+                context,
+                sid,
+                attachments.map { DraftStore.Attachment(it.name, it.mediaType, it.base64) },
+            )
+        }
+        if (!saved) repo.toast("有附件没能随草稿保存（超过暂存上限或空间不足）")
+    }
     var attachPreviews by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
     // 点缩略图 → 大图预览；预览里可以"重新编辑"（用户要求）
     var attachPeekAt by remember { mutableStateOf<Int?>(null) }
@@ -422,6 +458,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 repo.toast("已复制")
             },
             onRegenerate = { repo.regenerate() },
+            onRetry = { repo.retryLastPrompt() },
             onPreview = {
                 keyboard?.hide()
                 preview = it
@@ -761,6 +798,7 @@ private fun MessageList(
     state: AppState,
     onCopy: (String) -> Unit,
     onRegenerate: () -> Unit,
+    onRetry: () -> Unit,
     onPreview: (Wire.Artifact) -> Unit,
     onQuickSend: (String) -> Unit,
     onSaveCode: (String, String) -> Unit,
@@ -819,6 +857,7 @@ private fun MessageList(
                             onRevealDone = onRevealDone,
                             onCopy = onCopy,
                             onRegenerate = onRegenerate,
+                            onRetry = onRetry,
                             onPreview = onPreview,
                             onOpenExternal = onOpenExternal,
                             onViewSource = onViewSource,
@@ -1115,6 +1154,7 @@ private fun MessageRow(
     onRevealDone: () -> Unit = {},
     onCopy: (String) -> Unit = {},
     onRegenerate: () -> Unit = {},
+    onRetry: () -> Unit = {},
     onPreview: (Wire.Artifact) -> Unit = {},
     onOpenExternal: (String, String) -> Unit = { _, _ -> },
     onViewSource: (SourceDoc) -> Unit = {},
@@ -1177,6 +1217,59 @@ private fun MessageRow(
                             .background(palette.warn.copy(alpha = 0.18f))
                             .clickable { onRegenerate() }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
+        Role.EMPTY_REPLY -> Box(
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Surface(color = palette.warn.copy(alpha = 0.14f), shape = RoundedCornerShape(14.dp)) {
+                Row(
+                    Modifier.padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "🫥 $body",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.warn,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "重试",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = palette.warn,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(palette.warn.copy(alpha = 0.18f))
+                            .clickable { onRetry() }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
+        Role.APPROVAL -> Box(
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Surface(color = palette.warn.copy(alpha = 0.14f), shape = RoundedCornerShape(14.dp)) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Outlined.PendingActions,
+                        contentDescription = null,
+                        tint = palette.warn,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        body,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.warn,
                     )
                 }
             }

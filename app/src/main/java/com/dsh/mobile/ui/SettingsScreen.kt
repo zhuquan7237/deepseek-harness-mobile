@@ -98,6 +98,17 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
                 onClick = { repo.openModels() },
             )
 
+            SectionHeader("安全", Modifier.padding(start = 0.dp))
+            SettingsAction(
+                label = "审批",
+                value = when {
+                    !state.approvalsLoaded -> "未读取"
+                    state.approvals.isNotEmpty() -> "${state.approvals.size} 项等待电脑端审批 · 仅支持查看"
+                    else -> "暂无待审批 · 仅支持查看"
+                },
+                onClick = { repo.openApprovals() },
+            )
+
             SectionHeader("外观", Modifier.padding(start = 0.dp))
             ThemeSegmented(state.theme) { repo.setTheme(it) }
 

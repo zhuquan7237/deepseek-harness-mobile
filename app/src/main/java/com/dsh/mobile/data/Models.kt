@@ -3,7 +3,7 @@ package com.dsh.mobile.data
 import androidx.compose.runtime.Immutable
 
 /** Which screen the shell is showing. */
-enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS, LOGS }
+enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS, LOGS, APPROVALS }
 
 /**
  * The live link to the desktop bridge, as the user sees it:
@@ -14,7 +14,21 @@ enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS, LOGS }
 enum class Conn { CONNECTING, ONLINE, OFFLINE }
 
 /** Who said a message in the conversation log. */
-enum class Role { USER, ASSISTANT, TOOL, REASONING, NOTICE, ERROR, TRUNCATED, STEER, QUEUED }
+enum class Role { USER, ASSISTANT, TOOL, REASONING, NOTICE, ERROR, TRUNCATED, EMPTY_REPLY, APPROVAL, STEER, QUEUED }
+
+/** 一条审批事实（K2-A 只读）：来自桥接 GET /mobile/approvals 与会话事件。 */
+@Immutable
+data class ApprovalInfo(
+    val approvalId: String = "",
+    val sessionId: String = "",
+    val kind: String = "",
+    val title: String = "",
+    val toolName: String = "",
+    val status: String = "pending",
+    val resolution: String = "",
+    val openedAt: Long = 0L,
+    val closedAt: Long = 0L,
+)
 
 @Immutable
 data class DeviceInfo(
@@ -142,6 +156,11 @@ data class AppState(
     val sessions: List<SessionSummary> = emptyList(),
     val sessionsLoading: Boolean = false,
     val search: String = "",
+    // 审批（K2-A 只读）：桥接端为权威，本机只展示，不提供裁决入口。
+    val approvals: List<ApprovalInfo> = emptyList(),
+    val approvalsRecent: List<ApprovalInfo> = emptyList(),
+    val approvalsLoaded: Boolean = false,
+    val approvalsComplete: Boolean = true,
     // 鲸鱼娘悬浮球（应用外）：开关 + 系统「显示在其他应用上层」权限
     val overlayBall: Boolean = false,
     val overlayPermission: Boolean = false,

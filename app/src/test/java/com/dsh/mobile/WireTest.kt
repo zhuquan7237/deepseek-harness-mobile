@@ -316,6 +316,120 @@ class WireTest {
     }
 
     @Test
+    fun emptyAssistantReplyBecomesVisibleRow() {
+        val content = JSONArray().put(JSONObject().put("type", "text").put("text", ""))
+        val items = JSONArray()
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "assistant/message")
+                        .put("data", JSONObject().put("message", JSONObject().put("content", content))),
+                ),
+            )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(1, parsed.rows.size)
+        assertEquals(Role.EMPTY_REPLY, parsed.rows[0].who)
+    }
+
+    @Test
+    fun emptyTextWithReasoningKeepsOnlyReasoningRow() {
+        val content = JSONArray()
+            .put(JSONObject().put("type", "reasoning").put("text", "想了很久"))
+            .put(JSONObject().put("type", "text").put("text", ""))
+        val items = JSONArray()
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "assistant/message")
+                        .put("data", JSONObject().put("message", JSONObject().put("content", content))),
+                ),
+            )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(1, parsed.rows.size)
+        assertEquals(Role.REASONING, parsed.rows[0].who)
+    }
+
+    @Test
+    fun emptyTextWithToolCallIsNotFlagged() {
+        val content = JSONArray()
+            .put(JSONObject().put("type", "text").put("text", ""))
+            .put(JSONObject().put("type", "tool-call").put("id", "call_9").put("name", "pwsh").put("arguments", "{}"))
+        val items = JSONArray()
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "assistant/message")
+                        .put("data", JSONObject().put("message", JSONObject().put("content", content))),
+                ),
+            )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(1, parsed.rows.size)
+        assertEquals(Role.TOOL, parsed.rows[0].who)
+    }
+
+    @Test
+    fun approvalEventsBecomeRows() {
+        val items = JSONArray()
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "approval/asked")
+                        .put("data", JSONObject().put("id", "ap_1").put("toolName", "pwsh")),
+                ),
+            )
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "approval/decided")
+                        .put("data", JSONObject().put("id", "ap_1").put("outcome", "allowed-once")),
+                ),
+            )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(2, parsed.rows.size)
+        assertEquals(Role.APPROVAL, parsed.rows[0].who)
+        assertEquals("等待你在电脑上审批 · 执行命令需要审批", parsed.rows[0].text)
+        assertEquals(Role.NOTICE, parsed.rows[1].who)
+        assertEquals("审批已处理：已批准（仅本次）", parsed.rows[1].text)
+    }
+
+    @Test
+    fun parsesApprovalsPayload() {
+        val doc = JSONObject()
+            .put("ok", true)
+            .put("complete", true)
+            .put(
+                "pending",
+                JSONArray().put(
+                    JSONObject().put("approvalId", "ap_1").put("sessionId", "s_1")
+                        .put("kind", "command").put("title", "执行命令需要审批")
+                        .put("status", "pending").put("openedAt", 1_790_000_000_000L),
+                ),
+            )
+            .put(
+                "recent",
+                JSONArray().put(
+                    JSONObject().put("approvalId", "ap_0").put("resolution", "rejected").put("closedAt", 1_790_000_100_000L),
+                ),
+            )
+        val (pending, recent) = Wire.parseApprovals(doc)
+        assertEquals(1, pending.size)
+        assertEquals("ap_1", pending[0].approvalId)
+        assertEquals("执行命令需要审批", pending[0].title)
+        assertEquals(1, recent.size)
+        assertEquals("已拒绝", Wire.approvalResolutionText(recent[0].resolution))
+    }
+
+    @Test
+    fun approvalTitlesCoverToolFamilies() {
+        assertEquals("执行命令需要审批", Wire.approvalTitleOf("pwsh"))
+        assertEquals("执行命令需要审批", Wire.approvalTitleOf("Bash"))
+        assertEquals("修改文件需要审批", Wire.approvalTitleOf("str-replace-editor"))
+        assertEquals("联网访问需要审批", Wire.approvalTitleOf("web-fetch"))
+        assertEquals("执行操作需要审批", Wire.approvalTitleOf("ralph"))
+        assertEquals("已处理", Wire.approvalResolutionText("unknown"))
+    }
+
+    @Test
     fun toolCallIsNotCountedTwice() {
         val embedded = JSONArray().put(
             JSONObject().put("type", "tool-call").put("id", "call_1").put("name", "pwsh")
