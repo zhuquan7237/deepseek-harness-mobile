@@ -482,14 +482,27 @@ class BridgeRepository(context: Context) {
      * mode = "queue"：排队 —— 等当前回合结束后自动作为新回合发送。
      * 两种都由引擎收件箱承载，历史里的 spliced 事件会渲染成"待生效"气泡。
      */
+    /**
+     * M4 0.2.61：提交回执标识。同一会话同文本的重试复用原 requestId（不生成"新任务"），
+     * 内容变化才换新；成功后清除。桌面端回执可据此关联与去重。
+     */
+    private fun submissionId(sid: String, text: String): String {
+        val pending = DraftStore.loadPending(appContext, sid)
+        return if (pending != null && pending.text == text) pending.requestId
+        else java.util.UUID.randomUUID().toString()
+    }
+
     suspend fun sendInbox(text: String, mode: String): Boolean {
         val s = _state.value
         val sid = s.sessionId ?: return false
         val token = s.token ?: return false
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
+        val reqId = submissionId(sid, trimmed)
+        DraftStore.savePending(appContext, sid, reqId, trimmed, mode)
         return try {
-            api.prompt(token, sid, trimmed, mode)
+            api.prompt(token, sid, trimmed, mode, reqId)
+            DraftStore.clearPending(appContext, sid)
             toast(if (mode == "steer") "电脑已收到插话，将在可插入步骤生效" else "电脑已收到排队，本轮结束后发送")
             true
         } catch (error: BridgeException) {
@@ -692,6 +705,8 @@ class BridgeRepository(context: Context) {
         val trimmed = text.trim()
         if (trimmed.isEmpty() && images.isEmpty()) return false
         val label = trimmed.ifEmpty { "（图片 ×${images.size}）" }
+        val reqId = submissionId(sid, label)
+        DraftStore.savePending(appContext, sid, reqId, label, "queue")
         _state.update {
             it.copy(history = it.history + ChatRow(Role.USER, label), running = true, sending = true, )
         }
@@ -709,7 +724,8 @@ class BridgeRepository(context: Context) {
                         .put("name", image.name),
                 )
             }
-            api.promptRich(token, sid, content)
+            api.promptRich(token, sid, content, reqId)
+            DraftStore.clearPending(appContext, sid)
             _state.update {
                 it.copy(
                     sending = false,
@@ -735,11 +751,14 @@ class BridgeRepository(context: Context) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
         EventTrail.add("send ${trimmed.length} chars sid=${sid.take(8)}")
+        val reqId = submissionId(sid, trimmed)
+        DraftStore.savePending(appContext, sid, reqId, trimmed, "queue")
         _state.update {
             it.copy(history = it.history + ChatRow(Role.USER, trimmed), running = true, sending = true, )
         }
         return try {
-            api.prompt(token, sid, trimmed, "queue")
+            api.prompt(token, sid, trimmed, "queue", reqId)
+            DraftStore.clearPending(appContext, sid)
             // The "desktop is working" row has to be there the moment the
             // request lands — `turn/start` can take a beat, and a blank screen
             // after sending is exactly what "手机端没有任何反馈" looked like.

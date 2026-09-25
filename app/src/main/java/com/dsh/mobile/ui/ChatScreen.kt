@@ -110,6 +110,9 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.liveRegion
 import com.dsh.mobile.data.DraftStore
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -1593,8 +1596,16 @@ private fun Composer(
     val draftContext = LocalContext.current
     val draftSid = state.sessionId ?: ""
     // K4 复评 0.2.59「输入不丢」：草稿按会话持久化，重启后恢复。
-    var draft by rememberSaveable(draftSid) { mutableStateOf(DraftStore.load(draftContext, draftSid)) }
-    LaunchedEffect(draft) { DraftStore.save(draftContext, draftSid, draft) }
+    val restoredDraft = remember(draftSid) { DraftStore.load(draftContext, draftSid) }
+    var draft by rememberSaveable(draftSid) { mutableStateOf(restoredDraft.text) }
+    // M4 0.2.61：恢复的草稿那时带的附件回不来——明说缺几个，不静默降级成纯文本。
+    var missingAttach by remember(draftSid) {
+        mutableIntStateOf(if (restoredDraft.text.isNotBlank()) restoredDraft.attachCount else 0)
+    }
+    LaunchedEffect(draft, attachments.size, missingAttach) {
+        if (draft.isBlank() || attachments.isNotEmpty()) missingAttach = 0
+        DraftStore.save(draftContext, draftSid, draft, maxOf(missingAttach, attachments.size))
+    }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     // 各家手机字体（小米 MiSans / Roboto / 思源）的 ascent/descent 差很多，
@@ -1632,6 +1643,40 @@ private fun Composer(
                 ) { focusRequester.requestFocus() }
                 .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         ) {
+            // M4 0.2.61：草稿恢复但附件不在——明说缺几个，并给"重新选择/不带附件继续"两条路。
+            if (missingAttach > 0) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 10.dp, end = 10.dp, top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "文字草稿已恢复，$missingAttach 个附件需要重新选择。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "重新选择",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.primaryBtn,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { onAddAttachment() }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                    )
+                    Text(
+                        "不带附件继续",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.textSecondary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { missingAttach = 0 }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                    )
+                }
+            }
             if (attachments.isNotEmpty()) {
                 AttachmentStrip(
                     images = attachments,
@@ -1921,7 +1966,7 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
             //    → 真正停止（收到 turn/end 才清）。任何一层都不冒充下一层。
             state.running && state.stopping -> {
                 Box(Modifier.size(6.dp).clip(CircleShape).background(palette.textTertiary))
-                Column(Modifier.weight(1f)) {
+                Column(Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }) {
                     Text(
                         when {
                             state.stopSendFailed -> "停止请求未发送成功"
@@ -1995,12 +2040,14 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
             // ③ 正在执行（正常）
             state.running -> {
                 Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
-                Column(Modifier.weight(1f)) {
+                Column(Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }) {
                     Text("正在执行", style = MaterialTheme.typography.labelMedium, color = palette.textPrimary)
+                    // 计时每秒跳一次：不进无障碍树，读屏不会被"每秒忙音"轰炸（M4 0.2.61 第 5 条）。
                     Text(
                         "已用时 ${fmtClock(elapsed)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = palette.textTertiary,
+                        modifier = Modifier.clearAndSetSemantics {},
                     )
                 }
                 Row(

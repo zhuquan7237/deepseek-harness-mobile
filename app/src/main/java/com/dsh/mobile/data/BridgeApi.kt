@@ -99,7 +99,12 @@ class BridgeApi(private val client: OkHttpClient) {
      * 引擎的 content 数组本身支持 `{type:'image', mediaType, data(base64), name}`，
      * 而桥接自带的 prompt 路由只会拼纯文本（所以之前想发图只能绕这条路）。
      */
-    suspend fun promptRich(token: String, sessionId: String, content: JSONArray): JSONObject =
+    suspend fun promptRich(
+        token: String,
+        sessionId: String,
+        content: JSONArray,
+        requestId: String = java.util.UUID.randomUUID().toString(),
+    ): JSONObject =
         call(
             "POST", "/mobile/rpc", token,
             JSONObject()
@@ -110,15 +115,24 @@ class BridgeApi(private val client: OkHttpClient) {
                         .put("sessionId", sessionId)
                         .put("mode", "queue")
                         .put("content", content)
-                        .put("requestId", java.util.UUID.randomUUID().toString())
+                        .put("requestId", requestId)
                         .put("clientTimeZone", java.util.TimeZone.getDefault().id),
                 ),
         )
 
-    suspend fun prompt(token: String, sessionId: String, text: String, mode: String = "queue"): JSONObject =
+    suspend fun prompt(
+        token: String,
+        sessionId: String,
+        text: String,
+        mode: String = "queue",
+        requestId: String = java.util.UUID.randomUUID().toString(),
+    ): JSONObject =
         call(
             "POST", "/mobile/sessions/${enc(sessionId)}/prompt", token,
-            JSONObject().put("text", text).put("mode", mode),
+            JSONObject()
+                .put("text", text).put("mode", mode)
+                .put("requestId", requestId)
+                .put("clientTimeZone", java.util.TimeZone.getDefault().id),
         )
 
     suspend fun cancel(token: String, sessionId: String): JSONObject =
