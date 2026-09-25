@@ -159,16 +159,24 @@ with target.open("w", encoding="utf-8") as handle:
 print("==> 已写入 %s" % path)
 PY
 
-# ---------------------------------------------------------------- 6. 提交与推送
-printf '==> 提交并推送\n'
-git commit -am "release v$VERSION"
-git tag "v$VERSION"
-git push origin "$RELEASE_BRANCH" --tags
-
+# 仓库副本清单先于推送回写（2026-09-25 教训：推送瞬断时 set -e 会跳过后续步骤，
+# 站点仓库的随包清单会残留旧版 →「发了版但手机收不到更新」）。
 if [ -d "$REPO_APP_DIR" ]; then
     cp -f "$PUBLISH_DIR/app-update.json" "$REPO_APP_DIR/app-update.json"
     printf '==> 清单已回写仓库副本\n'
 fi
+
+# ---------------------------------------------------------------- 6. 提交与推送
+printf '==> 提交并推送\n'
+git commit -am "release v$VERSION"
+git tag "v$VERSION" 2>/dev/null || true
+PUSHED=0
+for attempt in 1 2 3; do
+    if git push origin "$RELEASE_BRANCH" --tags; then PUSHED=1; break; fi
+    printf '==> 推送失败（第 %s/3 次），10 秒后重试…\n' "$attempt"
+    sleep 10
+done
+[ "$PUSHED" = "1" ] || die "推送失败：手动 git push origin $RELEASE_BRANCH --tags 后，再执行 gh release create v$VERSION $APK --title v$VERSION --notes <NOTES>"
 
 # ---------------------------------------------------------------- 7. GitHub Release
 printf '==> 发布 GitHub Release\n'
