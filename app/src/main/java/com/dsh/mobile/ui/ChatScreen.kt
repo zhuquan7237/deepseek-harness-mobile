@@ -1,5 +1,6 @@
 package com.dsh.mobile.ui
 
+import androidx.compose.ui.text.font.FontFamily
 import android.graphics.drawable.Drawable
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
@@ -64,6 +65,10 @@ import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -383,12 +388,13 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            CircleButton(Icons.AutoMirrored.Outlined.ArrowBack, "返回") { onBack() }
+            CircleButton(Icons.AutoMirrored.Outlined.ArrowBack, "返回", container = false, size = 48.dp, iconSize = 24.dp) { onBack() }
             // 模型选择照 ChatGPT 放在顶栏（不占输入条地方）：点第二行直接开模型菜单，
             // 连接状态由前面的小圆点表示，标题区仍然点开更多菜单
             ContextPill(
-                title = state.sessionTitle.ifEmpty { "会话" },
-                meta = state.modelLabel.ifBlank { "模型" },
+                bare = true,
+                title = displayTitle(state.sessionTitle),
+                meta = (if (state.connected) "已连接 · " else "重连中 · ") + state.modelLabel.ifBlank { "模型" },
                 metaDot = true,
                 metaConn = state.conn,
                 metaChevron = true,
@@ -401,7 +407,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                     if (state.doc == null) repo.loadModels()
                 },
             )
-            CircleButton(Icons.Outlined.MoreVert, "更多") { showActions = true }
+            CircleButton(Icons.Outlined.MoreVert, "更多", container = false, size = 48.dp, iconSize = 22.dp) { showActions = true }
         }
         MessageList(
             state = state,
@@ -449,7 +455,10 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             val densityNow = LocalDensity.current
             val imeOpenNow by remember { derivedStateOf { imeInsetsNow.getBottom(densityNow) > 0 } }
             // K5 空间不变量：面板/重命名/附件预览/键盘出现时，角色退出展示（装饰必须让路）。
-            val whaleHidden = imeOpenNow || showActions || showModels || showRename || attachPeekAt != null
+            // S2 重设计：阅读回答/查看交付物时角色不悬浮——非空会话不再当"贴纸"，
+            // 陪伴位留给空态欢迎区与后续「会话陪伴」面板。
+            val whaleHidden = imeOpenNow || showActions || showModels || showRename ||
+                attachPeekAt != null || state.history.isNotEmpty()
             if (!whaleHidden) WhalePerch(
                 size = 54.dp,
                 running = state.running,
@@ -1205,6 +1214,8 @@ private fun MessageRow(
                 // 如果在滚动/重绘时反复重解析，列表就会一卡一卡的。
                 val parsed = remember(row.text) { splitCodeBlocks(row.text) }
                 val segments = if (done) parsed else listOf(MsgSegment.Body(body))
+                // S2：可渲染交付物（svg/html）抽成卡片——先给结果，再给源码。
+                val artifactRef = if (done) remember(row.text) { Wire.findArtifact(row.text) } else null
                 segments.forEach { seg ->
                     when (seg) {
                         // 电脑端回的是 Markdown：标题/列表/表格都按真排版画，
@@ -1215,22 +1226,32 @@ private fun MessageRow(
                             modifier = Modifier.padding(bottom = 6.dp),
                         )
                         is MsgSegment.Code -> {
-                            CodeCard(
-                                lang = seg.lang,
-                                code = seg.code,
-                                onCopy = onCopy,
-                                onSave = onSaveCode,
-                                onPreview = onPreview,
-                                onOpenExternal = onOpenExternal,
-                            )
-                            Spacer(Modifier.height(8.dp))
+                            // S2：被交付物卡覆盖的图形/网页源码段不再重复铺代码卡。
+                            val cover = artifactRef != null &&
+                                (artifactRef.kind == "svg" || artifactRef.kind == "html") &&
+                                seg.lang.equals(artifactRef.kind, ignoreCase = true)
+                            if (!cover) {
+                                CodeCard(
+                                    lang = seg.lang,
+                                    code = seg.code,
+                                    onCopy = onCopy,
+                                    onSave = onSaveCode,
+                                    onPreview = onPreview,
+                                    onOpenExternal = onOpenExternal,
+                                )
+                                Spacer(Modifier.height(8.dp))
+                            }
                         }
                     }
                 }
-                val artifact = if (done) remember(row.text) { Wire.findArtifact(row.text) } else null
-                if (artifact != null) {
-                    Spacer(Modifier.height(10.dp))
-                    PreviewChip(artifact.kind) { onPreview(artifact) }
+                if (artifactRef != null) {
+                    Spacer(Modifier.height(12.dp))
+                    ArtifactCard(
+                        artifact = artifactRef,
+                        onOpen = { onPreview(artifactRef) },
+                        onSave = { onSaveCode(artifactRef.kind, artifactRef.markup) },
+                        onCopy = onCopy,
+                    )
                 }
                 if (showActions && done) {
                     Spacer(Modifier.height(6.dp))
@@ -1439,6 +1460,193 @@ private fun MessageAction(icon: ImageVector, label: String, onClick: () -> Unit)
  * 能加载（dom/内容高度都正常）但永远合成不上屏——用户真机与模拟器都是纯白。
  * 改成和文件查看器同款的全屏浮层（普通窗口），WebView 渲染一切正常（3D 页面都行）。
  */
+/**
+ * S2《对话页重设计》交付物卡：默认先看结果——图形在卡内直接渲染预览，源码默认收起
+ * （点「源码」看前 10 行，「展开全部」再铺开）。整个预览区一个点击目标；
+ * 不再有眼睛图标、「预览图形」胶囊、重复复制。
+ */
+@Composable
+private fun ArtifactCard(
+    artifact: Wire.Artifact,
+    onOpen: () -> Unit,
+    onSave: () -> Unit,
+    onCopy: (String) -> Unit,
+) {
+    val palette = LocalDsh.current
+    var showCode by remember(artifact) { mutableStateOf(false) }
+    var showAll by remember(artifact) { mutableStateOf(false) }
+    val allLines = remember(artifact) { artifact.markup.lines() }
+    val lineCount = allLines.size
+    val kindTitle = if (artifact.kind == "svg") "SVG 图形" else "网页"
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(palette.surface)
+            .border(1.dp, palette.divider, RoundedCornerShape(16.dp)),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 52.dp)
+                .padding(start = 16.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (artifact.kind == "svg") Icons.Outlined.Image else Icons.Outlined.Language,
+                contentDescription = null,
+                tint = palette.textSecondary,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(kindTitle, style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                Text(
+                    artifact.kind.uppercase() + " · " + lineCount + " 行",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textTertiary,
+                    maxLines = 1,
+                )
+            }
+        }
+        // 预览画布：图形交付物的主角位（S2 §4.1：clamp(宽×0.6, 160dp, 240dp)）
+        BoxWithConstraints(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+        ) {
+            val canvasH = (maxWidth * 0.62f).coerceIn(160.dp, 240.dp)
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(canvasH)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(palette.previewMat)
+                    .clickable(onClick = onOpen),
+            ) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { context ->
+                        WebView(context).apply {
+                            settings.javaScriptEnabled = false
+                            settings.allowFileAccess = false
+                            settings.allowContentAccess = false
+                            settings.domStorageEnabled = false
+                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                            val page = artifactPage(artifact)
+                            if (page.length <= 800_000) loadUrl(dataUrlPage(page))
+                        }
+                    },
+                )
+                Row(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(palette.bg.copy(alpha = 0.72f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("放大查看", style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
+                    Icon(Icons.Outlined.OpenInFull, contentDescription = null, tint = palette.textSecondary, modifier = Modifier.size(14.dp))
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 52.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CardAction(
+                label = if (showCode) "收起源码" else "源码",
+                leading = if (showCode) Icons.Outlined.ExpandLess else Icons.Outlined.Code,
+                color = palette.textSecondary,
+            ) { showCode = !showCode }
+            Spacer(Modifier.weight(1f))
+            CardAction(
+                label = "保存到手机",
+                leading = Icons.Outlined.Download,
+                color = palette.accent,
+            ) { onSave() }
+        }
+        if (showCode) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(palette.divider))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .padding(start = 16.dp, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "源码 · " + lineCount + " 行",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textTertiary,
+                    modifier = Modifier.weight(1f),
+                )
+                CardAction(label = "复制", leading = Icons.Outlined.ContentCopy, color = palette.textSecondary) {
+                    onCopy(artifact.markup)
+                }
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(palette.divider))
+            val codeScroll = rememberScrollState()
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(palette.codeBg)
+                    .horizontalScroll(codeScroll),
+            ) {
+                val shown = allLines.take(if (showAll) lineCount else minOf(lineCount, 10)).joinToString("\n")
+                Text(
+                    highlightFor(artifact.kind, shown, palette.dark),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp,
+                    color = palette.codeText,
+                    softWrap = false,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+            }
+            if (!showAll && lineCount > 10) {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(palette.divider))
+                CardAction(
+                    label = "展开全部 " + lineCount + " 行",
+                    leading = Icons.Outlined.UnfoldMore,
+                    color = palette.textSecondary,
+                    fill = true,
+                ) { showAll = true }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CardAction(
+    label: String,
+    leading: androidx.compose.ui.graphics.vector.ImageVector,
+    color: androidx.compose.ui.graphics.Color,
+    fill: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .then(if (fill) Modifier.fillMaxWidth() else Modifier)
+            .heightIn(min = 44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(leading, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+        Text(label, style = MaterialTheme.typography.labelLarge, color = color)
+    }
+}
+
 @Composable
 private fun GraphicPreviewOverlay(artifact: Wire.Artifact, onClose: () -> Unit, onCopy: () -> Unit) {
     val palette = LocalDsh.current
@@ -1532,6 +1740,10 @@ private fun artifactPage(artifact: Wire.Artifact): String = if (artifact.kind !=
 svg{display:inline-block;vertical-align:middle;max-width:92vw;height:auto;}</style></head>
 <body><div class="center">${artifact.markup}</div></body></html>"""
 }
+
+/** S2：内部 id（session- 开头）不展示给用户；没有真标题就写「新对话」。 */
+private fun displayTitle(t: String): String =
+    if (t.isBlank() || t.startsWith("session-")) "新对话" else t
 
 /**
  * The one place the app is allowed to look alive while it waits: a shimmering
@@ -1777,7 +1989,7 @@ private fun Composer(
                     ) {
                         if (draft.isEmpty()) {
                             Text(
-                                if (state.connected) "给电脑端发消息…" else "重连中…",
+                                if (state.connected) "发给电脑上的 Agent…" else "重连中…",
                                 style = inputStyle.copy(color = palette.textTertiary),
                                 // 占位文字也按同一套实测校正，两种状态视觉位置一致
                                 onTextLayout = { result ->
@@ -1837,18 +2049,20 @@ private fun Composer(
             } else {
                 val ready = draft.isNotBlank() || attachments.isNotEmpty()
                 val sendBg by animateColorAsState(
-                    targetValue = if (ready) palette.primaryBtn else palette.surfaceHi,
+                    targetValue = if (ready) palette.accent else palette.surfaceHi,
                     animationSpec = tween(200),
                     label = "sendBg",
                 )
                 val sendTint by animateColorAsState(
-                    targetValue = if (ready) palette.onPrimaryBtn else palette.textSecondary,
+                    targetValue = if (ready) palette.onAccent else palette.textTertiary,
                     animationSpec = tween(200),
                     label = "sendTint",
                 )
-                Row(
+                // S2 §3.4：发送 = 48×48 圆角强调块，只留箭头（删「发送」二字与沙色底）。
+                Box(
                     Modifier
-                        .clip(RoundedCornerShape(999.dp))
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(16.dp))
                         .background(sendBg)
                         .clickable(enabled = ready && !state.sending) {
                             val text = draft.trim()
@@ -1866,20 +2080,15 @@ private fun Composer(
                                 }
                             }
                         }
-                        .heightIn(min = 48.dp)
-                        .widthIn(min = 88.dp)
-                        .padding(horizontal = 16.dp)
                         .semantics { contentDescription = "发送" },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         Icons.Outlined.ArrowUpward,
                         contentDescription = null,
                         tint = sendTint,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(22.dp),
                     )
-                    Text("发送", style = MaterialTheme.typography.labelLarge, color = sendTint)
                 }
             }
             }
@@ -1908,8 +2117,7 @@ private fun Composer(
                         size = 30.dp,
                         iconSize = 16.dp,
                     ) { composerExpanded = !composerExpanded }
-                    Spacer(Modifier.width(2.dp))
-                    ComposerModelChip(state = state, onClick = onOpenModels)
+                    // S2：模型只出现在顶栏一处——底部不再放第二个模型选择器。
                     if (state.running && draft.isNotBlank() && attachments.isEmpty()) {
                         Spacer(Modifier.width(8.dp))
                         Row(

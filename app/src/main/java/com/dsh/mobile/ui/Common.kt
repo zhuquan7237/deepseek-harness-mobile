@@ -89,6 +89,8 @@ fun CircleButton(
     size: Dp = 40.dp,
     iconSize: Dp = 22.dp,
     enabled: Boolean = true,
+    /** S2 顶栏合一：false = 裸图标不画圆底（返回/更多嵌进统一会话栏）。 */
+    container: Boolean = true,
     onClick: () -> Unit,
 ) {
     val palette = LocalDsh.current
@@ -97,8 +99,7 @@ fun CircleButton(
         modifier
             .pressEffect(interaction)
             .size(size)
-            .clip(CircleShape)
-            .background(palette.surface)
+            .then(if (container) Modifier.clip(CircleShape).background(palette.surface) else Modifier)
             .clickable(
                 interactionSource = interaction,
                 indication = LocalIndication.current,
@@ -159,6 +160,8 @@ fun ContextPill(
     metaConn: Conn = Conn.ONLINE,
     /** 第二行右侧的小箭头：表示这行本身可点（模型选择就放这儿）。 */
     metaChevron: Boolean = false,
+    /** S2 顶栏合一：true = 不画白胶囊，直接坐在页面底色上。 */
+    bare: Boolean = false,
     onClick: (() -> Unit)? = null,
     onMetaClick: (() -> Unit)? = null,
 ) {
@@ -166,10 +169,9 @@ fun ContextPill(
     val shape = RoundedCornerShape(22.dp)
     Column(
         modifier
-            .clip(shape)
-            .background(palette.surface)
+            .then(if (bare) Modifier else Modifier.clip(shape).background(palette.surface))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+            .padding(horizontal = if (bare) 4.dp else 14.dp, vertical = 7.dp),
         verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
         Text(

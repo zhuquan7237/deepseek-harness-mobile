@@ -5,6 +5,12 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -182,62 +188,79 @@ fun CodeCard(
     onPreview: ((Wire.Artifact) -> Unit)? = null,
     onOpenExternal: ((String, String) -> Unit)? = null,
 ) {
-    val previewKind = codePreviewKind(lang, code)
     val palette = LocalDsh.current
+    var expanded by remember(code) { mutableStateOf(false) }
+    val lines = remember(code) { code.lines() }
+    val lineCount = lines.size
+    val visible = if (expanded) lineCount else minOf(lineCount, 8)
+    // S2 §6：横向滚动只属于这一个视口；padding 属于「滚动内容」——滚到最左就是第一列字符，
+    // 不再给代码区套内部纵向滚动（折叠 8 行 / 展开全文都交给消息流）。
     val hScroll = rememberScrollState()
     Column(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(palette.surface)
-            .border(1.dp, palette.textTertiary.copy(alpha = 0.28f), RoundedCornerShape(14.dp)),
+            .border(1.dp, palette.divider, RoundedCornerShape(14.dp)),
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 13.dp, end = 4.dp, top = 3.dp, bottom = 1.dp),
+                .heightIn(min = 44.dp)
+                .padding(start = 14.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = lang.ifBlank { "code" }.lowercase(),
+                text = (lang.ifBlank { "code" }.lowercase()) + " · " + lineCount + " 行",
                 style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.6.sp),
                 color = palette.textTertiary,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // 图形/网页先给"预览"：在手机上看一眼结果，比读代码有用
-                if (previewKind != null && onPreview != null) {
-                    CodeAction(Icons.Outlined.Visibility, "预览效果") { onPreview(Wire.Artifact(previewKind, code)) }
-                }
-                if (onOpenExternal != null) {
-                    CodeAction(Icons.AutoMirrored.Outlined.OpenInNew, "在外部打开") { onOpenExternal(lang, code) }
-                }
                 CodeAction(Icons.Outlined.ContentCopy, "复制代码") { onCopy(code) }
                 CodeAction(Icons.Outlined.Save, "保存为文件") { onSave(lang, code) }
             }
         }
-        // 顶栏与代码之间的分层：一条极淡的分割线
+        Box(Modifier.fillMaxWidth().height(1.dp).background(palette.divider))
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(1.dp)
-                .background(palette.textTertiary.copy(alpha = 0.14f)),
-        )
-        Column(
-            Modifier
-                .heightIn(max = 340.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
+                .background(palette.codeBg)
+                .horizontalScroll(hScroll),
         ) {
             Text(
-                text = code,
+                text = highlightFor(lang, lines.take(visible).joinToString("\n"), palette.dark),
                 fontFamily = FontFamily.Monospace,
-                fontSize = 12.5.sp,
-                lineHeight = 17.sp,
-                color = palette.textPrimary,
+                fontSize = 13.sp,
+                lineHeight = 20.sp,
+                color = palette.codeText,
                 softWrap = false,
-                modifier = Modifier.horizontalScroll(hScroll),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             )
+        }
+        if (lineCount > 8) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(palette.divider))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.UnfoldMore,
+                    contentDescription = null,
+                    tint = palette.textSecondary,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    if (expanded) "收起" else "展开全部 " + lineCount + " 行",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = palette.textSecondary,
+                )
+            }
         }
     }
 }

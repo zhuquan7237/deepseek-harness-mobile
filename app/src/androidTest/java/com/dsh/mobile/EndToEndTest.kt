@@ -95,7 +95,7 @@ class EndToEndTest {
     private fun isOnSessionsScreen(): Boolean = anyText("个会话", substring = true)
 
     /** 现在进 App 直接落在新对话上，所以"到家了"的判断要包括聊天页。 */
-    private fun isOnChatScreen(): Boolean = anyText("给电脑端发消息…")
+    private fun isOnChatScreen(): Boolean = anyText("发给电脑上的 Agent…")
 
     /** 已连上的两种形态：聊天页（新落地页）或会话页顶栏的「已连接」。 */
     private fun isConnected(): Boolean = isOnChatScreen() || anyText("已连接", substring = true)
@@ -162,7 +162,7 @@ class EndToEndTest {
         if (!isOnChatScreen()) {
             composeRule.onAllNodesWithContentDescription("新建会话")[0].performClick()
         }
-        composeRule.waitUntil(60_000) { anyText("给电脑端发消息…") }
+        composeRule.waitUntil(60_000) { anyText("发给电脑上的 Agent…") }
 
         // Send a prompt: the bubble shows immediately, then the desktop's
         // reply lands through the event stream / history refresh.
