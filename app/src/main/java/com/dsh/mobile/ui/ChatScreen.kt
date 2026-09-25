@@ -438,7 +438,13 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             // 任务控制条出现时，她整体上移一个条高——否则她的气泡会正好压在
             // 停止键上把点击吃掉（模拟器实测：真手指点不到停止，E2E 不受影响故未暴露）。
             val stripVisible = state.running || !state.connected
-            WhalePerch(
+            // 键盘可见性的作用域内副本（布尔翻转才触发重组，不跟键盘动画每帧刷新）。
+            val imeInsetsNow = WindowInsets.ime
+            val densityNow = LocalDensity.current
+            val imeOpenNow by remember { derivedStateOf { imeInsetsNow.getBottom(densityNow) > 0 } }
+            // K5 空间不变量：面板/重命名/附件预览/键盘出现时，角色退出展示（装饰必须让路）。
+            val whaleHidden = imeOpenNow || showActions || showModels || showRename || attachPeekAt != null
+            if (!whaleHidden) WhalePerch(
                 size = 54.dp,
                 running = state.running,
                 mood = chatMood,
@@ -812,7 +818,8 @@ private fun MessageList(
                             WhaleMascot(
                                 resId = R.drawable.whale_face_normal,
                                 size = 104.dp,
-                                contentDescription = "鲸鱼娘",
+                                // K5：纯装饰角色不进无障碍焦点树（null = 读屏跳过）。
+                                contentDescription = null,
                             )
                         }
                         Spacer(Modifier.height(8.dp))
