@@ -42,6 +42,55 @@
     }).catch(function () { window.__ready = true; });
   })();
 
+  // 诊断探针（仅当 Kotlin 侧设了 window.__diag 时由 __render 调用）：把
+  // 「字体实际加载状态 / 大运算符的真实盒尺寸 / 画布度量」回传给 Kotlin 打印。
+  // 2026-09-26 排查「公式整体比桌面矮 38%」时加，稳定后可删。
+  window.__probe = function () {
+    var out = {};
+    try { out.fs = getComputedStyle(document.getElementById('h')).fontSize; } catch (e) {}
+    try { out.dpr = window.devicePixelRatio; } catch (e) {}
+    try {
+      out.fmain = document.fonts.check('16px KaTeX_Main');
+      out.fmath = document.fonts.check('italic 16px KaTeX_Math');
+      out.fsz2 = document.fonts.check('16px KaTeX_Size2');
+      out.fsz1 = document.fonts.check('16px KaTeX_Size1');
+    } catch (e) {}
+    try {
+      var st = [];
+      document.fonts.forEach(function (f) { st.push(f.family.replace('KaTeX_', '') + ':' + f.status); });
+      out.fst = st.join(',').slice(0, 800);
+    } catch (e) {}
+    try {
+      var op = document.querySelector('#h .large-op') || document.querySelector('#h .mop');
+      if (op) {
+        var rr = op.getBoundingClientRect();
+        var cs = getComputedStyle(op);
+        out.op = [Math.round(rr.width * 10) / 10, Math.round(rr.height * 10) / 10,
+                  cs.fontFamily.slice(0, 36), cs.fontSize, cs.lineHeight];
+        var inner = op.querySelector('*');
+        if (inner) {
+          var r2 = inner.getBoundingClientRect();
+          out.opIn = [Math.round(r2.width * 10) / 10, Math.round(r2.height * 10) / 10];
+        }
+      }
+    } catch (e) {}
+    try {
+      var st2 = document.querySelector('#h .katex .katex-strut') || document.querySelector('#h .strut');
+      if (st2) { out.strut = Math.round(st2.getBoundingClientRect().height * 10) / 10; }
+    } catch (e) {}
+    try {
+      var c = document.createElement('canvas').getContext('2d');
+      c.font = '16px KaTeX_Math';
+      var w1 = c.measureText('y').width;
+      c.font = '16px KaTeX_Size2';
+      var w2 = c.measureText('\u222B').width;
+      c.font = '16px serif';
+      var w3 = c.measureText('\u222B').width;
+      out.mw = [Math.round(w1 * 100) / 100, Math.round(w2 * 100) / 100, Math.round(w3 * 100) / 100];
+    } catch (e) {}
+    return out;
+  };
+
   // 渲染一段公式并返回矩形尺寸；失败返回 null（Kotlin 侧保留原文展示）。
   window.__render = function (latex, display, color, cssPx) {
     try {
@@ -80,7 +129,8 @@
         h: Math.ceil(r.height),
         vw: document.documentElement.clientWidth,
         vvs: window.visualViewport ? window.visualViewport.scale : 1,
-        dpr: window.devicePixelRatio
+        dpr: window.devicePixelRatio,
+        p: window.__diag && window.__probe ? window.__probe() : null
       };
     } catch (e) {
       return null;
@@ -97,6 +147,21 @@
       else { a.push(String.fromCharCode((c & 15) << 12 | (s.charCodeAt(++i) & 63) << 6 | s.charCodeAt(++i) & 63)); }
     }
     return a.join('');
+  };
+
+  // 分块抓取用：把内容整体左移（cssPx 为 CSS 像素，负数=左移）。0 = 复位。
+  window.__shift = function (cssPx) {
+    var w = document.getElementById('wrap');
+    if (w) w.style.left = (-cssPx) + 'px';
+    return 'ok';
+  };
+
+  // 调试辅助：直接往 #h 里放一段 raw HTML/文本（测试对拍用）。
+  window.__rawtext = function (t, cssPx) {
+    var h = document.getElementById('h');
+    h.style.fontSize = (cssPx || 34) + 'px';
+    h.innerHTML = t;
+    return h.getBoundingClientRect().height;
   };
 
   // 让浏览器把新内容光栅化干净：连续两帧 requestAnimationFrame 后才算 settled。

@@ -1,6 +1,7 @@
 package com.dsh.mobile.ui
 
 import android.annotation.SuppressLint
+import android.app.Dialog
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -39,6 +41,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import com.dsh.mobile.ui.theme.LocalDsh
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -180,6 +183,9 @@ object MathRender {
         val k = key(latex, display, color, sizePx)
         if (cache.containsKey(k) || pending.contains(k) || failed.contains(k)) return
         pending.add(k)
+        if (com.dsh.mobile.BuildConfig.DEBUG) {
+            android.util.Log.i("MathRender", "ensure ${latex.take(24)} wanted=$wanted web=${web != null}")
+        }
         if (!wanted) {
             // 页面首帧就给正常尺寸：小尺寸起步同样会拨动缩放
             if (hostWidth <= 0 || hostHeight <= 0) {
@@ -197,28 +203,36 @@ object MathRender {
     fun attach(wv: WebView) {
         main.post {
             if (web === wv) return@post
+            android.util.Log.i("MathRender", "attach webview (was ${web != null})")
             web = wv
             ready = false
             rendering = false
-            wv.settings.javaScriptEnabled = true
-            // 渲染不能带任何缩放：窄视口的自动 zoom 会把「量到的尺寸」和「画出来的尺寸」
-            // 撕开（page scale 钳到 5×，抓图全成巨字切片）。
-            wv.settings.setUseWideViewPort(false)
-            wv.settings.setLoadWithOverviewMode(false)
-            wv.settings.setSupportZoom(false)
-            wv.settings.builtInZoomControls = false
-            wv.settings.displayZoomControls = false
-            wv.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            // 它贴在界面最底层当“暗房”用，不参与交互
-            wv.isEnabled = false
-            wv.isClickable = false
-            wv.isFocusable = false
-            // 软件图层：draw(Canvas) 才能稳定地把内容拷进位图（硬加速下离屏绘制不可靠）。
-            wv.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-            wv.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView, url: String?) = pollReady(wv, 0)
-            }
+            setupWebView(wv)
             wv.loadUrl(PAGE_URL)
+        }
+    }
+
+    /** WebView 的公共设置（页面与资源经 file:// 供给，硬件渲染路径）。 */
+    private fun setupWebView(wv: WebView) {
+        wv.settings.javaScriptEnabled = true
+        // 渲染不能带任何缩放：窄视口的自动 zoom 会把「量到的尺寸」和「画出来的尺寸」
+        // 撕开（page scale 钳到 5×，抓图全成巨字切片）。
+        wv.settings.setUseWideViewPort(false)
+        wv.settings.setLoadWithOverviewMode(false)
+        wv.settings.setSupportZoom(false)
+        wv.settings.builtInZoomControls = false
+        wv.settings.displayZoomControls = false
+        wv.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        // 它贴在界面最底层当“暗房”用，不参与交互
+        wv.isEnabled = false
+        wv.isClickable = false
+        wv.isFocusable = false
+        // ⚠️ 绝不能用 LAYER_TYPE_SOFTWARE：Android WebView 的软件绘制路径会把
+        // KaTeX 生成的 DOM 画扁（实测字形被非等比压到 65%；硬件路径正常）。
+        // 抓图改用 PixelCopy（见 capture 注释），draw(Canvas) 那条路已被证伪。
+        wv.setLayerType(View.LAYER_TYPE_NONE, null)
+        wv.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String?) = pollReady(wv, 0)
         }
     }
 
@@ -228,6 +242,161 @@ object MathRender {
                 web = null
                 ready = false
             }
+        }
+    }
+
+    /** 调试钩子：在暗房 WebView 上执行一段 JS（仅测试用，不影响生产路径）。 */
+    fun debugEval(js: String, cb: ((String?) -> Unit)? = null) {
+        main.post { web?.evaluateJavascript(js) { v -> cb?.invoke(v) } }
+    }
+
+    /** 调试钩子：暗房是否已挂载。 */
+    fun debugWebPresent(): Boolean = web != null
+
+    /** 调试钩子：切换暗房的图层类型（排查软件光栅 bug 用）。 */
+    fun debugSetLayer(software: Boolean) {
+        main.post {
+            web?.setLayerType(if (software) View.LAYER_TYPE_SOFTWARE else View.LAYER_TYPE_NONE, null)
+        }
+    }
+
+    // ================= Dialog + PixelCopy 线路（2026-09-26 新抓图方案） =================
+    // 背景：WebView 的软件绘制路径（LAYER_TYPE_SOFTWARE / draw(Canvas)）会把 KaTeX
+    // 生成的 DOM 非等比画扁（实测字高只剩 65%）；硬件路径正确。但硬件路径下
+    // draw() 同样走软绘、拿不到正确画面。方案：把 WebView 放进一个独立的 Dialog 窗口，
+    // 窗口级 alpha 0.01（用户看不见），用 PixelCopy 直接从窗口 surface 拷像素
+    // （窗口表面是完整不透明内容，alpha 只在合成到屏幕时生效）。
+
+    private var dialog: Dialog? = null
+
+    /** 启动 Dialog 暗房（替代 compose 树内隐藏 WebView 的路线）。 */
+    fun startDialog(context: Context) {
+        main.post {
+            if (dialog != null) return@post
+            val d = Dialog(context)
+            val wv = WebView(context)
+            d.setContentView(wv)
+            val win = d.window!!
+            win.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0x00000000))
+            win.addFlags(
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            )
+            win.setDimAmount(0f)
+            val dm = context.resources.displayMetrics
+            // 窗口不能超过屏幕：超出部分 PixelCopy 拿不到（实测越界区域是垃圾像素）。
+            // 装不下的宽公式由 capture() 用 __shift 分块拼接。
+            val wPx = minOf(FIXED_W, dm.widthPixels)
+            val hPx = minOf(FIXED_H, dm.heightPixels)
+            hostWidth = wPx
+            hostHeight = hPx
+            val lp = win.attributes
+            lp.alpha = 0.01f // 用户不可见；PixelCopy 拿到的仍是窗口自身的不透明内容
+            lp.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            lp.width = wPx
+            lp.height = hPx
+            win.attributes = lp
+            d.show()
+            dialog = d
+            attach(wv)
+            android.util.Log.i("MathRender", "dialog 暗房已启动 ${wPx}x$hPx (屏幕 ${dm.widthPixels}x${dm.heightPixels})")
+        }
+    }
+
+    /** 关闭 Dialog 暗房（组合退出时调用）。 */
+    fun stopDialog() {
+        main.post {
+            try {
+                dialog?.dismiss()
+            } catch (_: Exception) {
+            }
+            dialog = null
+            web = null
+            ready = false
+            rendering = false
+        }
+    }
+
+    /** PixelCopy 抓取窗口的一块区域（左/上/宽/高，窗口本地坐标）。 */
+    fun pixelCopy(left: Int, top: Int, w: Int, h: Int, cb: (Bitmap?) -> Unit) {
+        main.post {
+            val d = dialog
+            if (d == null) {
+                cb(null)
+                return@post
+            }
+            val bmp = try {
+                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            } catch (e: OutOfMemoryError) {
+                cb(null)
+                return@post
+            }
+            try {
+                android.view.PixelCopy.request(
+                    d.window!!,
+                    android.graphics.Rect(left, top, left + w, top + h),
+                    bmp,
+                    { result ->
+                        if (result == android.view.PixelCopy.SUCCESS) cb(bmp) else {
+                            android.util.Log.i("MathRender", "PixelCopy rc=$result")
+                            bmp.recycle()
+                            cb(null)
+                        }
+                    },
+                    Handler(Looper.getMainLooper()),
+                )
+            } catch (e: Exception) {
+                android.util.Log.i("MathRender", "PixelCopy 异常 $e")
+                bmp.recycle()
+                cb(null)
+            }
+        }
+    }
+
+    /** 调试钩子：PixelCopy 结果落盘。 */
+    fun debugPixelCopyDump(tag: String, left: Int, top: Int, w: Int, h: Int) {
+        pixelCopy(left, top, w, h) { bmp ->
+            if (bmp == null) {
+                android.util.Log.i("MathRender", "$tag PixelCopy 失败")
+                return@pixelCopy
+            }
+            try {
+                val ctx = web?.context
+                val dir = ctx?.getExternalFilesDir("mathdbg")
+                if (dir != null) {
+                    java.io.FileOutputStream(java.io.File(dir, "$tag.png")).use {
+                        bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                    android.util.Log.i("MathRender", "$tag dumped ${bmp.width}x${bmp.height}")
+                }
+            } catch (_: Exception) {
+            }
+            bmp.recycle()
+        }
+    }
+
+    /** 调试钩子：把当前窗口画面整张落盘（mathdbg/<tag>.png）。 */
+    fun debugDumpNow(tag: String = "debug-full") {
+        if (hostWidth <= 0 || hostHeight <= 0) return
+        pixelCopy(0, 0, hostWidth, hostHeight) { bmp ->
+            if (bmp == null) {
+                android.util.Log.i("MathRender", "$tag copy 失败")
+                return@pixelCopy
+            }
+            try {
+                val ctx = web?.context
+                val dir = ctx?.getExternalFilesDir("mathdbg")
+                if (dir != null) {
+                    java.io.FileOutputStream(java.io.File(dir, "$tag.png")).use {
+                        bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                    android.util.Log.i("MathRender", "$tag dumped ${bmp.width}x${bmp.height}")
+                }
+            } catch (_: Exception) {
+            }
+            bmp.recycle()
         }
     }
 
@@ -306,30 +475,13 @@ object MathRender {
                 "MathRender",
                 "rect css=${w}x$h@${x0},$y0 d=$d crop=${crop.width}x${crop.height} scale=$pageScale",
             )
-            // 画布装不下就只向大调（罕见）；尺寸变了等 Compose 排好再截图
-            val wantW = max(hostWidth, crop.left + crop.width + job.pad)
-            val wantH = max(hostHeight, crop.top + crop.height + job.pad)
-            if (wantW != hostWidth || wantH != hostHeight) {
-                hostWidth = wantW
-                hostHeight = wantH
-                awaitHostSize(wv, job, crop, wantW, wantH, 0)
-            } else {
-                settle(wv, job, crop)
+            if (com.dsh.mobile.BuildConfig.DEBUG && obj.has("p")) {
+                // 页面探针回传（字体加载状态 / 大运算符真实盒尺寸）——排查「公式比桌面扁」
+                android.util.Log.i("MathRender", "probe ${job.latex.take(40)} => ${obj.opt("p")}")
             }
-        }
-    }
-
-    private fun awaitHostSize(wv: WebView, job: Job, crop: Crop, w: Int, h: Int, n: Int) {
-        if (wv.width == w && wv.height == h) {
+            // 窗口装不下整条公式没关系：capture 里会自动分块（__shift）拼接
             settle(wv, job, crop)
-            return
         }
-        if (n > 60) { // 兜底 ~1s
-            android.util.Log.i("MathRender", "host resize timeout wv=${wv.width}x${wv.height} want=${w}x$h")
-            capture(wv, job, crop)
-            return
-        }
-        main.postDelayed({ awaitHostSize(wv, job, crop, w, h, n + 1) }, 16)
     }
 
     private fun settle(wv: WebView, job: Job, crop: Crop) {
@@ -354,85 +506,124 @@ object MathRender {
 
     @SuppressLint("WrongCall")
     private fun capture(wv: WebView, job: Job, crop: Crop) {
-        val w = wv.width
-        val h = wv.height
-        if (w <= 0 || h <= 0) {
+        val winW = hostWidth
+        val winH = hostHeight
+        if (winW <= 0 || winH <= 0 || crop.width <= 0 || crop.height <= 0) {
             finish(job, null)
             return
         }
-        // 画布位图复用（每次新建 8MB 会制造大量 GC 抖动）；每次都擦干净再画
-        var full = scratchCanvas
-        if (full == null || full.width < w || full.height < h) {
-            full?.recycle()
-            full = try {
-                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            } catch (e: OutOfMemoryError) {
-                null
-            }
-            scratchCanvas = full
-        }
-        if (full == null) {
+        val out = try {
+            Bitmap.createBitmap(crop.width, crop.height, Bitmap.Config.ARGB_8888)
+        } catch (e: OutOfMemoryError) {
             finish(job, null)
             return
         }
-        full.eraseColor(0)
-        wv.draw(Canvas(full))
+        captureTiles(wv, job, crop, out, 0, 0)
+    }
 
-        val right = (crop.left + crop.width).coerceAtMost(w)
-        val bottom = (crop.top + crop.height).coerceAtMost(h)
-        val cw = right - crop.left
-        val ch = bottom - crop.top
-        if (cw <= 0 || ch <= 0) {
-            finish(job, null)
+    /**
+     * 分块抓取：Dialog 窗口（≤ 屏幕宽度）装不下整条公式时，把页面内容左移
+     * （window.__shift）再抓下一块，拼进同一张位图。SS=2 超采样下窄屏常见 2 块。
+     */
+    private fun captureTiles(wv: WebView, job: Job, crop: Crop, out: Bitmap, offset: Int, attempt: Int) {
+        val d = wv.resources.displayMetrics.density
+        val tileW = minOf(hostWidth, crop.width - offset)
+        if (tileW <= 0) {
+            afterTiles(wv, job, out)
             return
         }
-        val bmp = Bitmap.createBitmap(full, crop.left, crop.top, cw, ch)
-        val trimmed = trimToInk(bmp)
-        if (trimmed == null) {
-            bmp.recycle()
-            finish(job, null)
-            return
-        }
-        // 超采样缩回 1x：平滑掉软件光栅的描边膨胀，笔画更接近桌面端的细腻
-        val tight = if (SS > 1 && trimmed.width > SS && trimmed.height > SS) {
-            val scaled = Bitmap.createScaledBitmap(trimmed, trimmed.width / SS, trimmed.height / SS, true)
-            if (scaled !== trimmed) trimmed.recycle()
-            scaled
-        } else {
-            trimmed
-        }
-
-        // debug 构建：把抓到的原图落盘，方便 adb 拉出来直接看（release 不写）
-        if (com.dsh.mobile.BuildConfig.DEBUG) {
-            try {
-                val dir = wv.context.getExternalFilesDir("mathdbg")
-                if (dir != null) {
-                    dir.mkdirs()
-                    java.io.FileOutputStream(java.io.File(dir, "m-${job.key.hashCode().toString(16)}.png")).use {
-                        tight.compress(Bitmap.CompressFormat.PNG, 100, it)
+        val shiftPx = crop.left + offset
+        wv.evaluateJavascript("window.__shift && window.__shift(${shiftPx.toFloat() / d})") { _ ->
+            // 等两帧：让位移后的画面进到合成器
+            wv.postOnAnimation {
+                wv.postOnAnimation {
+                    pixelCopy(0, crop.top, tileW, crop.height) { piece ->
+                        if (piece == null || pieceIsEmpty(piece)) {
+                            piece?.recycle()
+                            if (attempt < 8) {
+                                main.postDelayed({ captureTiles(wv, job, crop, out, offset, attempt + 1) }, 80)
+                            } else {
+                                android.util.Log.i("MathRender", "tile 空 ${job.key.take(22)} off=$offset")
+                                finish(job, null)
+                            }
+                            return@pixelCopy
+                        }
+                        Canvas(out).drawBitmap(piece, offset.toFloat(), 0f, null)
+                        piece.recycle()
+                        captureTiles(wv, job, crop, out, offset + tileW, 0)
                     }
                 }
-            } catch (_: Exception) {
             }
         }
-        // 诊断（debug 构建才打印）：抽样统计非透明像素，空白=0 说明没光栅化
-        if (com.dsh.mobile.BuildConfig.DEBUG) {
-            var nonEmpty = 0
-            var sx = 0
-            while (sx < tight.width) {
-                var sy = 0
-                while (sy < tight.height) {
-                    if ((tight.getPixel(sx, sy) ushr 24) != 0) nonEmpty++
-                    sy += 3
+    }
+
+    /** 抓完所有块：恢复平移 → 裁剪墨迹 → 超采样回缩 → 落盘（debug）→ 交付。 */
+    private fun afterTiles(wv: WebView, job: Job, out: Bitmap) {
+        wv.evaluateJavascript("window.__shift && window.__shift(0)") { _ ->
+            val trimmed = trimToInk(out)
+            if (trimmed == null) {
+                out.recycle()
+                finish(job, null)
+                return@evaluateJavascript
+            }
+            // 超采样缩回 1x：平滑掉栅格化的描边膨胀，笔画更接近桌面端的细腻
+            val tight = if (SS > 1 && trimmed.width > SS && trimmed.height > SS) {
+                val scaled = Bitmap.createScaledBitmap(trimmed, trimmed.width / SS, trimmed.height / SS, true)
+                if (scaled !== trimmed) trimmed.recycle()
+                scaled
+            } else {
+                trimmed
+            }
+
+            // debug 构建：把抓到的成品落盘，方便 adb 拉出来直接看（release 不写）
+            if (com.dsh.mobile.BuildConfig.DEBUG) {
+                try {
+                    val dir = wv.context.getExternalFilesDir("mathdbg")
+                    if (dir != null) {
+                        dir.mkdirs()
+                        java.io.FileOutputStream(java.io.File(dir, "m-${job.key.hashCode().toString(16)}.png")).use {
+                            tight.compress(Bitmap.CompressFormat.PNG, 100, it)
+                        }
+                    }
+                } catch (_: Exception) {
                 }
-                sx += 3
+                var nonEmpty = 0
+                var sx = 0
+                while (sx < tight.width) {
+                    var sy = 0
+                    while (sy < tight.height) {
+                        if ((tight.getPixel(sx, sy) ushr 24) != 0) nonEmpty++
+                        sy += 3
+                    }
+                    sx += 3
+                }
+                android.util.Log.i(
+                    "MathRender",
+                    "capture ${job.key.take(22)} tight=${tight.width}x${tight.height} px=$nonEmpty",
+                )
             }
-            android.util.Log.i(
-                "MathRender",
-                "capture ${job.key.take(22)} tight=${tight.width}x${tight.height} px=$nonEmpty",
-            )
+            finish(job, tight.asImageBitmap())
         }
-        finish(job, tight.asImageBitmap())
+    }
+
+    /** 抽样检查一块拷贝是否全透明（合成器还没跟上时重试用）。 */
+    private fun pieceIsEmpty(b: Bitmap): Boolean {
+        var count = 0
+        val stepX = max(1, b.width / 64)
+        val stepY = max(1, b.height / 48)
+        var x = 0
+        while (x < b.width) {
+            var y = 0
+            while (y < b.height) {
+                if ((b.getPixel(x, y) ushr 24) > 8) {
+                    count++
+                    if (count > 12) return false
+                }
+                y += stepY
+            }
+            x += stepX
+        }
+        return true
     }
 
     /**
@@ -502,30 +693,17 @@ object MathRender {
     private const val PAGE_URL = "file:///android_asset/katex/math.html"
 }
 
-/** 隐藏宿主：App 根部贴在底层的“暗房” WebView，公式渲染全在它里面完成。 */
+/** 隐藏宿主：起了个“暗房”Dialog（窗口级 alpha≈0，用户不可见），公式渲染全在它里面完成。
+ *  抓图走 PixelCopy —— WebView 的软件绘制路径（LAYER_TYPE_SOFTWARE / draw(Canvas)）
+ *  会把 KaTeX 生成的 DOM 非等比画扁（实测字高只剩 ~65%），硬件渲染 + PixelCopy 正常。 */
 @Composable
 fun MathRenderHost() {
     if (!MathRender.wanted) return
     val context = LocalContext.current
-    val density = LocalDensity.current
-    val w = MathRender.hostWidth
-    val h = MathRender.hostHeight
-    val sizeModifier = if (w > 0 && h > 0) {
-        // requiredSize：无视父约束。用 size() 会被父容器（屏幕宽度）钳住 ——
-        // 模拟器 1080px 宽的屏曾把 2200px 的画布压到 1080，宽公式全被右缘切掉，
-        // 还会让 awaitHostSize 永远等不到目标尺寸、每条公式白等 1s。
-        with(density) { Modifier.requiredSize(w.toDp(), h.toDp()) }
-    } else {
-        Modifier.size(1.dp)
+    LaunchedEffect(Unit) { MathRender.startDialog(context) }
+    DisposableEffect(Unit) {
+        onDispose { MathRender.stopDialog() }
     }
-    AndroidView(
-        factory = { ctx: Context ->
-            WebView(ctx).also { MathRender.attach(it) }
-        },
-        // 诊断用小抄：跑完那轮已恢复 0.01f（暗房不可见、不接交互）
-        modifier = sizeModifier.alpha(0.01f),
-        onRelease = { wv -> MathRender.detach(wv) },
-    )
 }
 
 /**
