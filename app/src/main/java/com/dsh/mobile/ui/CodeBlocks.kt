@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -198,6 +199,7 @@ fun CodeCard(
     onSave: (String, String) -> Unit,
     onPreview: ((Wire.Artifact) -> Unit)? = null,
     onOpenExternal: ((String, String) -> Unit)? = null,
+    onViewAll: ((String, String) -> Unit)? = null,
 ) {
     val palette = LocalDsh.current
     var expanded by remember(code) { mutableStateOf(false) }
@@ -250,24 +252,35 @@ fun CodeCard(
             )
         }
         if (lineCount > 8) {
+            // S3 §1.3：卡内展开最多 16 行；超过 16 行走「查看全部」进全屏阅读器，
+            // 不在消息流里建纵向滚动窗。
+            val viewAll = lineCount > 16 && onViewAll != null
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.divider))
             Row(
                 Modifier
                     .fillMaxWidth()
                     .heightIn(min = 44.dp)
-                    .clickable { expanded = !expanded }
+                    .clickable { if (viewAll) onViewAll?.invoke(lang, code) else expanded = !expanded }
                     .padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Icon(
-                    if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.UnfoldMore,
+                    when {
+                        viewAll -> Icons.Outlined.OpenInFull
+                        expanded -> Icons.Outlined.ExpandLess
+                        else -> Icons.Outlined.UnfoldMore
+                    },
                     contentDescription = null,
                     tint = palette.textSecondary,
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    if (expanded) "收起" else "展开全部 " + lineCount + " 行",
+                    when {
+                        viewAll -> "查看全部 " + lineCount + " 行"
+                        expanded -> "收起"
+                        else -> "展开全部 " + lineCount + " 行"
+                    },
                     style = MaterialTheme.typography.labelLarge,
                     color = palette.textSecondary,
                 )

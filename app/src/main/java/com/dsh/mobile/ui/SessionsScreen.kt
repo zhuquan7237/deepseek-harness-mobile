@@ -258,7 +258,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
 
     renameTarget?.let { target ->
         RenameDialog(
-            initial = target.title,
+            initial = if (target.title.startsWith("session-")) "" else target.title,
             onDismiss = { renameTarget = null },
             onConfirm = { title ->
                 repo.renameSession(target.sessionId, title)
@@ -497,7 +497,7 @@ private fun SessionRow(
             // 标题行：右边跟一个时间，120 条会话不再长得一模一样
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    session.title,
+                    displayTitle(session.title),
                     style = MaterialTheme.typography.bodyLarge,
                     color = palette.textPrimary,
                     maxLines = 1,

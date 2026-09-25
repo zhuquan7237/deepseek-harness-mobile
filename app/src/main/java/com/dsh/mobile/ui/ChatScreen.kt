@@ -218,6 +218,10 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     val context = LocalContext.current
     var showRename by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<Wire.Artifact?>(null) }
+    // S2 第二批：会话设置面板 / 会话陪伴面板 / 全屏源码阅读器
+    var showSettings by remember { mutableStateOf(false) }
+    var showCompanion by remember { mutableStateOf(false) }
+    var readerDoc by remember { mutableStateOf<SourceDoc?>(null) }
     // ---- 生成的文件：列表 + 全屏预览 ----
     var filesSheet by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<SessionFile?>(null) }
@@ -400,7 +404,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 metaConn = state.conn,
                 metaChevron = true,
                 modifier = Modifier.weight(1f),
-                onClick = { showActions = true },
+                // S2 §3.2：点中部打开「会话设置」（电脑名称/连接详情/模型/重连都在里面）
+                onClick = { showSettings = true },
                 onMetaClick = {
                     showModels = true
                     // 从顶栏模型标签进菜单也要拉一次：之前只有"更多→切换模型"那条路会拉，
@@ -428,6 +433,10 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 repo.loadSessionFiles()
             },
             onOpenExternal = { lang, code -> openCodeExternally(context, lang, code) },
+            onViewSource = { doc ->
+                keyboard?.hide()
+                readerDoc = doc
+            },
             onSaveCode = { lang, code ->
                 val where = saveTextToDownloads(context, codeFileName(lang), code)
                 if (where != null) repo.toast("已保存到 $where") else repo.toast("保存失败，已复制到剪贴板")
@@ -579,6 +588,10 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                     showActions = false
                     showRename = true
                 }
+                SheetAction("会话陪伴", caption = "看看鲸鱼娘") {
+                    showActions = false
+                    showCompanion = true
+                }
                 if (state.sessionFiles.isNotEmpty()) {
                     SheetAction(
                         "生成的文件 · ${state.sessionFiles.size} 个",
@@ -614,6 +627,40 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 repo.toast("源码已复制")
             },
         )
+    }
+
+    // S2 §5.3：全屏源码阅读器——卡内超 16 行的「查看全部」进这里；返回时消息流位置不动。
+    OverlayHost(readerDoc) { doc ->
+        SourceReaderOverlay(
+            doc = doc,
+            onClose = { readerDoc = null },
+            onCopy = {
+                clipboard.setText(AnnotatedString(doc.code))
+                repo.toast("源码已复制")
+            },
+            onSave = {
+                val where = saveTextToDownloads(context, codeFileName(doc.lang), doc.code)
+                if (where != null) repo.toast("已保存到 $where") else repo.toast("保存失败，已复制到剪贴板")
+                if (where == null) clipboard.setText(AnnotatedString(doc.code))
+            },
+        )
+    }
+
+    if (showSettings) {
+        SessionSettingsSheet(
+            state = state,
+            onDismiss = { showSettings = false },
+            onOpenModels = {
+                showSettings = false
+                showModels = true
+                if (state.doc == null) repo.loadModels()
+            },
+            onReconnect = { repo.ensureConnected() },
+        )
+    }
+
+    if (showCompanion) {
+        CompanionSheet(state = state, onDismiss = { showCompanion = false })
     }
     if (filesSheet) {
         SessionFilesSheet(
@@ -720,6 +767,7 @@ private fun MessageList(
     onRevealDone: () -> Unit,
     onOpenFiles: () -> Unit,
     onOpenExternal: (String, String) -> Unit,
+    onViewSource: (SourceDoc) -> Unit,
     modifier: Modifier,
 ) {
     val palette = LocalDsh.current
@@ -773,6 +821,7 @@ private fun MessageList(
                             onRegenerate = onRegenerate,
                             onPreview = onPreview,
                             onOpenExternal = onOpenExternal,
+                            onViewSource = onViewSource,
                         )
                     }
                 }
@@ -1068,6 +1117,7 @@ private fun MessageRow(
     onRegenerate: () -> Unit = {},
     onPreview: (Wire.Artifact) -> Unit = {},
     onOpenExternal: (String, String) -> Unit = { _, _ -> },
+    onViewSource: (SourceDoc) -> Unit = {},
 ) {
 
     /** Characters drawn so far; the animation only runs for a freshly arrived reply. */
@@ -1239,6 +1289,10 @@ private fun MessageRow(
                                     onSave = onSaveCode,
                                     onPreview = onPreview,
                                     onOpenExternal = onOpenExternal,
+                                    onViewAll = { lang, code ->
+                                        val t = lang.trim().takeIf { it.isNotBlank() }?.uppercase()?.let { "$it 源码" } ?: "代码"
+                                        onViewSource(SourceDoc(t, lang, code))
+                                    },
                                 )
                                 Spacer(Modifier.height(8.dp))
                             }
@@ -1252,6 +1306,15 @@ private fun MessageRow(
                         onOpen = { onPreview(artifactRef) },
                         onSave = { onSaveCode(artifactRef.kind, artifactRef.markup) },
                         onCopy = onCopy,
+                        onViewAll = {
+                            onViewSource(
+                                SourceDoc(
+                                    if (artifactRef.kind == "svg") "SVG 图形" else "网页",
+                                    artifactRef.kind,
+                                    artifactRef.markup,
+                                )
+                            )
+                        },
                     )
                 }
                 if (showActions && done) {
@@ -1463,8 +1526,8 @@ private fun MessageAction(icon: ImageVector, label: String, onClick: () -> Unit)
  */
 /**
  * S2《对话页重设计》交付物卡：默认先看结果——图形在卡内直接渲染预览，源码默认收起
- * （点「源码」看前 10 行，「展开全部」再铺开）。整个预览区一个点击目标；
- * 不再有眼睛图标、「预览图形」胶囊、重复复制。
+ * （点「源码」看前 10 行；超 16 行走「查看全部」进全屏阅读器，S2 §5.3 / S3 §1.3）。
+ * 整个预览区一个点击目标；不再有眼睛图标、「预览图形」胶囊、重复复制。
  */
 @Composable
 private fun ArtifactCard(
@@ -1472,6 +1535,7 @@ private fun ArtifactCard(
     onOpen: () -> Unit,
     onSave: () -> Unit,
     onCopy: (String) -> Unit,
+    onViewAll: () -> Unit,
 ) {
     val palette = LocalDsh.current
     var showCode by remember(artifact) { mutableStateOf(false) }
@@ -1523,6 +1587,9 @@ private fun ArtifactCard(
                     .height(canvasH)
                     .clip(RoundedCornerShape(10.dp))
                     .background(palette.previewMat)
+                    // 晨纸主题下画布/卡面/页面底三级都是浅色：给画布一圈细边界，
+                    // 三层空间关系才立得住（暗色主题同样无害）。
+                    .border(1.dp, palette.divider, RoundedCornerShape(10.dp))
                     .clickable(onClick = onOpen),
             ) {
                 AndroidView(
@@ -1627,12 +1694,23 @@ private fun ArtifactCard(
             }
             if (!showAll && lineCount > 10) {
                 Box(Modifier.fillMaxWidth().height(1.dp).background(palette.divider))
-                CardAction(
-                    label = "展开全部 " + lineCount + " 行",
-                    leading = Icons.Outlined.UnfoldMore,
-                    color = palette.textSecondary,
-                    fill = true,
-                ) { showAll = true }
+                // S3 §1.3：卡内展开最多 16 行；超过 16 行走「查看全部」进全屏阅读器，
+                // 不在消息流里建纵向滚动窗。
+                if (lineCount > 16) {
+                    CardAction(
+                        label = "查看全部 " + lineCount + " 行",
+                        leading = Icons.Outlined.OpenInFull,
+                        color = palette.textSecondary,
+                        fill = true,
+                    ) { onViewAll() }
+                } else {
+                    CardAction(
+                        label = "展开全部 " + lineCount + " 行",
+                        leading = Icons.Outlined.UnfoldMore,
+                        color = palette.textSecondary,
+                        fill = true,
+                    ) { showAll = true }
+                }
             }
         }
     }
@@ -1756,7 +1834,7 @@ svg{display:inline-block;vertical-align:middle;max-width:92vw;height:auto;}</sty
 }
 
 /** S2：内部 id（session- 开头）不展示给用户；没有真标题就写「新对话」。 */
-private fun displayTitle(t: String): String =
+internal fun displayTitle(t: String): String =
     if (t.isBlank() || t.startsWith("session-")) "新对话" else t
 
 /**
