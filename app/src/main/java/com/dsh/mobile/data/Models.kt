@@ -161,6 +161,10 @@ data class AppState(
     /** 停止请求已发出、等待电脑确认——收到 turn/end 才清（绝不在断线时假装已停止）。 */
     val stopping: Boolean = false,
     val stopRequestedAt: Long = 0L,
+    /** 电脑已回执「收到停止请求」（三层事实的第二层；不冒充已停止）。 */
+    val stopAcked: Boolean = false,
+    /** 停止请求连电脑都没送到（此时绝不显示「正在停止」）。 */
+    val stopSendFailed: Boolean = false,
     /** 刚到达、还没放完打字机的那条助手消息（用后即焚，见 revealConsumed）。 */
     val revealText: String? = null,
     val sending: Boolean = false,

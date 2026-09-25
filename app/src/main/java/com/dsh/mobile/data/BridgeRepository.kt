@@ -659,6 +659,8 @@ class BridgeRepository(context: Context) {
                         },
                         stopping = parsed.running && current.stopping,
                         stopRequestedAt = if (parsed.running) current.stopRequestedAt else 0L,
+                        stopAcked = parsed.running && current.stopAcked,
+                        stopSendFailed = parsed.running && current.stopSendFailed,
                         historyLoading = false,
                         revealText = if (fresh) last?.text else current.revealText,
                         modelProvider = selection?.first ?: current.modelProvider,
@@ -779,16 +781,20 @@ class BridgeRepository(context: Context) {
         val s = _state.value
         val sid = s.sessionId ?: return
         val token = s.token ?: return
-        // 先把「停止请求已发出」标上：电脑的确认（turn/end）到达前，界面绝不宣布已停止。
-        _state.update { it.copy(stopping = true, stopRequestedAt = System.currentTimeMillis()) }
+        // 三层事实：本地已响应（stopping）→ 电脑已收到（stopAcked）→ 真正停止（turn/end）。
+        // 任何一层都不冒充下一层（J1《聊天页会诊》01；界面全部状态显示在任务控制条）。
+        _state.update {
+            it.copy(
+                stopping = true, stopRequestedAt = System.currentTimeMillis(),
+                stopAcked = false, stopSendFailed = false,
+            )
+        }
         scope.launch {
             try {
                 api.cancel(token, sid)
-                toast("已请求停止")
-            } catch (error: BridgeException) {
-                handleApiError(error, "停止失败")
+                _state.update { it.copy(stopAcked = true) }
             } catch (error: Exception) {
-                fail("send", "停止失败：${error.message ?: "网络错误"}")
+                _state.update { it.copy(stopSendFailed = true) }
             }
         }
     }
@@ -1044,6 +1050,7 @@ class BridgeRepository(context: Context) {
                 it.copy(
                     running = true, live = emptyList(), thinking = true, thinkingSince = System.currentTimeMillis(),
                     runSince = System.currentTimeMillis(), stopping = false, stopRequestedAt = 0L,
+                    stopAcked = false, stopSendFailed = false,
                 )
             }
             "turn/end" -> {
@@ -1058,7 +1065,7 @@ class BridgeRepository(context: Context) {
                 // 这一回合可能产出了新文件：静默刷新本会话的生成文件列表（卡片随之出现）
                 _state.value.sessionId?.let { sid -> loadSessionFiles(sid, quiet = true) }
                 _state.update {
-                    it.copy(running = false, live = emptyList(), thinking = false, thinkingSince = 0L, runSince = 0L, stopping = false, stopRequestedAt = 0L)
+                    it.copy(running = false, live = emptyList(), thinking = false, thinkingSince = 0L, runSince = 0L, stopping = false, stopRequestedAt = 0L, stopAcked = false, stopSendFailed = false)
                 }
             }
             "assistant/chunk" -> {

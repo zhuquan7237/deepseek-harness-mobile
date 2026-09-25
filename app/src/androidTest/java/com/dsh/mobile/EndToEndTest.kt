@@ -200,7 +200,6 @@ class EndToEndTest {
         // The session actions P1 promised are all reachable.
         composeRule.onAllNodesWithContentDescription("更多")[0].performClick()
         composeRule.waitUntil(15_000) { anyText("重新生成") }
-        composeRule.onAllNodesWithText("停止生成")[0].assertExists()
         composeRule.onAllNodesWithText("重新生成")[0].assertExists()
         composeRule.onAllNodesWithText("切换模型")[0].assertExists()
         composeRule.onAllNodesWithText("重命名")[0].assertExists()

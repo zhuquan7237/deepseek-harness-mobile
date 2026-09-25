@@ -540,10 +540,6 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             dragHandle = { SheetHandle() },
         ) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).navigationBarsPadding()) {
-                SheetAction("停止生成", caption = "让电脑端停下当前回合") {
-                    showActions = false
-                    repo.cancelTurn()
-                }
                 SheetAction("重新生成", caption = "让电脑端接着往下写") {
                     showActions = false
                     repo.regenerate()
@@ -1001,7 +997,7 @@ private fun TraceSummary(main: String, sub: String?, open: Boolean, live: Boolea
                 Text(
                     main,
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (live) palette.accent else palette.textSecondary,
+                    color = if (live) palette.textPrimary else palette.textSecondary,
                 )
                 if (sub != null) {
                     Text(
@@ -1883,30 +1879,60 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 64.dp)
-            .padding(start = 12.dp, end = 12.dp, bottom = 2.dp)
+            .heightIn(min = 72.dp)
+            .padding(start = 16.dp, end = 16.dp, bottom = 2.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(palette.surface)
-            .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         when {
-            // ① 停止等待确认（优先级最高；断线时也要说清楚「未确认」）
+            // ① 停止的三层事实（J1 会诊 01）：本地已响应（stopping）→ 电脑已收到（stopAcked）
+            //    → 真正停止（收到 turn/end 才清）。任何一层都不冒充下一层。
             state.running && state.stopping -> {
                 Box(Modifier.size(6.dp).clip(CircleShape).background(palette.textTertiary))
-                Text(
-                    when {
-                        !state.connected -> "停止请求尚未确认，请勿将断线视为已停止。"
-                        stopWait >= 12_000L -> "停止请求尚未确认，请稍候或刷新状态。"
-                        else -> "正在停止，等待电脑确认…"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.textSecondary,
-                    modifier = Modifier.weight(1f),
-                )
-                if (stopWait >= 12_000L) {
+                Column(Modifier.weight(1f)) {
                     Text(
+                        when {
+                            state.stopSendFailed -> "停止请求未发送成功"
+                            !state.stopAcked -> "正在发送停止请求…"
+                            else -> "电脑已收到请求，正在停止…"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.textPrimary,
+                    )
+                    Text(
+                        when {
+                            state.stopSendFailed -> "任务可能仍在电脑上执行。"
+                            !state.connected -> "请勿将断线视为已停止。"
+                            stopWait >= 10_000L -> "尚未确认停止，任务可能仍在执行。"
+                            else -> "已执行的操作不会自动撤销。"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textTertiary,
+                    )
+                }
+                when {
+                    state.stopSendFailed -> Text(
+                        "重试停止",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.primaryBtn,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { repo.cancelTurn() }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                    !state.connected -> Text(
+                        "重新连接",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.primaryBtn,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { repo.refreshNow() }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                    stopWait >= 10_000L -> Text(
                         "刷新状态",
                         style = MaterialTheme.typography.labelMedium,
                         color = palette.primaryBtn,
@@ -1956,6 +1982,7 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                             repo.cancelTurn()
                         }
                         .heightIn(min = 48.dp)
+                        .widthIn(min = 88.dp)
                         .padding(horizontal = 16.dp)
                         .semantics { contentDescription = "停止生成" },
                     verticalAlignment = Alignment.CenterVertically,
@@ -1965,7 +1992,7 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                         Icons.Outlined.Stop,
                         contentDescription = null,
                         tint = palette.textPrimary,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(20.dp),
                     )
                     Text("停止", style = MaterialTheme.typography.labelLarge, color = palette.textPrimary)
                 }
