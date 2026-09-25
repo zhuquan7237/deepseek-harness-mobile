@@ -84,6 +84,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Surface
@@ -2106,7 +2107,7 @@ private fun Composer(
             }
             }
 
-            // 右下角的模型切换：有内容/聚焦时滑入，带细框方便看清是"可点的控件"
+            // 右下角辅助行：展开键 + 模型胶囊；有内容/聚焦时滑入（空输入保持干净一行）
             AnimatedVisibility(
                 // 只淡入淡出、不再做高度展开：键盘弹起本来就在改布局，
                 // 两个动画叠一起会有"衔接不上"的闪，交给外层 animateContentSize 统一收放
@@ -2130,7 +2131,10 @@ private fun Composer(
                         size = 30.dp,
                         iconSize = 16.dp,
                     ) { composerExpanded = !composerExpanded }
-                    // S2：模型只出现在顶栏一处——底部不再放第二个模型选择器。
+                    // 输入区模型胶囊（0.2.67 恢复，用户拍板）：与顶栏共用同一状态、同一个模型菜单，
+                    // S2「设置入口重复」的隐患由「同源同菜单」化解；空输入时随辅助行一起收起。
+                    Spacer(Modifier.width(2.dp))
+                    ComposerModelChip(state = state, onClick = onOpenModels)
                     if (state.running && draft.isNotBlank() && attachments.isEmpty()) {
                         Spacer(Modifier.width(8.dp))
                         Row(
@@ -2345,8 +2349,8 @@ private fun fmtClock(ms: Long): String {
 }
 
 /**
- * 输入框右下角的模型入口。文案走 [shortModelLabel]（超长收头），
- * 外面套一层极细描边——纯文字太容易被当成普通说明文字，看不出能点。
+ * 输入框右下角的模型入口（0.2.67 起恢复）。纯文字 + ▾、无描边；点击热区扩到 48dp，
+ * 高度用 min 带住——系统大字 200% 不裁切。与顶栏共用同一状态与同一个模型菜单。
  */
 @Composable
 private fun ComposerModelChip(state: AppState, onClick: () -> Unit) {
@@ -2354,7 +2358,8 @@ private fun ComposerModelChip(state: AppState, onClick: () -> Unit) {
     // 不带框：加了描边反而和右边发送键那个圆圈挤在一起，纯文字 + 下拉箭头就够了
     Row(
         Modifier
-            .height(26.dp)
+            .minimumInteractiveComponentSize()
+            .heightIn(min = 26.dp)
             .clip(RoundedCornerShape(999.dp))
             .clickable(onClick = onClick)
             .padding(start = 10.dp, end = 2.dp),
