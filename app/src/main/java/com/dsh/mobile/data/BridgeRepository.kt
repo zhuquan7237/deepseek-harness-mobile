@@ -597,6 +597,18 @@ class BridgeRepository(context: Context) {
         }
     }
 
+    /** 拉一张「图片生成」产物（dsh-home/generated 里的 dsh-img-*.png；走 @generated 前缀）。 */
+    suspend fun fetchGeneratedImage(name: String): ByteArray? {
+        val s = _state.value
+        val sid = s.sessionId ?: return null
+        val token = s.token ?: return null
+        return try {
+            api.download(token, sid, "@generated/$name")
+        } catch (error: Exception) {
+            null
+        }
+    }
+
     /** 下载到系统「下载」目录。 */
     suspend fun downloadSessionFile(file: SessionFile): Boolean {
         val s = _state.value

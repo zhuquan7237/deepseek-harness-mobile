@@ -237,7 +237,14 @@ object Wire {
                             )
                         )
                     }
-                    if (answer.isNotEmpty()) rows.add(ChatRow(Role.ASSISTANT, answer, time = time))
+                    if (answer.isNotEmpty()) {
+                        rows.add(ChatRow(Role.ASSISTANT, answer, time = time))
+                        // 图片生成的注记会提到 dsh-img-*.png（产物存在电脑上、桥接可拉取）：
+                        // 生成可点开的图片卡，点开即全屏预览 / 保存到手机。
+                        for (name in generatedImageNames(answer)) {
+                            rows.add(ChatRow(Role.GENERATED_IMAGE, name, time = time))
+                        }
+                    }
                     // 空回复是真实的故障模式：上游只回空文本块时，用户既看不到输出也看不到报错，
                     // 对话静默断掉（实测：图片生成输出被引擎丢弃时就是这个形状，引擎侧已修）。
                     // 这里兜底成可见提示行，只认「无正文 + 无思考 + 无工具调用」的最保守情形。
@@ -441,6 +448,12 @@ object Wire {
         }
         return out
     }
+
+    /** 引擎「图片生成」注记里的产物文件名（dsh-img-*.png）——聊天里据此生成图片卡。 */
+    private val GENERATED_IMAGE_RE = Regex("dsh-img-[A-Za-z0-9-]+\\.(?:png|jpe?g|webp|gif)")
+
+    fun generatedImageNames(text: String): List<String> =
+        GENERATED_IMAGE_RE.findAll(text).map { it.value }.distinct().take(6).toList()
 
     /** 文件扩展名 → 预览方式（image / svg / html / text / other）。 */
     fun fileKind(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {

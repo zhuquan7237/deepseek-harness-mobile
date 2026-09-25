@@ -14,7 +14,7 @@ enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS, LOGS, APPROVA
 enum class Conn { CONNECTING, ONLINE, OFFLINE }
 
 /** Who said a message in the conversation log. */
-enum class Role { USER, ASSISTANT, TOOL, REASONING, NOTICE, ERROR, TRUNCATED, EMPTY_REPLY, APPROVAL, STEER, QUEUED }
+enum class Role { USER, ASSISTANT, TOOL, REASONING, NOTICE, ERROR, TRUNCATED, EMPTY_REPLY, APPROVAL, STEER, QUEUED, GENERATED_IMAGE }
 
 /** 一条审批事实（K2-A 只读）：来自桥接 GET /mobile/approvals 与会话事件。 */
 @Immutable

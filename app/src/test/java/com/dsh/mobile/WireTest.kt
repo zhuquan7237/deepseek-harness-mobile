@@ -267,6 +267,38 @@ class WireTest {
     }
 
     @Test
+    fun generatedImageNoteBecomesPreviewRow() {
+        // 引擎的图片生成注记（真实形状）：正文提到 dsh-img-*.png → 追加一张图片卡行，
+        // 手机端据此从电脑拉图预览/下载。
+        val note = "🖼️ 模型调用内置「图片生成」工具生成了 1 张图片：\n" +
+            "· 图 1（1312x1199）已保存到 C:\\Users\\zhuquan\\AppData\\Roaming\\DeepSeek\\dsh-home\\generated\\dsh-img-1790320587465-xkkyab.png\n" +
+            "在手机 App 里可以直接预览或保存到手机。"
+        val items = JSONArray()
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "assistant/message")
+                        .put("data", JSONObject().put("message", JSONObject().put("text", note))),
+                ),
+            )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(Role.ASSISTANT, parsed.rows[0].who)
+        assertEquals(Role.GENERATED_IMAGE, parsed.rows[1].who)
+        assertEquals("dsh-img-1790320587465-xkkyab.png", parsed.rows[1].text)
+    }
+
+    @Test
+    fun generatedImageNamesCollectsUniqueProductNames() {
+        assertTrue(Wire.generatedImageNames("这句话里没有图片").isEmpty())
+        assertEquals(
+            listOf("dsh-img-1790320587465-xkkyab.png", "dsh-img-99-b2.jpg"),
+            Wire.generatedImageNames(
+                "见 dsh-img-1790320587465-xkkyab.png（重复一次 dsh-img-1790320587465-xkkyab.png）与 dsh-img-99-b2.jpg",
+            ),
+        )
+    }
+
+    @Test
     fun historyRunningTurnExposesItsStartTime() {
         // 重进正在跑的会话：秒数要用 turn/start 的真实时间续，不能从 0 重数。
         val items = JSONArray()

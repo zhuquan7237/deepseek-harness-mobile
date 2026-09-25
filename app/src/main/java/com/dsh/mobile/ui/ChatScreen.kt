@@ -474,6 +474,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 keyboard?.hide()
                 readerDoc = doc
             },
+            onOpenGenerated = openFile,
+            fetchImage = { name -> repo.fetchGeneratedImage(name) },
             onSaveCode = { lang, code ->
                 val where = saveTextToDownloads(context, codeFileName(lang), code)
                 if (where != null) repo.toast("已保存到 $where") else repo.toast("保存失败，已复制到剪贴板")
@@ -806,6 +808,8 @@ private fun MessageList(
     onOpenFiles: () -> Unit,
     onOpenExternal: (String, String) -> Unit,
     onViewSource: (SourceDoc) -> Unit,
+    onOpenGenerated: (SessionFile) -> Unit = {},
+    fetchImage: suspend (String) -> ByteArray? = { null },
     modifier: Modifier,
 ) {
     val palette = LocalDsh.current
@@ -847,7 +851,15 @@ private fun MessageList(
             when (entry) {
                 is DispEntry.One -> {
                     val row = entry.row
-                    val showActions = row.who == Role.ASSISTANT && entry.index == rows.lastIndex && !state.running
+                    // 动作按钮跟随最新一条回复：允许末尾跟着一张图片卡（图片生成场景），
+                    // 那时复制/重新生成按钮依然属于它上面的那段文字。
+                    val showActions = row.who == Role.ASSISTANT && !state.running && (
+                        entry.index == rows.lastIndex ||
+                            (
+                                entry.index == rows.lastIndex - 1 &&
+                                    rows.getOrNull(rows.lastIndex)?.who == Role.GENERATED_IMAGE
+                                )
+                        )
                     Box(Modifier.animateItem()) {
                         MessageRow(
                             row = row,
@@ -861,6 +873,8 @@ private fun MessageList(
                             onPreview = onPreview,
                             onOpenExternal = onOpenExternal,
                             onViewSource = onViewSource,
+                            onOpenGenerated = onOpenGenerated,
+                            fetchImage = fetchImage,
                         )
                     }
                 }
@@ -1158,6 +1172,8 @@ private fun MessageRow(
     onPreview: (Wire.Artifact) -> Unit = {},
     onOpenExternal: (String, String) -> Unit = { _, _ -> },
     onViewSource: (SourceDoc) -> Unit = {},
+    onOpenGenerated: (SessionFile) -> Unit = {},
+    fetchImage: suspend (String) -> ByteArray? = { null },
 ) {
 
     /** Characters drawn so far; the animation only runs for a freshly arrived reply. */
@@ -1274,6 +1290,11 @@ private fun MessageRow(
                 }
             }
         }
+        Role.GENERATED_IMAGE -> GeneratedImageBubble(
+            name = row.text,
+            fetch = fetchImage,
+            onOpen = { name, size -> onOpenGenerated(SessionFile(path = "@generated/$name", name = name, size = size, mtime = 0L)) },
+        )
         Role.NOTICE -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text(
                 row.text,

@@ -51,9 +51,11 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -591,3 +593,92 @@ fun inlineSvgPage(svg: String): String =
 .center::before{content:"";display:inline-block;height:100%;width:0;vertical-align:middle;}
 svg{display:inline-block;vertical-align:middle;max-width:92vw;height:auto;}</style></head>
 <body><div class="center">$svg</div></body></html>"""
+
+// --------------------------------------------------------------- 图片生成卡片
+
+/**
+ * 聊天里的「图片生成」卡片（引擎把产物存到电脑的 dsh-home/generated，
+ * 桥接通过 @generated/ 前缀提供）：缩略图用原生解码（和全屏预览共用缓存键，
+ * 点开零等待），取不到就如实提示、点一下重试 —— 不做假占位。
+ */
+@Composable
+fun GeneratedImageBubble(
+    name: String,
+    fetch: suspend (String) -> ByteArray?,
+    onOpen: (String, Long) -> Unit,
+) {
+    val palette = LocalDsh.current
+    val key = "@generated/$name@0"
+    var bitmap by remember(name) { mutableStateOf(PreviewCache.image(key)) }
+    var bytesSize by remember(name) { mutableLongStateOf(0L) }
+    var failed by remember(name) { mutableStateOf(false) }
+    var attempt by remember(name) { mutableIntStateOf(0) }
+    LaunchedEffect(name, attempt) {
+        if (bitmap != null) return@LaunchedEffect
+        failed = false
+        val bytes = fetch(name)
+        if (bytes == null) {
+            failed = true
+            return@LaunchedEffect
+        }
+        bytesSize = bytes.size.toLong()
+        val decoded = withContext(Dispatchers.Default) { decodePreviewBitmap(bytes) }
+        if (decoded == null) {
+            failed = true
+        } else {
+            PreviewCache.putImage(key, decoded)
+            bitmap = decoded
+        }
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 24.dp, end = 24.dp, top = 6.dp, bottom = 8.dp),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(palette.surface)
+                .clickable(enabled = bitmap != null || failed) {
+                    val ready = bitmap
+                    if (ready != null) onOpen(name, bytesSize) else attempt += 1
+                }
+                .padding(6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            val ready = bitmap
+            when {
+                ready != null -> Image(
+                    bitmap = ready.asImageBitmap(),
+                    contentDescription = "生成的图片",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Fit,
+                )
+                failed -> Text(
+                    "图片暂时读不到，点一下重试",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.textTertiary,
+                    modifier = Modifier.padding(vertical = 18.dp),
+                )
+                else -> Text(
+                    "正在读取图片…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.textTertiary,
+                    modifier = Modifier.padding(vertical = 18.dp),
+                )
+            }
+        }
+        Text(
+            "$name · 点开可预览 / 保存",
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.textTertiary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+        )
+    }
+}
