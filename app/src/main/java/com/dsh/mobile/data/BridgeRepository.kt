@@ -1266,6 +1266,8 @@ class BridgeRepository(context: Context) {
 
     private fun handleEvent(frame: JSONObject) {
         val s = _state.value
+        // 活性时间：设置页「连接状态」行显示「刚刚 / N 分钟前还有活动」
+        _state.update { it.copy(lastEventAt = System.currentTimeMillis()) }
         val sid = frame.optString("sessionId")
         // 审批只读（K2-A）：任何会话的审批事实都刷新本机审批视图；发生在当前会话里的
         // 审批同时触发历史重读（聊天里出现「等待你在电脑上审批」行）。
@@ -1822,12 +1824,12 @@ class BridgeRepository(context: Context) {
                 val found = Updater.check(client, _state.value.version, _state.value.base)
                 val skip = store.loadUpdateState().second
                 val visible = if (found != null && found.version == skip && !manual) null else found
-                _state.update { it.copy(updateChecking = false, update = visible) }
+                _state.update { it.copy(updateChecking = false, update = visible, updateCheckedAt = System.currentTimeMillis()) }
                 store.saveUpdateCheck(System.currentTimeMillis())
                 EventTrail.add("update manual=$manual → ${found?.version ?: "已最新"}（${found?.source ?: "-"}）")
                 if (manual) toast(if (found == null) "已是最新版本 ${_state.value.version}" else "发现新版本 ${found.version}")
             } catch (error: Exception) {
-                _state.update { it.copy(updateChecking = false, updateError = error.message ?: "网络错误") }
+                _state.update { it.copy(updateChecking = false, updateError = error.message ?: "网络错误", updateCheckedAt = System.currentTimeMillis()) }
                 if (manual) fail("update", "检查更新失败：${error.message ?: "网络错误"}")
             }
         }
@@ -1852,6 +1854,7 @@ class BridgeRepository(context: Context) {
             }
             val found = result.getOrNull()
             store.saveUpdateCheck(System.currentTimeMillis())
+            _state.update { it.copy(updateCheckedAt = System.currentTimeMillis()) }
             when {
                 found == null -> EventTrail.add("update: 已是最新 ${_state.value.version}")
                 found.version == skip -> EventTrail.add("update: ${found.version} 曾被\"稍后\"隐藏")

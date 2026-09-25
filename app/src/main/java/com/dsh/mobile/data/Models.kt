@@ -150,6 +150,8 @@ data class AppState(
     val server: ServerInfo? = null,
     val publicUrl: String = "",
     val conn: Conn = Conn.OFFLINE,
+    /** 最近一条桥接事件的时间——设置页「连接状态」行的活性指示。 */
+    val lastEventAt: Long = 0L,
     val scopes: List<String> = emptyList(),
     val pairing: Boolean = false,
     // sessions list
@@ -212,6 +214,8 @@ data class AppState(
     val update: UpdateInfo? = null,
     val updateChecking: Boolean = false,
     val updateError: String = "",
+    /** 上一次成功/失败检查更新的时间（设置页显示「X 分钟前检查」）。 */
+    val updateCheckedAt: Long = 0L,
     val updateProgress: Int = -1,
     // 错误日志（诊断）
     val logPending: Int = 0,
