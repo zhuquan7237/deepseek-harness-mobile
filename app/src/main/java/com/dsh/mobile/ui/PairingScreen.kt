@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -78,6 +80,7 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
     var deviceName by rememberSaveable { mutableStateOf(defaultDeviceName()) }
     // config lets the phone edit models and write API keys; on by default
     var withConfig by rememberSaveable { mutableStateOf(true) }
+    var showUpdate by remember { mutableStateOf(false) }
 
     // The scanner is its own screen (ScanScreen) and pairs on this form's
     // behalf, so it needs to know what the form currently holds.
@@ -126,7 +129,32 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             .padding(horizontal = 24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Spacer(Modifier.height(26.dp))
+        Spacer(Modifier.height(10.dp))
+        // 未配对也要能摸到更新与设置：用户反馈过"停在配对页就再也进不去设置、
+        // 收不到更新"。版本号本身就是更新入口，齿轮直通设置。
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = when {
+                    state.updateChecking -> "检查更新中…"
+                    state.update != null -> "有新版本 v${state.update?.version}"
+                    else -> "v${state.version}"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = if (state.update != null) palette.accent else palette.textTertiary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable(enabled = !state.updateChecking) {
+                        if (state.update != null) showUpdate = true else repo.checkUpdate(manual = true)
+                    }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+            Spacer(Modifier.weight(1f))
+            CircleButton(Icons.Outlined.Settings, "设置") { repo.openSettings() }
+        }
+        Spacer(Modifier.height(18.dp))
         WhaleMascot(
             resId = R.drawable.whale_wave,
             size = 148.dp,
@@ -145,6 +173,9 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             style = MaterialTheme.typography.bodyLarge,
             color = palette.textSecondary,
         )
+        state.update?.let { info ->
+            UpdateBanner(info = info, onOpen = { showUpdate = true }, onDismiss = { repo.dismissUpdate() })
+        }
         Spacer(Modifier.height(12.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -274,6 +305,10 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
                 .padding(horizontal = 6.dp, vertical = 6.dp),
         )
         Spacer(Modifier.height(28.dp))
+    }
+
+    if (showUpdate && state.update != null) {
+        UpdateSheet(state = state, repo = repo, onDismiss = { showUpdate = false })
     }
 }
 

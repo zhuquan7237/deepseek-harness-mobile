@@ -1,6 +1,7 @@
 package com.dsh.mobile
 
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -188,7 +189,14 @@ class EndToEndTest {
         composeRule.waitUntil(20_000) { anyText("模型配置") }
         composeRule.onAllNodesWithContentDescription("返回")[0].performClick()
         composeRule.waitUntil(30_000) { isOnSessionsScreen() }
-        composeRule.onAllNodesWithText("P1 mobile e2e", substring = true)[0].performClick()
+        // 列表里的会话标题会被引擎的 LLM 改写（fallback "P1 mobile e2e: reply with"
+        // → 智能标题 "Reply Pong to Mobile E2E Test"）——锚要同时认两种形态，
+        // 否则通道一恢复（标题 LLM 成功）测试就找不到行。
+        val titleAnchor = hasText("mobile e2e", substring = true, ignoreCase = true) or
+            hasText("Pong", substring = true) or
+            hasText("P1 mobile", substring = true)
+        composeRule.waitUntil(30_000) { composeRule.onAllNodes(titleAnchor).fetchSemanticsNodes().isNotEmpty() }
+        composeRule.onAllNodes(titleAnchor)[0].performClick()
         composeRule.waitUntil(30_000) { isOnChatScreen() }
         // 真机 bug：打开历史会话时顶栏显示"没有选择模型"。会话自己的模型必须被继承
         // （来自 projections.values.modelSelection，而不是 history 响应——那里没有这个字段）。

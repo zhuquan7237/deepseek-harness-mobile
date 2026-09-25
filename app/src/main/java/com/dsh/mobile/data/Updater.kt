@@ -23,6 +23,8 @@ data class UpdateInfo(
     val sha256: String = "",
     val size: Long = 0L,
     val source: String = "",
+    /** 备用下载地址（主地址网络失败时依序尝试；哈希校验保证正确性）。 */
+    val extraApkUrls: List<String> = emptyList(),
 )
 
 /**
@@ -42,6 +44,16 @@ object Updater {
      * 还没配对时才回退到这个公共地址。
      */
     const val FALLBACK_MANIFEST_URL = "https://m.zhuquan.xyz/mobile/app-update.json"
+
+    /**
+     * 还没配对时的更新源：维护者服务器上的公共镜像（和发布流水线同一份清单）。
+     * 两条线路互为备份——国内直连被当地网络掐掉时走 Cloudflare。
+     */
+    const val CN_MANIFEST = "https://cn.zhuquan.xyz:8443/dl/app-update.json"
+    const val CN_APK = "https://cn.zhuquan.xyz:8443/dl/dsh-mobile.apk"
+    const val CF_MANIFEST = "https://relay.zhuquan.xyz/dl/app-update.json"
+    const val CF_APK = "https://relay.zhuquan.xyz/dl/dsh-mobile.apk"
+    const val PUBLIC_APK = "https://m.zhuquan.xyz/mobile/dsh-mobile.apk"
 
     /** 配对地址 → 更新清单地址；空地址回退公共地址。 */
     fun manifestUrl(base: String): String {
@@ -73,14 +85,44 @@ object Updater {
     private fun score(version: String): Long =
         versionParts(version).take(4).fold(0L) { acc, part -> acc * 1000L + part }
 
-    /** The newest of (manifest, GitHub) that beats [currentVersion], or null. */
+    /**
+     * The newest of (bridge manifest, public mirrors, GitHub) that beats
+     * [currentVersion], or null. 每个源都试一遍，取版本最高的那个；
+     * 未配对时桥接清单跳过，公共镜像（服务器上的那份）顶上。
+     */
     suspend fun check(client: OkHttpClient, currentVersion: String, base: String = ""): UpdateInfo? =
         withContext(Dispatchers.IO) {
-            val manifest = runCatching { fetchManifest(client, base) }.getOrNull()
-            val github = runCatching { fetchGithub(client) }.getOrNull()
-            listOfNotNull(manifest, github)
+            val sources = ArrayList<UpdateInfo>()
+            val trimmed = base.trim().trimEnd('/')
+            fun probe(tag: String, url: String, fetch: () -> UpdateInfo?): UpdateInfo? = try {
+                val one = fetch()
+                android.util.Log.i("dsh-update", "源[$tag] $url → ${one?.version ?: "解析失败"}")
+                one
+            } catch (error: Exception) {
+                android.util.Log.i("dsh-update", "源[$tag] $url → ${error.javaClass.simpleName}: ${error.message}")
+                null
+            }
+            if (trimmed.isNotBlank()) {
+                probe("bridge", "$trimmed/mobile/app-update.json") {
+                    fetchManifestAt(client, "$trimmed/mobile/app-update.json", "$trimmed/mobile/dsh-mobile.apk")
+                }?.let(sources::add)
+            }
+            probe("cn", CN_MANIFEST) { fetchManifestAt(client, CN_MANIFEST, CN_APK) }?.let(sources::add)
+            probe("cf", CF_MANIFEST) { fetchManifestAt(client, CF_MANIFEST, CF_APK) }?.let(sources::add)
+            probe("github", "api.github.com") { fetchGithub(client) }?.let(sources::add)
+            val winner = sources
                 .filter { isNewer(it.version, currentVersion) }
                 .maxByOrNull { score(it.version) }
+            android.util.Log.i(
+                "dsh-update",
+                "check: 当前=$currentVersion 候选=${sources.map { it.version }} 结论=${winner?.version ?: "已最新"}",
+            )
+            if (winner == null) return@withContext null
+            // 下载地址候选：主地址 + 同源镜像 + 公共兜底（哈希校验兜底正确性）
+            val extras = listOf(CN_APK, CF_APK, PUBLIC_APK)
+                .filter { it != winner.apkUrl }
+                .distinct()
+            winner.copy(extraApkUrls = extras)
         }
 
     private fun get(client: OkHttpClient, url: String): String {
@@ -94,13 +136,21 @@ object Updater {
 
     /** The bridge-hosted manifest: tiny, no auth, no API quota. */
     fun fetchManifest(client: OkHttpClient, base: String = ""): UpdateInfo? {
-        val json = JSONObject(get(client, "${manifestUrl(base)}?t=${System.currentTimeMillis()}"))
+        val localBase = base.trim().trimEnd('/')
+        val apkOverride = if (localBase.isNotBlank()) "$localBase/mobile/dsh-mobile.apk" else null
+        return fetchManifestAt(client, manifestUrl(base), apkOverride)
+    }
+
+    /**
+     * 从任意清单地址取版本信息；[apkOverride] 指定"同源"的 APK 地址
+     * （桌面端安装包里带了一份，自建的用户不该跑到作者域名去下载）。
+     */
+    fun fetchManifestAt(client: OkHttpClient, url: String, apkOverride: String?): UpdateInfo? {
+        val json = JSONObject(get(client, "$url?t=${System.currentTimeMillis()}"))
         val version = json.optString("version")
         var apkUrl = json.optString("apkUrl")
         if (version.isBlank() || apkUrl.isBlank()) return null
-        // 在同一个源上取 APK：桌面端安装包里带了一份，自建的用户不该跑到作者域名去下载。
-        val localBase = base.trim().trimEnd('/')
-        if (localBase.isNotBlank()) apkUrl = "$localBase/mobile/dsh-mobile.apk"
+        if (!apkOverride.isNullOrBlank()) apkUrl = apkOverride
         return UpdateInfo(
             version = version,
             apkUrl = apkUrl,
@@ -143,9 +193,30 @@ object Updater {
         info: UpdateInfo,
         onProgress: (Int) -> Unit,
     ): File = withContext(Dispatchers.IO) {
+        // 主地址网络失败就依次换备用镜像；每个候选都要过尺寸 + sha256 校验。
+        val urls = (listOf(info.apkUrl) + info.extraApkUrls).distinct()
+        var last: Exception? = null
+        for (url in urls) {
+            try {
+                return@withContext downloadFrom(client, context, info, url, onProgress)
+            } catch (error: Exception) {
+                last = error
+                EventTrail.add("update 下载失败 ${url.take(70)}：${error.message?.take(80)}")
+            }
+        }
+        throw last ?: BridgeException("E_UPDATE", "没有可用的下载地址")
+    }
+
+    private fun downloadFrom(
+        client: OkHttpClient,
+        context: Context,
+        info: UpdateInfo,
+        url: String,
+        onProgress: (Int) -> Unit,
+    ): File {
         val dir = File(context.cacheDir, "updates").apply { mkdirs() }
         val target = File(dir, "dsh-mobile-${info.version}.apk")
-        val request = Request.Builder().url(info.apkUrl).header("User-Agent", UA).build()
+        val request = Request.Builder().url(url).header("User-Agent", UA).build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw BridgeException("E_UPDATE", "下载失败 HTTP ${response.code}")
             val body = response.body ?: throw BridgeException("E_UPDATE", "下载内容为空")
@@ -192,7 +263,7 @@ object Updater {
             }
         }
         onProgress(100)
-        target
+        return target
     }
 
     /** Whether this app is allowed to hand an APK to the system installer. */

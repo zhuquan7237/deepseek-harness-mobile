@@ -1,6 +1,7 @@
 package com.dsh.mobile.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,37 +39,67 @@ import com.dsh.mobile.data.UpdateInfo
 import com.dsh.mobile.ui.theme.LocalDsh
 
 /**
- * The banner that sits above the session list when a newer build exists. One
- * line, tappable, dismissible — an update should never be a modal interruption.
+ * The banner that announces a newer build. It must be *impossible to miss* —
+ * 用户反馈过"找不到更新入口"，所以它不是一行小字，而是一张带强调色描边、
+ * 有明确「立即更新」按钮的卡片（会话列表和配对页各挂一张）。
  */
 @Composable
 fun UpdateBanner(info: UpdateInfo, onOpen: () -> Unit, onDismiss: () -> Unit) {
     val palette = LocalDsh.current
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 2.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(palette.surface)
+            .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 2.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(palette.accent.copy(alpha = 0.12f))
+            .border(1.dp, palette.accent.copy(alpha = 0.55f), RoundedCornerShape(16.dp))
             .clickable(onClick = onOpen)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon(Icons.Outlined.ArrowUpward, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text("有新版本 ${info.version}", style = MaterialTheme.typography.bodyMedium, color = palette.textPrimary)
-            Text("点这里查看并更新", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Icon(
+                Icons.Outlined.ArrowUpward,
+                contentDescription = null,
+                tint = palette.accent,
+                modifier = Modifier.size(22.dp),
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                    "发现新版本 v${info.version}",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = palette.textPrimary,
+                )
+                Text(
+                    if (info.notes.isNotBlank()) info.notes.lineSequence().first().take(48) else "点此查看更新内容",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    maxLines = 1,
+                )
+            }
         }
-        Text(
-            "稍后",
-            style = MaterialTheme.typography.bodySmall,
-            color = palette.textSecondary,
-            modifier = Modifier
-                .clip(RoundedCornerShape(999.dp))
-                .clickable(onClick = onDismiss)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(palette.primaryBtn)
+                    .clickable(onClick = onOpen),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("立即更新", style = MaterialTheme.typography.bodyMedium, color = palette.onPrimaryBtn)
+            }
+            Text(
+                "稍后",
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.textSecondary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable(onClick = onDismiss)
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
     }
 }
 

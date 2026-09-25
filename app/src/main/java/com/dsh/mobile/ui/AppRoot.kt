@@ -51,6 +51,9 @@ private fun screenOf(state: AppState): Screen = when {
     state.view == View.SCAN -> Screen.SCAN
     // 日志页同样要能在未配对时进入——配对失败/连不上正是最需要日志的场景
     state.view == View.LOGS -> Screen.LOGS
+    // 设置页同理：停在配对页的用户需要「检查更新」和外观等入口（此前被下面
+    // 的 token==null 分支挡掉，表现为"点设置没反应"）。
+    state.view == View.SETTINGS -> Screen.SETTINGS
     state.token == null || state.repairing -> Screen.PAIRING
     state.view == View.MODELS -> Screen.MODELS
     state.view == View.APPROVALS -> Screen.APPROVALS

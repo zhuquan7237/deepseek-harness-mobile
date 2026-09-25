@@ -36,6 +36,7 @@ class WireTest {
         val payload = Wire.parsePairPayload("https://cn.zhuquan.xyz:8443/m/ab12cd34ef/mobile/?pair=ABCD-EFGH")
         assertEquals("ABCDEFGH", payload?.code)
         assertEquals("https://cn.zhuquan.xyz:8443/m/ab12cd34ef", payload?.base)
+        assertEquals("https://cn.zhuquan.xyz:8443/m/ab12cd34ef/mobile/?pair=ABCD-EFGH", payload?.raw)
     }
 
     @Test

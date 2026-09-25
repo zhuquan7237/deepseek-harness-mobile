@@ -744,7 +744,7 @@ fun isInjectedContext(text: String): Boolean =
         return found
     }
 
-    data class ScanPayload(val base: String?, val code: String)
+    data class ScanPayload(val base: String?, val code: String, val raw: String = "")
 
     /**
      * Interpret a scanned QR payload. Accepts, in order of likelihood:
@@ -773,7 +773,7 @@ fun isInjectedContext(text: String): Boolean =
         }
         val normalized = normalizeCode(code ?: return null)
         if (normalized.length !in 4..12) return null
-        return ScanPayload(base, normalized)
+        return ScanPayload(base, normalized, value)
     }
 
     /**

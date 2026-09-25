@@ -69,7 +69,7 @@ class ErrorLogTest {
         val e = ErrorLog.record(id = "ETRAIL", cat = "api", msg = "m")
         assertTrue(e.detail.contains("— 轨迹 —"))
         assertTrue(e.detail.contains("trail line 299"))
-        assertTrue("detail too long: ${e.detail.length}", e.detail.length <= 6000)
+        assertTrue("detail too long: ${e.detail.length}", e.detail.length <= 12000)
     }
 
     @Test

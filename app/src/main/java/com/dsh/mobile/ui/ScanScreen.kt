@@ -122,6 +122,7 @@ fun ScanScreen(repo: BridgeRepository) {
             payload.code,
             draft?.deviceName?.ifBlank { defaultDeviceName() } ?: defaultDeviceName(),
             draft?.withConfig ?: true,
+            raw = raw,
         )
     }
 

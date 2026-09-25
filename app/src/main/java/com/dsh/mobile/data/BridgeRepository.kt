@@ -135,6 +135,9 @@ class BridgeRepository(context: Context) {
             )
         }
         refreshLogCounts()
+        // 未配对也要自动查更新：停在配对页的用户同样要收到新版本提醒。
+        // 检查走公共镜像（服务器上的发布清单），不依赖任何人的电脑开着。
+        autoCheckUpdate()
         if (stored.token.isBlank() || stored.base.isBlank()) {
             _state.update { it.copy(ready = true, view = View.PAIRING, base = stored.base) }
             return
@@ -156,7 +159,6 @@ class BridgeRepository(context: Context) {
         }
         lastSeq = stored.seq
         bridgeEpoch = stored.epoch
-        autoCheckUpdate()
         val ok = refreshMeta(quiet = false)
         if (!ok && _state.value.token == null) return // meta said the token is gone
         connect()
@@ -174,7 +176,13 @@ class BridgeRepository(context: Context) {
     // --------------------------------------------------------------- pairing
 
     /** Pair with the desktop. Fills the store on success; toasts on failure. */
-    fun pair(rawBase: String, code: String, deviceName: String, withConfig: Boolean = true) {
+    fun pair(
+        rawBase: String,
+        code: String,
+        deviceName: String,
+        withConfig: Boolean = true,
+        raw: String? = null,
+    ) {
         val base = normalizeBase(rawBase)
         if (base.isEmpty()) {
             toast("请填写服务器地址")
@@ -188,7 +196,10 @@ class BridgeRepository(context: Context) {
         if (_state.value.pairing) return
         _state.update { it.copy(pairing = true) }
         scope.launch {
-            val tried = ArrayList<String>()
+            val attempts = ArrayList<PairAttempt>()
+            EventTrail.add(
+                "pair start base=$base code=${Wire.formatCode(normalized)} src=${raw?.take(180) ?: "手动输入"}"
+            )
             try {
                 val scopes = buildList {
                     add("read")
@@ -196,33 +207,44 @@ class BridgeRepository(context: Context) {
                     // config is what lets the phone edit models and write API keys
                     if (withConfig) add("config")
                 }
+                suspend fun attempt(url: String): JSONObject {
+                    val item = PairAttempt(url)
+                    attempts += item
+                    val startedAt = System.currentTimeMillis()
+                    try {
+                        val result = api.pair(
+                            url,
+                            normalized,
+                            deviceName.ifBlank { "Android 手机" },
+                            "Android ${Build.MODEL}",
+                            scopes,
+                        )
+                        item.millis = System.currentTimeMillis() - startedAt
+                        EventTrail.add("pair ok ${url.take(90)} (${item.millis}ms)")
+                        return result
+                    } catch (error: Exception) {
+                        item.error = error
+                        item.millis = System.currentTimeMillis() - startedAt
+                        EventTrail.add(
+                            "pair fail ${url.take(90)} ${error.javaClass.simpleName}: " +
+                                "${error.message?.take(90)} (${item.millis}ms)"
+                        )
+                        throw error
+                    }
+                }
                 // 中继两条线路（国内直连 cn:8443 / Cloudflare relay 域名）互为备份：
                 // 第一条被当地网络掐掉时（TLS 被中断——用户侧表现为"连不上"，例如
                 // connection closed），自动换另一条再试一次；桥接已经明确回话
                 //（配对码不对、电脑没开远程访问等）则不换线，避免误导。
                 var used = base
                 val result = try {
-                    tried += base
-                    api.pair(
-                        base,
-                        normalized,
-                        deviceName.ifBlank { "Android 手机" },
-                        "Android ${Build.MODEL}",
-                        scopes,
-                    )
+                    attempt(base)
                 } catch (blocked: BridgeException) {
                     throw blocked
                 } catch (network: Exception) {
                     val alt = Wire.alternateRelayBase(base) ?: throw network
-                    tried += alt
                     used = alt
-                    api.pair(
-                        alt,
-                        normalized,
-                        deviceName.ifBlank { "Android 手机" },
-                        "Android ${Build.MODEL}",
-                        scopes,
-                    )
+                    attempt(alt)
                 }
                 val token = result.optString("token")
                 val device = result.optJSONObject("device")
@@ -256,16 +278,67 @@ class BridgeRepository(context: Context) {
                 val message = if (error is BridgeException) {
                     error.message
                 } else {
-                    // 网络层失败：给出人话 + 原始原因（原始原因进日志详情，便于定位）
+                    // 网络层失败：给出人话 + 原始原因（细节进日志，必须一次收集够）
                     "连不上服务器（${error.message ?: "网络错误"}）"
                 }
-                fail(
-                    "pair",
-                    "配对失败：$message",
-                    "尝试过的地址：${if (tried.isEmpty()) base else tried.joinToString("、")}\n原始异常：$error",
-                )
+                fail("pair", "配对失败：$message", pairDiagnostics(base, normalized, raw, attempts, error))
             }
         }
+    }
+
+    /** 每次配对尝试的现场记录：地址、耗时、异常。 */
+    private class PairAttempt(val url: String, var error: Exception? = null, var millis: Long = 0)
+
+    /**
+     * 配对失败的完整诊断块（用户要求：日志必须"一次收集够"，拿一条就能定位）。
+     * 含：环境（版本/设备/网络）、扫码原文、解析结果、每次尝试的结果与 DNS、
+     * 最终异常与堆栈头。ErrorLog 会在这之后自动附上事件轨迹。
+     */
+    private fun pairDiagnostics(
+        base: String,
+        code: String,
+        raw: String?,
+        attempts: List<PairAttempt>,
+        error: Exception,
+    ): String {
+        val sb = StringBuilder()
+        sb.appendLine("— 配对诊断 —")
+        sb.appendLine("应用: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})${if (BuildConfig.DEBUG) " debug" else ""}")
+        sb.appendLine(
+            "设备: ${Build.MANUFACTURER} ${Build.MODEL} / Android ${Build.VERSION.RELEASE}(${Build.VERSION.SDK_INT}) / " +
+                (Build.SUPPORTED_ABIS.firstOrNull() ?: "?")
+        )
+        sb.appendLine(NetDiag.capture(appContext))
+        sb.appendLine("来源: " + (raw?.let { "扫码 raw=$it" } ?: "手动输入"))
+        sb.appendLine("解析: base=$base code=${Wire.formatCode(code)}")
+        if (attempts.isEmpty()) {
+            sb.appendLine("尝试: 未发起（解析或参数校验阶段失败）")
+        } else {
+            attempts.forEachIndexed { index, item ->
+                sb.appendLine("尝试 ${index + 1}: ${item.url}")
+                val err = item.error
+                when {
+                    err == null ->
+                        sb.appendLine("  结果: 成功（失败发生在后续响应解析阶段）")
+                    err is BridgeException ->
+                        sb.appendLine("  结果: 已到达电脑侧，被明确拒绝 → ${err.code}: ${err.message} (${item.millis}ms)")
+                    else -> {
+                        sb.appendLine("  结果: ${NetDiag.classify(err)} / ${err.javaClass.name}: ${err.message} (${item.millis}ms)")
+                        hostOf(item.url)?.let { sb.appendLine("  DNS: ${NetDiag.dns(it)}") }
+                    }
+                }
+            }
+        }
+        sb.appendLine("最终异常: ${error.javaClass.name}: ${error.message}")
+        sb.appendLine("堆栈头:")
+        sb.appendLine(error.stackTraceToString().take(1800))
+        return sb.toString()
+    }
+
+    private fun hostOf(url: String): String? = try {
+        java.net.URI(url).host
+    } catch (_: Exception) {
+        null
     }
 
     /** Forget the binding locally (the desktop keeps its record until revoked). */
@@ -1751,6 +1824,7 @@ class BridgeRepository(context: Context) {
                 val visible = if (found != null && found.version == skip && !manual) null else found
                 _state.update { it.copy(updateChecking = false, update = visible) }
                 store.saveUpdateCheck(System.currentTimeMillis())
+                EventTrail.add("update manual=$manual → ${found?.version ?: "已最新"}（${found?.source ?: "-"}）")
                 if (manual) toast(if (found == null) "已是最新版本 ${_state.value.version}" else "发现新版本 ${found.version}")
             } catch (error: Exception) {
                 _state.update { it.copy(updateChecking = false, updateError = error.message ?: "网络错误") }
@@ -1759,13 +1833,33 @@ class BridgeRepository(context: Context) {
         }
     }
 
+    private var updateCheckedThisRun = false
+
+    /**
+     * 用户要求：每次进入软件自动检测更新（未配对也要检测——走服务器公共镜像，
+     * 不依赖任何人的电脑开着）。每次进程生命周期只查一次；用户点过"稍后"的
+     * 版本不再弹（手动检查仍可见）。
+     */
     private fun autoCheckUpdate() {
+        if (updateCheckedThisRun) return
+        updateCheckedThisRun = true
         scope.launch {
-            val (last, _) = store.loadUpdateState()
-            if (System.currentTimeMillis() - last < 6 * 60 * 60 * 1000L) return@launch
-            val found = runCatching { Updater.check(client, _state.value.version, _state.value.base) }.getOrNull()
+            EventTrail.add("update: 启动自动检查（base=${_state.value.base.ifBlank { "-" }}）")
+            val skip = store.loadUpdateState().second
+            val result = runCatching { Updater.check(client, _state.value.version, _state.value.base) }
+            result.exceptionOrNull()?.let {
+                EventTrail.add("update: 检查失败 ${it.javaClass.simpleName}: ${it.message?.take(100)}")
+            }
+            val found = result.getOrNull()
             store.saveUpdateCheck(System.currentTimeMillis())
-            if (found != null) _state.update { it.copy(update = found) }
+            when {
+                found == null -> EventTrail.add("update: 已是最新 ${_state.value.version}")
+                found.version == skip -> EventTrail.add("update: ${found.version} 曾被\"稍后\"隐藏")
+                else -> {
+                    _state.update { it.copy(update = found) }
+                    EventTrail.add("update: 发现 ${found.version}（源 ${found.source}）")
+                }
+            }
         }
     }
 

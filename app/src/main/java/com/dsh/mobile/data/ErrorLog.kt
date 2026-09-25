@@ -71,7 +71,7 @@ object ErrorLog {
     private const val TAG = "dsh-log"
     private const val FILE_NAME = "logs/error-log.jsonl"
     private const val MAX_ENTRIES = 200
-    private const val MAX_DETAIL = 6000
+    private const val MAX_DETAIL = 12000
 
     private val lock = Any()
     private var file: File? = null
