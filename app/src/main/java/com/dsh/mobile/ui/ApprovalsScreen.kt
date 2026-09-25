@@ -51,7 +51,7 @@ fun ApprovalsScreen(state: AppState, repo: BridgeRepository) {
             Text("审批", style = MaterialTheme.typography.titleLarge, color = palette.textPrimary)
         }
         Text(
-            "当前版本仅支持查看，请在电脑上处理。",
+            "电脑上的操作停下来等你确认；当前版本请到电脑上处理。",
             style = MaterialTheme.typography.bodySmall,
             color = palette.textSecondary,
             modifier = Modifier.padding(bottom = 8.dp),
@@ -62,7 +62,7 @@ fun ApprovalsScreen(state: AppState, repo: BridgeRepository) {
                 state.approvals.isEmpty() && !state.approvalsComplete -> item { ApprovalHint("连接后查看审批（状态待核实）") }
                 state.approvals.isEmpty() -> item { ApprovalHint("暂无待审批") }
                 else -> {
-                    item { SectionHeader("等待你在电脑上审批", Modifier.padding(start = 0.dp)) }
+                    item { SectionHeader("等待你确认", Modifier.padding(start = 0.dp)) }
                     items(state.approvals, key = { it.approvalId }) { approval ->
                         ApprovalCard(approval, pending = true)
                     }
@@ -119,7 +119,7 @@ private fun ApprovalCard(approval: ApprovalInfo, pending: Boolean) {
             val timeText = Wire.timeText(at)
             Text(
                 buildString {
-                    append(if (pending) "等待电脑端处理" else Wire.approvalResolutionText(approval.resolution))
+                    append(if (pending) "等待中" else Wire.approvalResolutionText(approval.resolution))
                     if (timeText.isNotEmpty()) append(" · ").append(timeText)
                 },
                 style = MaterialTheme.typography.bodySmall,

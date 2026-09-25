@@ -98,16 +98,16 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
                 onClick = { repo.openModels() },
             )
 
-            SectionHeader("安全", Modifier.padding(start = 0.dp))
-            SettingsAction(
-                label = "审批",
-                value = when {
-                    !state.approvalsLoaded -> "未读取"
-                    state.approvals.isNotEmpty() -> "${state.approvals.size} 项等待电脑端审批 · 仅支持查看"
-                    else -> "暂无待审批 · 仅支持查看"
-                },
-                onClick = { repo.openApprovals() },
-            )
+            // 审批：不给常态入口——全权放行模式下审批不会产生，摆一个永远为空的入口
+            // 只会让人困惑（真机反馈）。只有电脑上真有操作停下来等你确认时，这里才出现一行。
+            if (state.approvals.isNotEmpty()) {
+                SectionHeader("安全", Modifier.padding(start = 0.dp))
+                SettingsAction(
+                    label = "有操作等待审批",
+                    value = "${state.approvals.size} 项 · 去处理",
+                    onClick = { repo.openApprovals() },
+                )
+            }
 
             SectionHeader("外观", Modifier.padding(start = 0.dp))
             ThemeSegmented(state.theme) { repo.setTheme(it) }
@@ -169,8 +169,6 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
                     if (state.update != null) showUpdate = true else repo.checkUpdate(manual = true)
                 },
             )
-            // N1 0.2.64 P1：审批能力诚实说明——不给假闭环。
-            SettingsValue("手机审批", "暂不支持，请在电脑端处理")
 
             // 调试用的原始信息收进「诊断」：连的是哪台电脑、事件流状态、桥接版本
             SectionHeader("诊断信息", Modifier.padding(start = 0.dp))
