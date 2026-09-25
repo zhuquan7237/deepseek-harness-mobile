@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
@@ -451,16 +452,22 @@ private fun SessionRow(session: SessionSummary, onClick: () -> Unit, onLongClick
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (session.running) {
+                        // J2 处方：运行态不用朱砂（朱砂只做印记）；图标+中文双编码，双主题同一语义映射。
                         Row(
                             Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(palette.accent.copy(alpha = 0.16f))
-                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(palette.surfaceHi)
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Box(Modifier.size(5.dp).clip(CircleShape).background(palette.accent))
-                            Text("正在执行", style = MaterialTheme.typography.labelSmall, color = palette.accent)
+                            Icon(
+                                Icons.Outlined.PlayCircleOutline,
+                                contentDescription = null,
+                                tint = palette.textSecondary,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text("正在执行", style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
                         }
                     }
                     if (session.fileCount > 0) {

@@ -71,6 +71,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material.icons.outlined.CloseFullscreen
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -1642,6 +1643,8 @@ private fun Composer(
                     tint = palette.textPrimary,
                     contentDescription = "添加图片或文件",
                     enabled = !state.sending,
+                    size = 44.dp,
+                    iconSize = 24.dp,
                 ) { onAddAttachment() }
             }
             Spacer(Modifier.width(2.dp))
@@ -1724,33 +1727,11 @@ private fun Composer(
             if (state.running) {
                 // 运行中也不白打字：可以「插话」引导当前任务，或「排队」等它跑完
                 if (draft.isNotBlank() && attachments.isEmpty()) {
-                    var inboxMenu by remember { mutableStateOf(false) }
-                    Box {
-                        Row(
-                            Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .clickable(enabled = !state.sending) { inboxMenu = true }
-                                .heightIn(min = 48.dp)
-                                .padding(horizontal = 14.dp)
-                                .semantics { contentDescription = "插话" },
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Icon(
-                                Icons.Outlined.ArrowUpward,
-                                contentDescription = null,
-                                tint = palette.primaryBtn,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Text("插话", style = MaterialTheme.typography.labelLarge, color = palette.primaryBtn)
-                        }
-                        DropdownMenu(
-                            expanded = inboxMenu,
-                            onDismissRequest = { inboxMenu = false },
-                            containerColor = palette.surface,
-                        ) {
-                            InboxAction("插话", "立即引导当前任务（下一步生效）") {
-                                inboxMenu = false
+                    // 「插话」一触直达（J3 处方：常用提交不进二级菜单）；排队在下方工具行。
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable(enabled = !state.sending) {
                                 val text = draft.trim()
                                 draft = ""
                                 composerExpanded = false
@@ -1759,17 +1740,21 @@ private fun Composer(
                                     if (!ok) draft = text
                                 }
                             }
-                            InboxAction("排队", "等当前任务跑完后自动发送") {
-                                inboxMenu = false
-                                val text = draft.trim()
-                                draft = ""
-                                composerExpanded = false
-                                scope.launch {
-                                    val ok = repo.sendInbox(text, "queue")
-                                    if (!ok) draft = text
-                                }
-                            }
-                        }
+                            .heightIn(min = 48.dp)
+                            .widthIn(min = 88.dp)
+                            .padding(horizontal = 14.dp)
+                            .semantics { contentDescription = "插话" },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        Icon(
+                            Icons.Outlined.ArrowUpward,
+                            contentDescription = null,
+                            tint = palette.primaryBtn,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("插话", style = MaterialTheme.typography.labelLarge, color = palette.primaryBtn)
                     }
                     Spacer(Modifier.width(4.dp))
                 }
@@ -1808,6 +1793,7 @@ private fun Composer(
                             }
                         }
                         .heightIn(min = 48.dp)
+                        .widthIn(min = 88.dp)
                         .padding(horizontal = 16.dp)
                         .semantics { contentDescription = "发送" },
                     verticalAlignment = Alignment.CenterVertically,
@@ -1850,6 +1836,37 @@ private fun Composer(
                     ) { composerExpanded = !composerExpanded }
                     Spacer(Modifier.width(2.dp))
                     ComposerModelChip(state = state, onClick = onOpenModels)
+                    if (state.running && draft.isNotBlank() && attachments.isEmpty()) {
+                        Spacer(Modifier.width(8.dp))
+                        Row(
+                            Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .clickable(enabled = !state.sending) {
+                                    val text = draft.trim()
+                                    draft = ""
+                                    composerExpanded = false
+                                    scope.launch {
+                                        val ok = repo.sendInbox(text, "queue")
+                                        if (!ok) draft = text
+                                    }
+                                }
+                                .heightIn(min = 48.dp)
+                                .widthIn(min = 88.dp)
+                                .padding(horizontal = 14.dp)
+                                .semantics { contentDescription = "排队" },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            Icon(
+                                Icons.Outlined.PlaylistAdd,
+                                contentDescription = null,
+                                tint = palette.textPrimary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("排队", style = MaterialTheme.typography.labelLarge, color = palette.textPrimary)
+                        }
+                    }
                 }
             }
         }
