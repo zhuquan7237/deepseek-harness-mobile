@@ -1,0 +1,128 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="katex.min.css">
+<style>
+  html, body {
+    margin: 0; padding: 0; background: transparent;
+    /* 禁止 WebView 的字体自动放大（font boosting）：窄视口下它会把字号偷偷放大，
+       量出来的尺寸和实际画出来的对不上（抓图出现巨字/切片就是这个原因）。 */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  body { overflow: hidden; }
+  /* 公式容器钉死在视口左上角：普通流里的元素会被 Chromium 的滚动/视口偏移带走
+     （实机上出现过公式被推到 x<0、只剩右半截的怪象） */
+  #wrap { position: fixed; left: 0; top: 0; }
+  #h { display: inline-block; color: #000; padding: 0; margin: 0; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="h"></div></div>
+<script src="katex.min.js"></script>
+<script>
+  // 渲染辅助页：把一段 LaTeX 画成 DOM，调用方（Kotlin）负责量尺寸、截图。
+  // 字体没就绪时量出来的宽高是错的 —— 所以先把 KaTeX 用到的字族全部 load 完再放行。
+  window.__ready = false;
+  (function () {
+    var fams = ['KaTeX_AMS', 'KaTeX_Caligraphic', 'KaTeX_Fraktur', 'KaTeX_Main',
+                'KaTeX_Math', 'KaTeX_SansSerif', 'KaTeX_Script', 'KaTeX_Size1',
+                'KaTeX_Size2', 'KaTeX_Size3', 'KaTeX_Size4', 'KaTeX_Typewriter'];
+    var jobs = [];
+    for (var i = 0; i < fams.length; i++) {
+      try {
+        jobs.push(document.fonts.load('10px ' + fams[i]));
+        jobs.push(document.fonts.load('italic 10px ' + fams[i]));
+        jobs.push(document.fonts.load('bold 10px ' + fams[i]));
+      } catch (e) { /* 老内核没有 fonts.load 就退到 ready 兜底 */ }
+    }
+    Promise.allSettled(jobs).then(function () { return document.fonts.ready; }).then(function () {
+      window.__ready = true;
+    }).catch(function () { window.__ready = true; });
+  })();
+
+  // 渲染一段公式并返回矩形尺寸；失败返回 null（Kotlin 侧保留原文展示）。
+  window.__render = function (latex, display, color, cssPx) {
+    try {
+      var h = document.getElementById('h');
+      if (!h) return null;
+      window.scrollTo(0, 0);
+      h.style.color = color;
+      h.style.fontSize = cssPx + 'px';
+      h.innerHTML = '';
+      katex.render(latex, h, {
+        displayMode: !!display,
+        throwOnError: false,
+        strict: 'ignore',
+        output: 'html'
+      });
+      var r = h.getBoundingClientRect();
+      if (window.__diag) {
+        try {
+          console.log('DIAG ' + JSON.stringify({
+            fs: getComputedStyle(h).fontSize,
+            cw: document.documentElement.clientWidth,
+            iw: window.innerWidth,
+            sx: window.scrollX,
+            sy: window.scrollY,
+            vvx: window.visualViewport ? window.visualViewport.offsetLeft : null,
+            vvy: window.visualViewport ? window.visualViewport.offsetTop : null,
+            vvs: window.visualViewport ? window.visualViewport.scale : null,
+            dpr: window.devicePixelRatio
+          }));
+        } catch (e) {}
+      }
+      return {
+        x: Math.floor(r.left),
+        y: Math.floor(r.top),
+        w: Math.ceil(r.width),
+        h: Math.ceil(r.height),
+        vw: document.documentElement.clientWidth,
+        vvs: window.visualViewport ? window.visualViewport.scale : 1,
+        dpr: window.devicePixelRatio
+      };
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // Kotlin 把 LaTeX 以 base64(UTF-8) 传进来 —— 反斜杠、引号、中文都不用操心转义。
+  window._u = function (b) {
+    var s = atob(b), a = [];
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c < 128) { a.push(String.fromCharCode(c)); }
+      else if (c > 191 && c < 224) { a.push(String.fromCharCode((c & 31) << 6 | s.charCodeAt(++i) & 63)); }
+      else { a.push(String.fromCharCode((c & 15) << 12 | (s.charCodeAt(++i) & 63) << 6 | s.charCodeAt(++i) & 63)); }
+    }
+    return a.join('');
+  };
+
+  // 让浏览器把新内容光栅化干净：连续两帧 requestAnimationFrame 后才算 settled。
+  window.__settled = true;
+  window.__settle = function () {
+    window.__settled = false;
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { window.__settled = true; });
+    });
+  };
+
+  // 调试钩子：math.html?t=<urlencoded LaTeX>&display=1 —— 页面载入后直接渲染一条，
+  // 方便在桌面浏览器里验证页面本身（不经过 App）。
+  (function () {
+    var m = /[?&]t=([^&]+)/.exec(location.search);
+    if (!m) return;
+    var latex = decodeURIComponent(m[1]);
+    var isDisplay = /[?&]display=1/.test(location.search);
+    var wait = setInterval(function () {
+      if (window.__ready) {
+        clearInterval(wait);
+        window.__render(latex, isDisplay, '#111111', 22);
+        window.__settle();
+      }
+    }, 50);
+  })();
+</script>
+</body>
+</html>

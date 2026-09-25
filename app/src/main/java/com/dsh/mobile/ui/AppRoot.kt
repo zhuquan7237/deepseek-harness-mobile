@@ -77,6 +77,9 @@ fun AppRoot(repo: BridgeRepository) {
         // 而不是「返回后回到顶部」——那一下最伤「没离开过」的自然感。
         val sessionsScroll = rememberLazyListState()
         Box(Modifier.fillMaxSize().background(palette.bg)) {
+            // 数学公式的隐藏渲染 WebView：贴在底层当“暗房”（不可见、不接交互），
+            // 只有真出现公式时才挂上；渲染好的公式以图片形式插进消息正文（见 MathView.kt）
+            MathRenderHost()
             AnimatedContent(
                 targetState = screenOf(state),
                 transitionSpec = {

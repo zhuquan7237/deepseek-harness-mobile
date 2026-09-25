@@ -80,4 +80,79 @@ class MarkdownTest {
         val blocks = Markdown.parse("说明文字")
         assertEquals(MdBlock.Para("说明文字"), blocks.single())
     }
+
+    // ---------------------------------------------------------------- 数学公式
+
+    @Test
+    fun displayMathBlockMultiline() {
+        // 用户真机那条积分题的原文结构：\[ 单独一行 … \] 单独一行
+        val md = "设所求积分为\n\\[\nI=\\iint_D y\\,d\\sigma.\n\\]\n\n由于 \\(D=D_1\\setminus D_2\\)，所以"
+        val blocks = Markdown.parse(md)
+        assertEquals(MdBlock.Para("设所求积分为"), blocks[0])
+        assertEquals(MdBlock.Formula("I=\\iint_D y\\,d\\sigma."), blocks[1])
+        assertEquals(MdBlock.Para("由于 \\(D=D_1\\setminus D_2\\)，所以"), blocks[2])
+    }
+
+    @Test
+    fun displayMathSingleLine() {
+        val f = Markdown.parse("\\[ x+y=a. \\]").single() as MdBlock.Formula
+        assertEquals("x+y=a.", f.latex)
+    }
+
+    @Test
+    fun dollarDollarBlock() {
+        val f = Markdown.parse("$$\n\\frac{|1-a|}{\\sqrt2}=1.\n$$").single() as MdBlock.Formula
+        assertEquals("\\frac{|1-a|}{\\sqrt2}=1.", f.latex)
+    }
+
+    @Test
+    fun unclosedDisplayMathFallsBackToText() {
+        val blocks = Markdown.parse("\\[\nI=x\n后面还有普通文字")
+        assertTrue(blocks.none { it is MdBlock.Formula })
+        assertTrue(blocks.isNotEmpty() && blocks.all { it is MdBlock.Para })
+    }
+
+    @Test
+    fun inlineParenMath() {
+        val spans = Markdown.inlines("半圆 \\(D_2\\) 的圆心为 \\(C(1,0)\\)。")
+        val math = spans.filter { it.math }
+        assertEquals(listOf("D_2", "C(1,0)"), math.map { it.text })
+        assertTrue(math.none { it.display })
+        assertEquals("半圆 D_2 的圆心为 C(1,0)。", spans.joinToString("") { it.text })
+    }
+
+    @Test
+    fun mathContentIsNotMangledByEmphasis() {
+        val spans = Markdown.inlines("求 \\(S_{D_1}=\\frac{a^2}{2}\\) 的值")
+        assertEquals("S_{D_1}=\\frac{a^2}{2}", spans.single { it.math }.text)
+        assertFalse(spans.any { it.italic || it.bold })
+    }
+
+    @Test
+    fun displayMathInsideParagraphKeepsDisplayFlag() {
+        val spans = Markdown.inlines("斜边方程为 \\[ x+y=a. \\] 半圆与它相切")
+        assertTrue(spans.single { it.math }.display)
+    }
+
+    @Test
+    fun dollarInlineAndCurrencyGuard() {
+        val spans = Markdown.inlines("当 \$x>0\$ 时价格是 \$5-\$10 之间")
+        assertEquals(listOf("x>0"), spans.filter { it.math }.map { it.text })
+        assertEquals("当 x>0 时价格是 \$5-\$10 之间", spans.joinToString("") { it.text })
+    }
+
+    @Test
+    fun escapedDollarStaysLiteral() {
+        val spans = Markdown.inlines("价格是 \\$5 起步")
+        assertTrue(spans.none { it.math })
+        assertEquals("价格是 $5 起步", spans.joinToString("") { it.text })
+    }
+
+    @Test
+    fun imageSyntaxDegradesToLinkNotLiteral() {
+        val spans = Markdown.inlines("看图 ![鹈鹕](https://a.b/p.png) 结束")
+        val link = spans.single { it.link != null }
+        assertEquals("鹈鹕", link.text)
+        assertFalse(spans.joinToString("") { it.text }.contains("!["))
+    }
 }
