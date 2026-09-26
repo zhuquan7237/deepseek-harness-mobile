@@ -82,9 +82,6 @@ object Updater {
         return false
     }
 
-    private fun score(version: String): Long =
-        versionParts(version).take(4).fold(0L) { acc, part -> acc * 1000L + part }
-
     /**
      * The newest of (bridge manifest, public mirrors, GitHub) that beats
      * [currentVersion], or null. 每个源都试一遍，取版本最高的那个；
@@ -110,9 +107,11 @@ object Updater {
             probe("cn", CN_MANIFEST) { fetchManifestAt(client, CN_MANIFEST, CN_APK) }?.let(sources::add)
             probe("cf", CF_MANIFEST) { fetchManifestAt(client, CF_MANIFEST, CF_APK) }?.let(sources::add)
             probe("github", "api.github.com") { fetchGithub(client) }?.let(sources::add)
+            // 冠军用与 isNewer 同一套逐段比较来挑。旧实现用 score() 折叠成整数，
+            // 「0.3」和「0.2.77」位数不同会被编码成 3 和 2077——跨格式比大小选错源。
             val winner = sources
                 .filter { isNewer(it.version, currentVersion) }
-                .maxByOrNull { score(it.version) }
+                .reduceOrNull { best, next -> if (isNewer(next.version, best.version)) next else best }
             android.util.Log.i(
                 "dsh-update",
                 "check: 当前=$currentVersion 候选=${sources.map { it.version }} 结论=${winner?.version ?: "已最新"}",
