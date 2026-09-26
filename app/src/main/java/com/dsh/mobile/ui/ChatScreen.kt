@@ -479,6 +479,9 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 // S2 §3.2：点中部打开「会话设置」（电脑/连接/模型/重连都在里面）
                 onClick = { showSettings = true },
             )
+            // 用户要求：对话页右上角直达「新建对话」——不用先退回会话列表再点新建。
+            // 复用 createSession()：先打开新会话（不等网络），默认模型后台套上。
+            CircleButton(Icons.Outlined.Add, "新建对话", container = false, size = 48.dp, iconSize = 24.dp) { repo.createSession() }
             CircleButton(Icons.Outlined.MoreVert, "更多", container = false, size = 48.dp, iconSize = 22.dp) { showActions = true }
         }
         MessageList(
