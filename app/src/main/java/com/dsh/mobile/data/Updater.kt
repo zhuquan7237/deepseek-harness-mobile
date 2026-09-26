@@ -108,7 +108,7 @@ object Updater {
             probe("cf", CF_MANIFEST) { fetchManifestAt(client, CF_MANIFEST, CF_APK) }?.let(sources::add)
             probe("github", "api.github.com") { fetchGithub(client) }?.let(sources::add)
             // 冠军用与 isNewer 同一套逐段比较来挑。旧实现用 score() 折叠成整数，
-            // 「0.3」和「0.2.77」位数不同会被编码成 3 和 2077——跨格式比大小选错源。
+            // 段数不一致的编号（历史格式混用）会被折叠错位——跨格式比大小选错源。
             val winner = sources
                 .filter { isNewer(it.version, currentVersion) }
                 .reduceOrNull { best, next -> if (isNewer(next.version, best.version)) next else best }
