@@ -2,6 +2,7 @@ package com.dsh.mobile.ui
 
 import androidx.compose.ui.text.font.FontFamily
 import android.graphics.drawable.Drawable
+import android.util.Log
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -1156,10 +1157,35 @@ private fun MessageList(
     LaunchedEffect(userRows) {
         if (userRows <= 0) return@LaunchedEffect
         // 等新项完成测量再滚；瞬时置底（动画扫长历史会糊成一片）。
+        // 目标用 display.size（当前组合帧的最新列表），不用 layoutInfo 里上一次测量的旧值。
         withFrameNanos { }
         withFrameNanos { }
-        val total = listState.layoutInfo.totalItemsCount
-        if (total > 0) listState.scrollToItem(total - 1)
+        if (display.isNotEmpty()) listState.scrollToItem(display.size - 1)
+    }
+    // ── 防「翻看时被拽回顶部」保险丝 ──────────────────────────────────────
+    // LazyColumn 在 keys/测量变动的极端时序下偶发把滚动位置重置到 0（真机反馈
+    // 「流式中翻到最下面被闪回顶部」）。没有任何用户滚动时，firstVisibleItemIndex
+    // 从深处骤降到 0/1、且内容没有整体变短 → 判为异常跳变，立即滚回原处。
+    // 用户自己在滚（1.5s 内）或内容真的变短（重进会话/清空）时不拦。
+    var jumpAnchor by remember { mutableIntStateOf(0) }
+    var lastGestureAt by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling) lastGestureAt = System.currentTimeMillis()
+        }
+    }
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex to listState.layoutInfo.totalItemsCount
+        }.collect { (idx, total) ->
+            val userActive = System.currentTimeMillis() - lastGestureAt < 1500
+            if (idx <= 1 && jumpAnchor >= 6 && !userActive && total >= jumpAnchor) {
+                Log.i("dsh-chat", "jump-back guard: restore $jumpAnchor (from $idx)")
+                listState.scrollToItem(jumpAnchor)
+            } else {
+                jumpAnchor = idx
+            }
+        }
     }
     LaunchedEffect(itemCount, lastLiveLength) {
         // `layoutInfo` can still describe the *previous* (empty) layout on the first
@@ -1174,7 +1200,7 @@ private fun MessageList(
         val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
         // 原来是"最后一条正好可见才跟随"：新一条插入的瞬间旧底会变成 total-2，
         // 判断永远差一条，发送后就不跟了。放宽到"最后两条内"都跟随。
-        if (lastVisible >= total - 2) listState.scrollToItem(total - 1)
+        if (lastVisible >= total - 2) listState.scrollToItem((display.size - 1).coerceAtLeast(0))
     }
 }
 
@@ -1182,8 +1208,14 @@ private fun MessageList(
 private sealed interface DispEntry {
     val key: String
 
-    data class One(val row: ChatRow, val index: Int) : DispEntry {
-        override val key: String get() = "row:$index:" + row.who + ":" + row.text.hashCode()
+    /**
+     * 单条消息行。key 必须只由内容决定——绝不含 index：流式期间行会不断追加/重排，
+     * 含 index 的 key 会让 LazyColumn 找不到滚动锚点，用户翻看时位置被重置
+     * （真机反馈「翻到最下面被闪回顶部」）。同内容重复出现由 buildDisplay 加 #n 去重。
+     */
+    data class One(val row: ChatRow, val index: Int, private val anchorKey: String = "") : DispEntry {
+        override val key: String
+            get() = anchorKey.ifEmpty { "row:" + row.who + ":" + row.time + ":" + row.text.length }
     }
 
     data class Trace(val block: Wire.TraceBlock, val open: Boolean, val live: Boolean) : DispEntry {
@@ -1203,18 +1235,26 @@ private fun buildDisplay(
     running: Boolean,
 ): List<DispEntry> {
     val out = ArrayList<DispEntry>(rows.size)
+    // 行 key 的重复计数：同一内容在同一列表里出现多次时加后缀，保证唯一且不依赖位置。
+    val seen = HashMap<String, Int>()
+    fun stableKey(row: ChatRow): String {
+        val base = "${row.who}:${row.time}:${row.text.length}"
+        val n = (seen[base] ?: 0) + 1
+        seen[base] = n
+        return if (n == 1) "row:$base" else "row:$base#$n"
+    }
     var i = 0
     while (i < rows.size) {
         val block = blockAt[i]
         if (block == null) {
-            out.add(DispEntry.One(rows[i], i))
+            out.add(DispEntry.One(rows[i], i, stableKey(rows[i])))
             i++
             continue
         }
         val live = running && block.end == rows.lastIndex
         val open = overrides[i] ?: live
         out.add(DispEntry.Trace(block, open, live))
-        if (open) for (j in block.start..block.end) out.add(DispEntry.One(rows[j], j))
+        if (open) for (j in block.start..block.end) out.add(DispEntry.One(rows[j], j, stableKey(rows[j])))
         i = block.end + 1
     }
     return out
