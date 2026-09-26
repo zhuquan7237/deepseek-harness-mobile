@@ -283,6 +283,12 @@ object Wire {
                 "assistant/message" -> {
                     val msg = data.optJSONObject("message") ?: data
                     val parts = partsOf(msg)
+                    // 这一步的 "turn:step"：历史落地后用它撤掉对应的流式临时气泡
+                    val tk = run {
+                        val t = data.optInt("turn", 0)
+                        val stp = data.optInt("step", 0)
+                        if (t > 0 && stp > 0) "$t:$stp" else ""
+                    }
                     val reasoning = parts.filter { it.type == "reasoning" }
                         .joinToString("\n\n") { it.text }.trim()
                     val answer = parts.filter { it.type == "text" }
@@ -295,11 +301,12 @@ object Wire {
                                 reasoning,
                                 if (seconds > 0) "思考 $seconds 秒" else "思考过程",
                                 time = time,
+                                turnKey = tk,
                             )
                         )
                     }
                     if (answer.isNotEmpty()) {
-                        rows.add(ChatRow(Role.ASSISTANT, answer, time = time))
+                        rows.add(ChatRow(Role.ASSISTANT, answer, time = time, turnKey = tk))
                         // 图片生成的注记会提到 dsh-img-*.png（产物存在电脑上、桥接可拉取）：
                         // 生成可点开的图片卡，点开即全屏预览 / 保存到手机。
                         for (name in generatedImageNames(answer)) {

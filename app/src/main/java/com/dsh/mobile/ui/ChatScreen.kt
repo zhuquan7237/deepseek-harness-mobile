@@ -985,7 +985,9 @@ private fun MessageList(
         }
         if (live.isNotEmpty()) {
             itemsIndexed(live, key = { _, bubble -> "live:" + bubble.key }) { index, bubble ->
-                Box(Modifier.animateItem()) { LiveRow(bubble, first = index == 0) }
+                // 回合结束后（失败/被停止）残留的半截文字还在，但「正在生成」标签
+                // 必须跟着 running 走，否则停了还显示"正在生成"。
+                Box(Modifier.animateItem()) { LiveRow(bubble, first = index == 0 && state.running) }
             }
         }
         if (state.thinking && live.isEmpty()) {
@@ -1319,7 +1321,7 @@ private fun MessageRow(
         }
         onRevealDone()
     }
-    val done = shown >= row.text.length
+    val done = !animate || shown >= row.text.length
     val body = if (done) row.text else row.text.substring(0, shown.coerceIn(0, row.text.length))
     val palette = LocalDsh.current
     when (row.who) {

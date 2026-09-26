@@ -840,17 +840,23 @@ class BridgeRepository(context: Context) {
             // 不是零成本，放在主线程解析就是「点进去顿一下」的来源。
             val parsed = withContext(Dispatchers.Default) { Wire.parseHistory(json, sid) }
             val selection = Wire.parseModelSelection(json)
+            // 历史里已经落地的 "turn:step" 集合：流式临时气泡要在这一次状态更新里
+            // 原子撤掉（历史行出现与临时的消失同一帧），不给"文字先没了历史还没到"留空窗。
+            val settled = parsed.rows.mapNotNull { it.turnKey.ifEmpty { null } }.toSet()
             _state.update { current ->
                 if (current.sessionId != sid) {
                     current
                 } else {
                     val last = parsed.rows.lastOrNull()
-                    val fresh = announce && last != null && last.who == Role.ASSISTANT &&
+                    val fresh = announce && !current.streamedLive && last != null && last.who == Role.ASSISTANT &&
                         current.history.lastOrNull()?.text != last.text
                     if (fresh) Log.i(TAG, "typewriter armed (${last?.text?.length ?: 0} chars)")
                     current.copy(
                         history = parsed.rows,
                         historyEndTime = parsed.endTime,
+                        // 已落库的流式气泡在这里原子撤掉（同帧与历史行交接，防闪窗）
+                        live = if (settled.isEmpty()) current.live
+                        else current.live.filterNot { it.key in settled },
                         running = parsed.running,
                         // 重进正在跑的会话要把"进行态"也恢复出来，否则看起来像卡住/没反应；
                         // 秒数用历史里 turn/start 的真实时间续上——不从 0 重数（用户实测提问过）。
@@ -1391,7 +1397,7 @@ class BridgeRepository(context: Context) {
                 it.copy(
                     running = true, live = emptyList(), thinking = true, thinkingSince = System.currentTimeMillis(),
                     runSince = System.currentTimeMillis(), stopping = false, stopRequestedAt = 0L,
-                    stopAcked = false, stopSendFailed = false,
+                    stopAcked = false, stopSendFailed = false, streamedLive = false,
                 )
             }
             "turn/end" -> {
@@ -1411,7 +1417,9 @@ class BridgeRepository(context: Context) {
                 // 这一回合可能产出了新文件：静默刷新本会话的生成文件列表（卡片随之出现）
                 _state.value.sessionId?.let { sid -> loadSessionFiles(sid, quiet = true) }
                 _state.update {
-                    it.copy(running = false, live = emptyList(), thinking = false, thinkingSince = 0L, runSince = 0L, stopping = false, stopRequestedAt = 0L, stopAcked = false, stopSendFailed = false)
+                    // live 不在这里清：已落库的由历史重载原子撤；失败/停止回合留下的
+                    // 半截文字继续显示（用户看得到已生成的部分），下一个 turn/start 统一清场。
+                    it.copy(running = false, thinking = false, thinkingSince = 0L, runSince = 0L, stopping = false, stopRequestedAt = 0L, stopAcked = false, stopSendFailed = false)
                 }
             }
             "assistant/chunk" -> {
@@ -1431,19 +1439,15 @@ class BridgeRepository(context: Context) {
                             } else {
                                 live.add(LiveBubble(key, text))
                             }
-                            current.copy(live = live, thinking = false)
+                            current.copy(live = live, thinking = false, streamedLive = true)
                         }
                     }
                 }
             }
             "assistant/message" -> {
-                // 这一步的最终消息已落库：撤掉对应的流式临时气泡（按 turn:step 键），
-                // 免得重载后"历史里一份、live 里又一份"双份显示。
-                val t = data.optInt("turn", 0)
-                val stp = data.optInt("step", 0)
-                if (t > 0) {
-                    _state.update { cur -> cur.copy(live = cur.live.filterNot { it.key == "$t:$stp" }) }
-                }
+                // 这一步的最终消息已落库。临时气泡不在这里撤——留到历史重载成功时
+                // 按落库的 turn:step 原子撤（同帧切换）；先撤会留下 250ms 防抖空窗，
+                // 屏幕上就是「文字先没了、历史还没到」的一闪。
                 scheduleHistoryReload()
             }
             "tool/call", "tool/result", "user/message",

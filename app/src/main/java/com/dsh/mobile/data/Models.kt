@@ -83,6 +83,12 @@ data class ChatRow(
     val time: Long = 0L,
     /** 用户消息附带的图片：历史行只有 attachmentId（走桥接下载），乐观行带本地 base64。 */
     val images: List<RowImage> = emptyList(),
+    /**
+     * 事件里的 "turn:step" 键（仅 assistant/message 生成的行有）。
+     * 流式临时气泡（live）靠它判断"这一步已落库"，从而在历史刷新的同一帧里
+     * 原子地撤掉临时气泡——不留「live 先没了、历史还没到」的空白闪窗。
+     */
+    val turnKey: String = "",
 )
 
 /** 聊天里的一张图（发出去的照片，或历史里回放的照片）。 */
@@ -214,6 +220,12 @@ data class AppState(
     val stopSendFailed: Boolean = false,
     /** 刚到达、还没放完打字机的那条助手消息（用后即焚，见 revealConsumed）。 */
     val revealText: String? = null,
+
+    /**
+     * 本回合是否出现过流式增量。流式回合里正文已经逐字看过一遍了，
+     * 回合结束后的历史重载不得再武装打字机（否则整段文字会闪回重放）。
+     */
+    val streamedLive: Boolean = false,
     val sending: Boolean = false,
     val historyLoading: Boolean = false,
     // files produced in the session's working directory
