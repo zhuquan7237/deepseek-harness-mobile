@@ -103,6 +103,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalDrawerSheet
@@ -1133,15 +1134,6 @@ private fun MessageList(
 
     val itemCount = rows.size + (if (live.isEmpty()) 0 else live.size)
     val lastLiveLength = live.lastOrNull()?.text?.length ?: 0
-    // 键盘弹起时可视高度被压小，不滚到底的话最新内容正好被输入框盖在下面
-    // 键盘是否弹起用 Boolean（只在开关那一刻变一次）。原来读的是
-    // WindowInsets.ime.getBottom()——键盘动画期间这个值每帧都在变，于是整个列表每帧
-    // 重组一遍，再加上滚动动画被反复取消重建，看起来就是"上移的时候卡顿掉帧"。
-    // derivedStateOf：只在"键盘是否可见"这个布尔值翻转时才通知重组，
-    // 键盘动画期间每帧变化的高度不会穿进来（用 isImeVisible 要 OptIn 实验 API）
-    // 键盘弹起**不**做任何滚动同步：用户明确说"对话不用跟着一起上去"，
-    // 快速滑到底那一下看着就是在闪（原来是 scrollToItem/animateScrollToItem 都把内容整体挪走）。
-    // 现在键盘弹起只让输入栏自己被顶上去，列表原地不动。
     // 打开会话先落在「最新一条」上（瞬时跳转、不播动画——动画会扫过整段历史，看着就是闪）。
     // snapshotFlow 等列表真正测量出内容再跳；每个会话只跳一次（记住跳过的 sessionId）。
     var landedIn by remember { mutableStateOf<String?>(null) }
@@ -1154,6 +1146,19 @@ private fun MessageList(
             listState.scrollToItem(total - 1)
         }
     }
+    // 自己发出去的消息一定要落到眼前：USER 行多出来了（本机发送、别的端插入）就滚到
+    // 底部。之前的跟随判断「最后一条正好可见」在新消息插入那一刻永远差一条（旧底变
+    // total-2），发送后列表停在旧位置——实时流式输出也就跟着看不见了。
+    // ⚠️ 不要 remember{derivedStateOf{}}：闭包会捕获首次组合的 rows 实例，计数冻结。
+    val userRows = rows.count { it.who == Role.USER }
+    LaunchedEffect(userRows) {
+        if (userRows <= 0) return@LaunchedEffect
+        // 等新项完成测量再滚；瞬时置底（动画扫长历史会糊成一片）。
+        withFrameNanos { }
+        withFrameNanos { }
+        val total = listState.layoutInfo.totalItemsCount
+        if (total > 0) listState.scrollToItem(total - 1)
+    }
     LaunchedEffect(itemCount, lastLiveLength) {
         // `layoutInfo` can still describe the *previous* (empty) layout on the first
         // frame after the screen opens: totalItemsCount would be 0 and
@@ -1165,9 +1170,9 @@ private fun MessageList(
         val total = info.totalItemsCount
         if (total <= 0) return@LaunchedEffect
         val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-        // 原来是"离底部 3 条以内就跟随"：手机一屏就几条，翻历史时几乎一直命中，
-        // 于是每次事件都把人拽回底部。现在只有在最后一条正好可见时才跟随。
-        if (lastVisible == total - 1) listState.scrollToItem(total - 1)
+        // 原来是"最后一条正好可见才跟随"：新一条插入的瞬间旧底会变成 total-2，
+        // 判断永远差一条，发送后就不跟了。放宽到"最后两条内"都跟随。
+        if (lastVisible >= total - 2) listState.scrollToItem(total - 1)
     }
 }
 

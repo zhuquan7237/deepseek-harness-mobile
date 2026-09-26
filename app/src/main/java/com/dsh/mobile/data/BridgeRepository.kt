@@ -1402,7 +1402,12 @@ class BridgeRepository(context: Context) {
                 val turnError = Wire.turnEndError(data)
                 val turnCut = Wire.turnEndTruncated(data)
                 val failed = turnError != null || turnCut != null
-                if (failed) scheduleHistoryReload() else completionPending = true
+                if (failed) {
+                    scheduleHistoryReload()
+                    // 失败回合的 running true→false 也会被完成提醒当成"任务完成"庆祝
+                    // 一下（上一版只压了发送失败）；这里一并压住。
+                    _state.update { it.copy(lastSendFailed = true) }
+                } else completionPending = true
                 // 这一回合可能产出了新文件：静默刷新本会话的生成文件列表（卡片随之出现）
                 _state.value.sessionId?.let { sid -> loadSessionFiles(sid, quiet = true) }
                 _state.update {
@@ -1431,7 +1436,17 @@ class BridgeRepository(context: Context) {
                     }
                 }
             }
-            "assistant/message", "tool/call", "tool/result", "user/message",
+            "assistant/message" -> {
+                // 这一步的最终消息已落库：撤掉对应的流式临时气泡（按 turn:step 键），
+                // 免得重载后"历史里一份、live 里又一份"双份显示。
+                val t = data.optInt("turn", 0)
+                val stp = data.optInt("step", 0)
+                if (t > 0) {
+                    _state.update { cur -> cur.copy(live = cur.live.filterNot { it.key == "$t:$stp" }) }
+                }
+                scheduleHistoryReload()
+            }
+            "tool/call", "tool/result", "user/message",
             "agent/inbox/spliced" -> scheduleHistoryReload()
         }
     }
