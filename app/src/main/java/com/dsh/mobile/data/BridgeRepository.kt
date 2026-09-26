@@ -447,8 +447,19 @@ class BridgeRepository(context: Context) {
             try {
                 val json = api.sessions(token, query)
                 val list = withContext(Dispatchers.Default) { Wire.parseSessions(json) }
-                _state.update { it.copy(sessions = list, sessionsLoading = false) }
+                _state.update {
+                    if (query.isBlank()) {
+                        // 全量列表留一份当「搜索降级」的底料
+                        it.copy(sessions = list, searchBase = list, searchDegraded = false, sessionsLoading = false)
+                    } else {
+                        it.copy(sessions = list, searchDegraded = false, sessionsLoading = false)
+                    }
+                }
             } catch (error: BridgeException) {
+                if (query.isNotBlank() && isSearchDisabled(error)) {
+                    degradeSearchToTitle(query)
+                    return@launch
+                }
                 _state.update { it.copy(sessionsLoading = false) }
                 handleApiError(error, "读取会话失败")
             } catch (error: Exception) {
@@ -457,6 +468,20 @@ class BridgeRepository(context: Context) {
                 fail("sessions", "读取会话失败：${error.message ?: "网络错误"}")
             }
         }
+    }
+
+    /** 引擎的会话全文搜索是部署级可选能力（`openAt: never` = 关闭）。
+     *  关闭时不该把引擎错误弹给用户——降级为本地标题筛选，并在列表页标一行说明。 */
+    private fun isSearchDisabled(error: BridgeException): Boolean =
+        error.message.contains("session search is disabled") ||
+            error.message.contains("SESSION_QUERY_SEARCH_DISABLED")
+
+    private fun degradeSearchToTitle(query: String) {
+        val current = _state.value
+        val base = current.searchBase.ifEmpty { current.sessions }
+        val filtered = Wire.filterSessionsByTitle(base, query)
+        _state.update { it.copy(sessions = filtered, searchDegraded = true, sessionsLoading = false) }
+        EventTrail.add("search: 电脑端未开启全文搜索 → 本地标题筛选（${filtered.size} 条）")
     }
 
     fun setSearch(query: String) {

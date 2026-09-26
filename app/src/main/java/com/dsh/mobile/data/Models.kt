@@ -158,6 +158,10 @@ data class AppState(
     val sessions: List<SessionSummary> = emptyList(),
     val sessionsLoading: Boolean = false,
     val search: String = "",
+    /** 最近一次全量列表：全文搜索不可用时本地筛选的底料（不直接展示）。 */
+    val searchBase: List<SessionSummary> = emptyList(),
+    /** 引擎未开启会话全文搜索 → 列表已降级为标题筛选（列表页显示一行说明）。 */
+    val searchDegraded: Boolean = false,
     // 审批（K2-A 只读）：桥接端为权威，本机只展示，不提供裁决入口。
     val approvals: List<ApprovalInfo> = emptyList(),
     val approvalsRecent: List<ApprovalInfo> = emptyList(),

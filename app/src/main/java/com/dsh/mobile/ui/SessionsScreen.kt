@@ -136,6 +136,16 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
             UpdateBanner(info = info, onOpen = { showUpdate = true }, onDismiss = { repo.dismissUpdate() })
         }
 
+        // 引擎未开启会话全文搜索时的降级说明（搜索仍可用，只是按标题匹配）
+        if (state.search.isNotBlank() && state.searchDegraded) {
+            Text(
+                "电脑端未开启全文搜索 · 已按标题筛选",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textTertiary,
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 2.dp),
+            )
+        }
+
         Box(Modifier.weight(1f).fillMaxWidth()) {
             PullToRefreshBox(
                 isRefreshing = state.sessionsLoading,

@@ -50,6 +50,16 @@ object Wire {
         return out
     }
 
+    /**
+     * 电脑端未开启会话全文搜索（引擎 `openAt: never`）时的降级筛选：
+     * 在本地已加载的列表上按标题做大小写不敏感的子串匹配。
+     */
+    fun filterSessionsByTitle(items: List<SessionSummary>, query: String): List<SessionSummary> {
+        val q = query.trim()
+        if (q.isEmpty()) return items
+        return items.filter { it.title.contains(q, ignoreCase = true) }
+    }
+
     fun parseSession(json: JSONObject): SessionSummary {
         val id = json.optString("sessionId").ifEmpty { json.optString("id") }
         val model = sessionModel(json)

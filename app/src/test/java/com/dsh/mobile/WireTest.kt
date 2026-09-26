@@ -2,6 +2,7 @@ package com.dsh.mobile
 
 import com.dsh.mobile.data.ChatRow
 import com.dsh.mobile.data.Role
+import com.dsh.mobile.data.SessionSummary
 import com.dsh.mobile.data.Wire
 import org.json.JSONArray
 import org.json.JSONObject
@@ -808,5 +809,21 @@ class WireTest {
         val session = JSONObject().put("sessionId", "s1").put("producedFiles", 3)
         assertEquals(3, Wire.parseSession(session).fileCount)
         assertEquals(0, Wire.parseSession(JSONObject().put("sessionId", "s2")).fileCount)
+    }
+
+    // ------------------------------------------------------------- 搜索降级
+
+    @Test
+    fun filterSessionsByTitleMatchesCaseInsensitiveSubstring() {
+        val items = listOf(
+            SessionSummary("a", "修复公式渲染", 1, false, ""),
+            SessionSummary("b", "Session Search Disabled", 2, false, ""),
+            SessionSummary("c", "设置页改版", 3, false, ""),
+        )
+        assertEquals(listOf("a"), Wire.filterSessionsByTitle(items, "公式").map { it.sessionId })
+        assertEquals(listOf("b"), Wire.filterSessionsByTitle(items, "session").map { it.sessionId })
+        assertEquals(listOf("c"), Wire.filterSessionsByTitle(items, "设置").map { it.sessionId })
+        assertEquals(listOf("a", "b", "c"), Wire.filterSessionsByTitle(items, "  ").map { it.sessionId })
+        assertTrue(Wire.filterSessionsByTitle(items, "不存在的词").isEmpty())
     }
 }
