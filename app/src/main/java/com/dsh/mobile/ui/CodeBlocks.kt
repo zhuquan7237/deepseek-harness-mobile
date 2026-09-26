@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -192,6 +193,9 @@ fun saveTextToDownloads(context: Context, fileName: String, content: String): St
     }
 }.getOrNull()
 
+/** 一眼认出「这行是错误」的启发式（"只看错误"过滤用）。 */
+private val ERROR_LINE_RE = Regex("(?i)(error|fail|✗|失败|错误|exception|fatal|panic|traceback)")
+
 /** 代码块卡片：和正文分开，自带语言标签 + 复制/保存，长行横向滚动不折行。 */
 @Composable
 fun CodeCard(
@@ -211,6 +215,11 @@ fun CodeCard(
     // S2 §6：横向滚动只属于这一个视口；padding 属于「滚动内容」——滚到最左就是第一列字符，
     // 不再给代码区套内部纵向滚动（折叠 8 行 / 展开全文都交给消息流）。
     val hScroll = rememberScrollState()
+    // 「只看错误」：≥8 行且确实含错误行时才出现。只影响显示——复制/保存始终给全文。
+    val errorIdx = remember(code) { lines.indices.filter { ERROR_LINE_RE.containsMatchIn(lines[it]) } }
+    val canFilter = lineCount >= 8 && errorIdx.isNotEmpty()
+    var errorsOnly by remember(code) { mutableStateOf(false) }
+    val shown = if (errorsOnly && errorIdx.isNotEmpty()) errorIdx.map { lines[it] } else lines.take(visible)
     Column(
         Modifier
             .fillMaxWidth()
@@ -224,23 +233,34 @@ fun CodeCard(
                 .heightIn(min = 44.dp)
                 .padding(start = 14.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
                 text = (lang.ifBlank { "code" }.lowercase()) + " · " + lineCount + " 行",
                 style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.6.sp),
                 color = palette.textTertiary,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CodeAction(Icons.Outlined.ContentCopy, "复制代码") { onCopy(code) }
-                CodeAction(Icons.Outlined.Save, "保存为文件") { onSave(lang, code) }
+            Spacer(Modifier.weight(1f))
+            if (canFilter) {
+                Text(
+                    "只看错误 · " + errorIdx.size,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (errorsOnly) palette.accent else palette.textTertiary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(if (errorsOnly) palette.accent.copy(alpha = 0.14f) else palette.surfaceHi)
+                        .clickable { errorsOnly = !errorsOnly }
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+                Spacer(Modifier.width(4.dp))
             }
+            CodeAction(Icons.Outlined.ContentCopy, "复制代码") { onCopy(code) }
+            CodeAction(Icons.Outlined.Save, "保存为文件") { onSave(lang, code) }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(palette.divider))
         Box(Modifier.fillMaxWidth().background(palette.codeBg)) {
             Box(Modifier.horizontalScroll(hScroll)) {
                 Text(
-                    text = highlightFor(lang, lines.take(visible).joinToString("\n"), palette.dark),
+                    text = highlightFor(lang, shown.joinToString("\n"), palette.dark),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
                     lineHeight = 20.sp,
@@ -264,7 +284,7 @@ fun CodeCard(
                 )
             }
         }
-        if (lineCount > 8) {
+        if (lineCount > 8 && !errorsOnly) {
             // S3 §1.3：卡内展开最多 16 行；超过 16 行走「查看全部」进全屏阅读器，
             // 不在消息流里建纵向滚动窗。
             val viewAll = lineCount > 16 && onViewAll != null

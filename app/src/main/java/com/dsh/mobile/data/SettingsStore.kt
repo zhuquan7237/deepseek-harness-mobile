@@ -48,6 +48,7 @@ class SettingsStore(context: Context) {
         val UPDATE_SKIP = stringPreferencesKey("update_skip")
         val OVERLAY = booleanPreferencesKey("overlay_ball")
         val MODELS = stringPreferencesKey("models_json")
+        val PROVIDER_SYNC = stringPreferencesKey("provider_sync_json")
         val DEFAULT_PROVIDER = stringPreferencesKey("default_provider")
         val DEFAULT_MODEL = stringPreferencesKey("default_model")
         val DEFAULT_LABEL = stringPreferencesKey("default_label")
@@ -117,6 +118,26 @@ class SettingsStore(context: Context) {
             prefs[Keys.UPDATE_CHECK] = at
             if (skipVersion != null) prefs[Keys.UPDATE_SKIP] = skipVersion
         }
+    }
+
+    /**
+     * 「从上游同步」最近一次成功的时间（按提供商记；0 = 从未同步）。
+     * 存成一条 JSON 字符串，模型页一次读全，避免逐个 suspend 读 DataStore。
+     */
+    suspend fun saveProviderSynced(providerId: String, at: Long) {
+        context.dshStore.edit { prefs ->
+            val current = prefs[Keys.PROVIDER_SYNC]?.let { raw ->
+                runCatching { JSONObject(raw) }.getOrNull()
+            } ?: JSONObject()
+            current.put(providerId, at)
+            prefs[Keys.PROVIDER_SYNC] = current.toString()
+        }
+    }
+
+    suspend fun loadProviderSyncMap(): Map<String, Long> {
+        val raw = context.dshStore.data.first()[Keys.PROVIDER_SYNC].orEmpty()
+        val obj = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyMap()
+        return obj.keys().asSequence().associateWith { obj.optLong(it, 0L) }
     }
 
     /** Forget the binding but keep the server address and theme. */

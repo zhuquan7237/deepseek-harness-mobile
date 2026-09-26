@@ -1725,6 +1725,7 @@ class BridgeRepository(context: Context) {
                         arr.optString(i).takeIf { it.isNotBlank() }?.let(::add)
                     }
                 }
+                store.saveProviderSynced(provider.id, System.currentTimeMillis())
                 onResult(models, null)
             } catch (error: BridgeException) {
                 onResult(null, error.message)
@@ -1733,6 +1734,11 @@ class BridgeRepository(context: Context) {
             }
         }
     }
+
+    /**
+     * 「从上游同步」的时间表（提供商 id → 最近成功时间），模型页展示用。
+     */
+    suspend fun providerSyncMap(): Map<String, Long> = store.loadProviderSyncMap()
 
     /**
      * 保存某提供商的网络路由（"" = 自动走代理 / "proxy" / "direct"）。

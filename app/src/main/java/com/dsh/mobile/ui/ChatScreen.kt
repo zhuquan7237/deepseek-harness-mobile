@@ -18,6 +18,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -472,6 +474,10 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             },
             onRegenerate = { repo.regenerate() },
             onRetry = { repo.retryLastPrompt() },
+            onSwitchModel = {
+                showModels = true
+                if (state.doc == null) repo.loadModels()
+            },
             onPreview = {
                 keyboard?.hide()
                 preview = it
@@ -814,6 +820,7 @@ private fun MessageList(
     onCopy: (String) -> Unit,
     onRegenerate: () -> Unit,
     onRetry: () -> Unit,
+    onSwitchModel: () -> Unit,
     onPreview: (Wire.Artifact) -> Unit,
     onQuickSend: (String) -> Unit,
     onSaveCode: (String, String) -> Unit,
@@ -883,6 +890,7 @@ private fun MessageList(
                             onCopy = onCopy,
                             onRegenerate = onRegenerate,
                             onRetry = onRetry,
+                            onSwitchModel = onSwitchModel,
                             onPreview = onPreview,
                             onOpenExternal = onOpenExternal,
                             onViewSource = onViewSource,
@@ -1182,6 +1190,7 @@ private fun MessageRow(
     onCopy: (String) -> Unit = {},
     onRegenerate: () -> Unit = {},
     onRetry: () -> Unit = {},
+    onSwitchModel: () -> Unit = {},
     onPreview: (Wire.Artifact) -> Unit = {},
     onOpenExternal: (String, String) -> Unit = { _, _ -> },
     onViewSource: (SourceDoc) -> Unit = {},
@@ -1219,16 +1228,28 @@ private fun MessageRow(
                     // 对话失败是上游提供方的问题，不进日志仓库（用户定的分级规则）——
                     // 因此这里没有日志编号和发送按钮，只如实显示原因 + 一键重试。
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        "重试",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = palette.danger,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(palette.danger.copy(alpha = 0.16f))
-                            .clickable { onRetry() }
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "重试",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = palette.danger,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(palette.danger.copy(alpha = 0.16f))
+                                .clickable { onRetry() }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                        Text(
+                            "换模型",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = palette.textSecondary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(palette.surfaceHi)
+                                .clickable { onSwitchModel() }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
                 }
             }
         }
@@ -1345,6 +1366,9 @@ private fun MessageRow(
                     Modifier
                         .clip(RoundedCornerShape(22.dp))
                         .background(palette.bubbleUser)
+                        .pointerInput(row.text) {
+                            detectTapGestures(onLongPress = { onCopy(row.text) })
+                        }
                         .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
                     Text(
@@ -1393,7 +1417,11 @@ private fun MessageRow(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 6.dp),
+                    .padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 6.dp)
+                    // 长按正文复制整条原文（Markdown 源文）；代码卡/链接有自己的手势，不受影响
+                    .pointerInput(row.text) {
+                        detectTapGestures(onLongPress = { onCopy(row.text) })
+                    },
             ) {
                 // 正文与代码块分开排：代码单独装进卡片（等宽、横向滚动、可复制/保存），
                 // 不再和正文混在一起看着像乱码

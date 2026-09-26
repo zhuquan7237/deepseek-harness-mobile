@@ -29,6 +29,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
@@ -49,6 +51,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
@@ -66,6 +69,7 @@ import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.ModelItem
 import com.dsh.mobile.data.ModelProvider
+import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
 
 /**
@@ -97,6 +101,7 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
     val searchQ = remember { mutableStateMapOf<String, String>() }
     var selecting by remember { mutableStateOf(setOf<String>()) }
     val picked = remember { mutableStateMapOf<String, Set<String>>() }
+    var syncMap by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
 
     // 批量启用/停用：一次保存，退出选择模式（批量栏在页面底栏，见下）。
     fun batchEnable(providerId: String, enable: Boolean) {
@@ -108,6 +113,11 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                 items.map { if (it.id in ids) it.copy(enabled = enable) else it }
             }
         }
+    }
+
+    // 「上次同步」时间表：进页面读一次；从同步页回来（syncOpen 关掉）刷新。
+    LaunchedEffect(syncOpen) {
+        if (!syncOpen) syncMap = repo.providerSyncMap()
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -195,6 +205,7 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                                         }
                                     },
                                     onPicked = { picked[provider.id] = it },
+                                    syncedAt = syncMap[provider.id] ?: 0L,
                                     onAddModel = { addModelTo = provider },
                                     onSyncUpstream = {
                                         syncTarget = provider
@@ -504,6 +515,7 @@ private fun ProviderBlock(
     onDeleteProvider: () -> Unit,
     onToggleModel: (ModelItem) -> Unit,
     onDeleteModel: (ModelItem) -> Unit,
+    syncedAt: Long,
 ) {
     val palette = LocalDsh.current
     val filtered = remember(rows, query) {
@@ -636,6 +648,9 @@ private fun ProviderBlock(
                             Switch(
                                 checked = item.enabled,
                                 onCheckedChange = { onToggleModel(item) },
+                                modifier = Modifier.semantics {
+                                    contentDescription = if (item.enabled) "已启用，在会话中可用" else "已停用，点击启用"
+                                },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = palette.onPrimaryBtn,
                                     checkedTrackColor = palette.primaryBtn,
@@ -659,7 +674,15 @@ private fun ProviderBlock(
             }
             if (!selecting) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
-                    SheetAction("从上游同步模型", caption = "拉取上游最新清单，勾选要加的模型") { onSyncUpstream() }
+                    val syncCaption = buildString {
+                        if (syncedAt > 0) {
+                            append("上次同步 ")
+                            append(Wire.timeText(syncedAt))
+                            append(" · ")
+                        }
+                        append("拉取上游最新清单，勾选要加的模型")
+                    }
+                    SheetAction("从上游同步模型", caption = syncCaption) { onSyncUpstream() }
                     SheetAction("添加模型", caption = "输入模型 ID，能力稍后自动同步") { onAddModel() }
                     val keyTitle = if (provider.keyConfigured) "更新 / 清除密钥" else "写入密钥"
                     val keyCaption = when {
