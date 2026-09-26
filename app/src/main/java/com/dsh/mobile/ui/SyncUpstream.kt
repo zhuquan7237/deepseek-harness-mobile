@@ -164,7 +164,7 @@ fun SyncUpstreamScreen(
                         textAlign = TextAlign.Center,
                     )
                     Text(
-                        "电脑端用这家提供商保存的密钥请求上游接口；如果提示密钥没配置，先在「写入 / 清除密钥」里填上。",
+                        "电脑端用这家提供商保存的密钥请求上游接口；如果提示密钥没配置，先在「展开这家 → 写入密钥」里填上。",
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.textTertiary,
                         textAlign = TextAlign.Center,

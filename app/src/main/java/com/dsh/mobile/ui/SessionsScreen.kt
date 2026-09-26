@@ -116,17 +116,10 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
             CircleButton(Icons.Outlined.Settings, "设置") { repo.openSettings() }
             Spacer(Modifier.width(10.dp))
             StatusPill(
-                text = buildString {
-                    append(
-                        when (state.conn) {
-                            Conn.ONLINE -> "已连接"
-                            Conn.CONNECTING -> "正在连接"
-                            Conn.OFFLINE -> "未连接 · 重连中"
-                        }
-                    )
-                    append(" · ")
-                    append(state.sessions.size)
-                    append(" 个会话")
+                text = when (state.conn) {
+                    Conn.ONLINE -> "已连接"
+                    Conn.CONNECTING -> "正在连接"
+                    Conn.OFFLINE -> "未连接 · 重连中"
                 },
                 conn = state.conn,
             )
@@ -196,7 +189,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
                         state = listState,
                         contentPadding = PaddingValues(bottom = 104.dp),
                     ) {
-                        item(key = "greeting") { GreetingCard(state) }
+                        item(key = "greeting") { GreetingCard(state) { id -> repo.openSession(id) } }
                         groups.forEach { group ->
                             item(key = "header:" + group.label) {
                                 SectionHeader(group.label, Modifier.padding(start = 20.dp))
@@ -283,7 +276,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
  * 这里放个打招呼 + 会话数，界面不至于那么单调。
  */
 @Composable
-private fun GreetingCard(state: AppState) {
+private fun GreetingCard(state: AppState, onContinue: (String) -> Unit) {
     val palette = LocalDsh.current
     val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
     val hello = when {
@@ -292,17 +285,21 @@ private fun GreetingCard(state: AppState) {
         hour < 18 -> "下午好呀"
         else -> "晚上好呀"
     }
+    val running = state.sessions.count { it.running }
+    val last = remember(state.sessions) { state.sessions.maxByOrNull { it.updatedAt } }
+    val continueMode = running == 0 && last != null
+    val lastTitle = last?.let { displayTitle(it.title) }
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 10.dp),
+            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Image(
             painter = painterResource(R.drawable.whale_face_happy),
             contentDescription = null,
             contentScale = ContentScale.Fit,
-            modifier = Modifier.size(44.dp),
+            modifier = Modifier.size(40.dp),
         )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
@@ -311,16 +308,45 @@ private fun GreetingCard(state: AppState) {
                 style = MaterialTheme.typography.titleSmall,
                 color = palette.textPrimary,
             )
-            Text(
-                if (state.sessions.isEmpty()) {
-                    "还没有会话"
-                } else {
-                    val running = state.sessions.count { it.running }
-                    if (running > 0) "$running 个任务正在电脑上跑" else "在下面开始一个新会话吧"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = palette.textSecondary,
-            )
+            // 第二行：跑着任务就报数；没跑就给「继续上次：xxx」（点一下直接进会话）；
+            // 都没有才放默认引导。整行可点，不再占一大块空白。
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .then(if (continueMode) Modifier.clickable { last?.let { onContinue(it.sessionId) } } else Modifier)
+                    .padding(vertical = 1.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                when {
+                    running > 0 -> Text(
+                        "$running 个任务正在电脑上跑",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textSecondary,
+                    )
+                    continueMode -> {
+                        Text(
+                            "继续上次：",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.textTertiary,
+                            maxLines = 1,
+                        )
+                        Text(
+                            lastTitle.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.accent,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    else -> Text(
+                        "在下面开始一个新会话吧",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textTertiary,
+                    )
+                }
+            }
         }
     }
 }

@@ -826,4 +826,30 @@ class WireTest {
         assertEquals(listOf("a", "b", "c"), Wire.filterSessionsByTitle(items, "  ").map { it.sessionId })
         assertTrue(Wire.filterSessionsByTitle(items, "不存在的词").isEmpty())
     }
+
+    // ------------------------------------------------------------- timeText / contextLabel
+
+    @Test
+    fun timeTextFollowsGroupedListConventions() {
+        val zone = java.time.ZoneId.of("Asia/Shanghai")
+        fun at(y: Int, mo: Int, d: Int, h: Int, mi: Int, s: Int = 0): Long =
+            java.time.LocalDateTime.of(y, mo, d, h, mi, s).atZone(zone).toInstant().toEpochMilli()
+        val now = at(2026, 9, 26, 14, 40)
+        assertEquals("刚刚", Wire.timeTextAt(now, at(2026, 9, 26, 14, 39, 50), zone))
+        assertEquals("1 分钟前", Wire.timeTextAt(now, at(2026, 9, 26, 14, 39), zone))
+        assertEquals("5 分钟前", Wire.timeTextAt(now, at(2026, 9, 26, 14, 35), zone))
+        assertEquals("13:20", Wire.timeTextAt(now, at(2026, 9, 26, 13, 20), zone))
+        assertEquals("昨天 23:10", Wire.timeTextAt(now, at(2026, 9, 25, 23, 10), zone))
+        assertEquals("9月20日", Wire.timeTextAt(now, at(2026, 9, 20, 8, 5), zone))
+        assertEquals("", Wire.timeTextAt(now, 0L, zone))
+    }
+
+    @Test
+    fun contextLabelShortensWindowSizes() {
+        assertEquals("1M", com.dsh.mobile.ui.contextLabel("1048576"))
+        assertEquals("500K", com.dsh.mobile.ui.contextLabel("500000"))
+        assertEquals("128K", com.dsh.mobile.ui.contextLabel("128000"))
+        assertNull(com.dsh.mobile.ui.contextLabel("—"))
+        assertNull(com.dsh.mobile.ui.contextLabel(""))
+    }
 }

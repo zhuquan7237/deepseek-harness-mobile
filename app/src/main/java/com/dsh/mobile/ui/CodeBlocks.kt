@@ -20,6 +20,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -235,21 +237,32 @@ fun CodeCard(
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(palette.divider))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .background(palette.codeBg)
-                .horizontalScroll(hScroll),
-        ) {
-            Text(
-                text = highlightFor(lang, lines.take(visible).joinToString("\n"), palette.dark),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                lineHeight = 20.sp,
-                color = palette.codeText,
-                softWrap = false,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            )
+        Box(Modifier.fillMaxWidth().background(palette.codeBg)) {
+            Box(Modifier.horizontalScroll(hScroll)) {
+                Text(
+                    text = highlightFor(lang, lines.take(visible).joinToString("\n"), palette.dark),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp,
+                    color = palette.codeText,
+                    softWrap = false,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+            }
+            // 横向还能滚时，右缘给一道「还有内容」的渐隐——长日志不再像被硬裁掉
+            if (hScroll.canScrollForward) {
+                Box(
+                    Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .width(26.dp)
+                        .background(
+                            androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                listOf(androidx.compose.ui.graphics.Color.Transparent, palette.codeBg)
+                            )
+                        ),
+                )
+            }
         }
         if (lineCount > 8) {
             // S3 §1.3：卡内展开最多 16 行；超过 16 行走「查看全部」进全屏阅读器，

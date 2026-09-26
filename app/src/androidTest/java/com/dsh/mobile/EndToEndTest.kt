@@ -93,7 +93,7 @@ class EndToEndTest {
 
     private fun isOnPairingScreen(): Boolean = anyText("用配对码配对")
 
-    private fun isOnSessionsScreen(): Boolean = anyText("个会话", substring = true)
+    private fun isOnSessionsScreen(): Boolean = anyText("搜索会话", substring = true)
 
     /** 现在进 App 直接落在新对话上，所以"到家了"的判断要包括聊天页。 */
     private fun isOnChatScreen(): Boolean = anyText("发给电脑上的 Agent…")

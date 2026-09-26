@@ -1217,7 +1217,18 @@ private fun MessageRow(
                         color = palette.danger,
                     )
                     // 对话失败是上游提供方的问题，不进日志仓库（用户定的分级规则）——
-                    // 因此这里没有日志编号和发送按钮，只如实显示原因。
+                    // 因此这里没有日志编号和发送按钮，只如实显示原因 + 一键重试。
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "重试",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = palette.danger,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(palette.danger.copy(alpha = 0.16f))
+                            .clickable { onRetry() }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
                 }
             }
         }
@@ -2647,16 +2658,7 @@ private fun CircleAction(
     }
 }
 
-/** `1050000` reads as noise in a phone list; `1M` does not. */
-private fun contextLabel(raw: String): String? {
-    val value = raw.toLongOrNull() ?: return null
-    if (value <= 0) return null
-    return when {
-        value >= 1_000_000 -> if (value % 1_000_000 == 0L) "${value / 1_000_000}M" else "${"%.1f".format(value / 1_000_000.0)}M"
-        value >= 1_000 -> "${value / 1_000}K"
-        else -> value.toString()
-    }
-}
+// contextLabel 已搬到 Common.kt（模型菜单与模型管理页共用）。
 
 /** Model menu: grouped by provider, with a check on the current pick. */
 @Composable

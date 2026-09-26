@@ -488,6 +488,18 @@ fun TextPromptDialog(
     )
 }
 
+/** `1048576` 读起来像噪音，`1M` 不会（模型菜单与模型管理页共用）。 */
+fun contextLabel(raw: String): String? {
+    val value = raw.toLongOrNull() ?: return null
+    if (value <= 0) return null
+    return when {
+        value >= 1_000_000 ->
+            String.format(java.util.Locale.ROOT, "%.1f", value / 1_000_000.0).trimEnd('0').trimEnd('.') + "M"
+        value >= 1_000 -> "${value / 1_000}K"
+        else -> value.toString()
+    }
+}
+
 /** Destructive confirmation, ChatGPT's rounded dialog. */
 @Composable
 fun ConfirmDialog(

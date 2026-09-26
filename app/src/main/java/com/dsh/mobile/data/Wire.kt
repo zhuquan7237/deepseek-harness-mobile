@@ -4,6 +4,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
 
@@ -891,17 +893,26 @@ fun isInjectedContext(text: String): Boolean =
         else -> "已处理"
     }
 
-    /** Human "time ago", same shape as the PWA. */
-    fun timeText(value: Long): String {
+    /**
+     * 列表时间：一小时以内给相对时间（刚刚 / N 分钟前），当天给 HH:mm，昨天给「昨天 HH:mm」，
+     * 更早给「M月d日」——分组标题（今天/昨天）与行内时间不再重复堆叠（不会出现「昨天 · 13 小时前」）。
+     */
+    fun timeText(value: Long): String = timeTextAt(System.currentTimeMillis(), value, ZoneId.systemDefault())
+
+    /** [timeText] 的可测试核心：注入「现在」与时区。 */
+    fun timeTextAt(nowMs: Long, value: Long, zone: ZoneId): String {
         val ms = millis(value)
         if (ms <= 0L) return ""
-        val diff = System.currentTimeMillis() - ms
-        return when {
-            diff < 60_000L -> "刚刚"
-            diff < 3_600_000L -> "${diff / 60_000L} 分钟前"
-            diff < 86_400_000L -> "${diff / 3_600_000L} 小时前"
-            diff < 7L * 86_400_000L -> "${diff / 86_400_000L} 天前"
-            else -> SimpleDateFormat("M月d日", Locale.CHINA).format(Date(ms))
+        val diff = nowMs - ms
+        if (diff in 0L until 60_000L) return "刚刚"
+        if (diff in 0L until 3_600_000L) return "${diff / 60_000L} 分钟前"
+        val at = Instant.ofEpochMilli(ms).atZone(zone)
+        val today = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+        val hm = "%02d:%02d".format(at.hour, at.minute)
+        return when (at.toLocalDate()) {
+            today -> hm
+            today.minusDays(1) -> "昨天 $hm"
+            else -> "${at.monthValue}月${at.dayOfMonth}日"
         }
     }
 

@@ -59,7 +59,7 @@ class SearchProbeTest {
 
     private fun isOnPairingScreen(): Boolean = anyText("用配对码配对")
     private fun isOnChatScreen(): Boolean = anyText("发给电脑上的 Agent…")
-    private fun isOnSessionsScreen(): Boolean = anyText("个会话", substring = true)
+    private fun isOnSessionsScreen(): Boolean = anyText("搜索会话", substring = true)
 
     private fun pairThroughUi() {
         val code = http("POST", "/mobile-local/rotate").optString("code")

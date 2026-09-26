@@ -73,7 +73,7 @@ import com.dsh.mobile.ui.theme.LocalDsh
  * through [BridgeRepository.mutateModels]（乐观更新 + 串行保存，见其注释），
  * so a phone edit can never silently erase what the desktop changed meanwhile.
  *
- * 交互：每个提供商块展开后有搜索框 + 「选择」多选模式（全选/清空 + 批量
+ * 交互：每个提供商块展开后有搜索框 + 「批量管理」多选模式（全选/清空 + 批量
  * 启用/停用/删除，一次保存）；同步上游在对比页里勾选要加的模型。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -387,9 +387,14 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
     }
 
     deleteProvider?.let { provider ->
+        val modelCount = state.doc?.items?.count { it.provider == provider.id } ?: 0
         ConfirmDialog(
             title = "删除提供商 ${provider.name.ifBlank { provider.id }}？",
-            body = "会移除它的全部模型和地址配置（已写入的密钥保留在凭据里）。",
+            body = if (modelCount > 0) {
+                "会移除这家下的 $modelCount 个模型和地址配置（已写入的密钥保留在凭据里）。"
+            } else {
+                "会移除它的地址配置（已写入的密钥保留在凭据里）。"
+            },
             confirm = "删除",
             onDismiss = { deleteProvider = null },
             onConfirm = {
@@ -577,7 +582,7 @@ private fun ProviderBlock(
                     if (selecting) {
                         Pill("完成", onClick = { onSelecting(false) })
                     } else {
-                        Pill("选择", onClick = { onSelecting(true) })
+                        Pill("批量管理", onClick = { onSelecting(true) })
                     }
                 }
                 if (selecting) {
@@ -656,7 +661,15 @@ private fun ProviderBlock(
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
                     SheetAction("从上游同步模型", caption = "拉取上游最新清单，勾选要加的模型") { onSyncUpstream() }
                     SheetAction("添加模型", caption = "输入模型 ID，能力稍后自动同步") { onAddModel() }
-                    SheetAction("写入 / 清除密钥", caption = provider.apiKeyRef.ifBlank { "（未设置凭据变量名）" }) { onEditKey() }
+                    val keyTitle = if (provider.keyConfigured) "更新 / 清除密钥" else "写入密钥"
+                    val keyCaption = when {
+                        provider.keyConfigured && provider.apiKeyRef.isNotBlank() ->
+                            "已配置 · 电脑端环境变量 ${provider.apiKeyRef}"
+                        provider.keyConfigured -> "已配置 · 点此更新或清除"
+                        provider.apiKeyRef.isNotBlank() -> "未配置 · 点此写入（${provider.apiKeyRef}）"
+                        else -> "未配置 · 点此写入"
+                    }
+                    SheetAction(keyTitle, caption = keyCaption) { onEditKey() }
                     SheetAction(
                         "网络：" + when (provider.network) {
                             "proxy" -> "代理（必须走代理）"
@@ -802,7 +815,7 @@ private fun ModelTexts(item: ModelItem, modifier: Modifier = Modifier) {
             overflow = TextOverflow.Ellipsis,
         )
         val meta = buildString {
-            if (item.contextWindow.isNotBlank() && item.contextWindow != "—") append(item.contextWindow)
+            contextLabel(item.contextWindow)?.let { append(it) }
             if (item.modelId != item.name) {
                 if (isNotEmpty()) append(" · ")
                 append(item.modelId)
