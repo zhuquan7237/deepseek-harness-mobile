@@ -34,6 +34,8 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
@@ -183,7 +185,15 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
                         EmptyState(searching = state.search.isNotBlank())
                     }
                 } else {
-                    val groups = remember(state.sessions) { groupSessions(state.sessions) }
+                    // 「测试 / 系统」会话默认折叠，不污染主列表；搜索时不折叠（找东西优先）。
+                    // 判定用标题里的 e2e / pong 字样——E2E 用例生成的都是这个形状。
+                    val searching = state.search.isNotBlank()
+                    val (testSessions, normalSessions) = remember(state.sessions, searching) {
+                        if (searching) emptyList<SessionSummary>() to state.sessions
+                        else state.sessions.partition { TEST_SESSION_RE.containsMatchIn(it.title) }
+                    }
+                    var testOpen by rememberSaveable { mutableStateOf(false) }
+                    val groups = remember(normalSessions) { groupSessions(normalSessions) }
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         state = listState,
@@ -202,6 +212,48 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
                                         onClick = { repo.openSession(session.sessionId) },
                                         onLongClick = { renameTarget = session },
                                     )
+                                }
+                            }
+                        }
+                        if (testSessions.isNotEmpty()) {
+                            item(key = "test-header") {
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { testOpen = !testOpen }
+                                        .padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        "测试 / 系统会话",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.textSecondary,
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        "（${testSessions.size}）",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.textTertiary,
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    Icon(
+                                        if (testOpen) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                                        contentDescription = if (testOpen) "收起测试会话" else "展开测试会话",
+                                        tint = palette.textTertiary,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                            if (testOpen) {
+                                items(testSessions.sortedByDescending { it.updatedAt }, key = { it.sessionId }) { session ->
+                                    Box(Modifier.animateItem()) {
+                                        SessionRow(
+                                            connected = state.connected,
+                                            session = session,
+                                            onClick = { repo.openSession(session.sessionId) },
+                                            onLongClick = { renameTarget = session },
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -488,6 +540,9 @@ private fun SearchPill(
 
 private data class SessionGroup(val label: String, val sessions: List<SessionSummary>)
 
+/** 测试/系统会话的判定：标题里带 e2e / pong（E2E 用例生成会话都是这个形状）。 */
+private val TEST_SESSION_RE = Regex("(?i)(e2e|pong)")
+
 /** ChatGPT-style recency buckets: 今天 / 昨天 / 近 7 天 / 近 30 天 / 更早. */
 private fun groupSessions(sessions: List<SessionSummary>): List<SessionGroup> {
     val zone = ZoneId.systemDefault()
@@ -525,13 +580,23 @@ private fun SessionRow(
             .padding(horizontal = 6.dp, vertical = 1.dp)
             .clip(RoundedCornerShape(12.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
+            .padding(horizontal = 14.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             // 标题行：右边跟一个时间，120 条会话不再长得一模一样
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (session.completed) {
+                    // 「刚跑完、还没打开」的小圆点（引擎在打开 / 再次开跑时清掉）
+                    Box(
+                        Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(palette.accent),
+                    )
+                    Spacer(Modifier.width(7.dp))
+                }
                 Text(
                     displayTitle(session.title),
                     style = MaterialTheme.typography.bodyLarge,
@@ -545,7 +610,19 @@ private fun SessionRow(
                     Text(time, style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
                 }
             }
-            // 副行只在有值得注意的状态时出现：在跑 / 有产出
+            // 摘要行：桥接从引擎 turnOutline 取的最近一轮预览
+            //（0.2.25+ 才有这个字段；老桥接不回就整行不出现——不假装）
+            val preview = remember(session.preview) { Wire.previewText(session.preview) }
+            if (preview.isNotEmpty()) {
+                Text(
+                    preview,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.textTertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // 状态行只在有值得注意的状态时出现：在跑 / 有产出
             if (session.running || session.fileCount > 0) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,

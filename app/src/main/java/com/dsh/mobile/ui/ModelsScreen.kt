@@ -69,6 +69,7 @@ import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.ModelItem
 import com.dsh.mobile.data.ModelProvider
+import com.dsh.mobile.data.ProviderSync
 import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
 
@@ -101,7 +102,7 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
     val searchQ = remember { mutableStateMapOf<String, String>() }
     var selecting by remember { mutableStateOf(setOf<String>()) }
     val picked = remember { mutableStateMapOf<String, Set<String>>() }
-    var syncMap by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    var syncMap by remember { mutableStateOf<Map<String, ProviderSync>>(emptyMap()) }
 
     // 批量启用/停用：一次保存，退出选择模式（批量栏在页面底栏，见下）。
     fun batchEnable(providerId: String, enable: Boolean) {
@@ -205,7 +206,7 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                                         }
                                     },
                                     onPicked = { picked[provider.id] = it },
-                                    syncedAt = syncMap[provider.id] ?: 0L,
+                                    sync = syncMap[provider.id],
                                     onAddModel = { addModelTo = provider },
                                     onSyncUpstream = {
                                         syncTarget = provider
@@ -515,7 +516,7 @@ private fun ProviderBlock(
     onDeleteProvider: () -> Unit,
     onToggleModel: (ModelItem) -> Unit,
     onDeleteModel: (ModelItem) -> Unit,
-    syncedAt: Long,
+    sync: ProviderSync?,
 ) {
     val palette = LocalDsh.current
     val filtered = remember(rows, query) {
@@ -563,6 +564,11 @@ private fun ProviderBlock(
                     if (provider.keyConfigured) "密钥已配置" else "密钥缺失",
                     if (provider.keyConfigured) palette.textSecondary else palette.danger,
                 )
+                Spacer(Modifier.width(8.dp))
+            }
+            // 上次同步失败 → 卡片级警示（进同步页就能看到原因与重试）
+            if (sync != null && !sync.ok) {
+                MiniTag("同步失败", palette.warn)
                 Spacer(Modifier.width(8.dp))
             }
             Icon(
@@ -674,13 +680,12 @@ private fun ProviderBlock(
             }
             if (!selecting) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
-                    val syncCaption = buildString {
-                        if (syncedAt > 0) {
-                            append("上次同步 ")
-                            append(Wire.timeText(syncedAt))
-                            append(" · ")
-                        }
-                        append("拉取上游最新清单，勾选要加的模型")
+                    val syncCaption = when {
+                        sync != null && !sync.ok ->
+                            "上次同步失败：${sync.msg.take(36)} · 点此重试"
+                        sync != null && sync.at > 0 ->
+                            "上次同步 ${Wire.timeText(sync.at)} · 拉取上游最新清单，勾选要加的模型"
+                        else -> "拉取上游最新清单，勾选要加的模型"
                     }
                     SheetAction("从上游同步模型", caption = syncCaption) { onSyncUpstream() }
                     SheetAction("添加模型", caption = "输入模型 ID，能力稍后自动同步") { onAddModel() }

@@ -1725,20 +1725,29 @@ class BridgeRepository(context: Context) {
                         arr.optString(i).takeIf { it.isNotBlank() }?.let(::add)
                     }
                 }
-                store.saveProviderSynced(provider.id, System.currentTimeMillis())
+                store.saveProviderSync(provider.id, ProviderSync(at = System.currentTimeMillis(), ok = true))
                 onResult(models, null)
             } catch (error: BridgeException) {
+                store.saveProviderSync(
+                    provider.id,
+                    ProviderSync(at = System.currentTimeMillis(), ok = false, msg = error.message.orEmpty()),
+                )
                 onResult(null, error.message)
             } catch (error: Exception) {
-                onResult(null, error.message ?: "网络错误")
+                val message = error.message ?: "网络错误"
+                store.saveProviderSync(
+                    provider.id,
+                    ProviderSync(at = System.currentTimeMillis(), ok = false, msg = message),
+                )
+                onResult(null, message)
             }
         }
     }
 
     /**
-     * 「从上游同步」的时间表（提供商 id → 最近成功时间），模型页展示用。
+     * 「从上游同步」的结果表（提供商 id → 最近一次成功/失败），模型页展示用。
      */
-    suspend fun providerSyncMap(): Map<String, Long> = store.loadProviderSyncMap()
+    suspend fun providerSyncMap(): Map<String, ProviderSync> = store.loadProviderSyncMap()
 
     /**
      * 保存某提供商的网络路由（"" = 自动走代理 / "proxy" / "direct"）。

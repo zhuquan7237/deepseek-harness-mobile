@@ -59,6 +59,10 @@ data class SessionSummary(
     val modelId: String = "",
     /** 这个会话已生成的文件数（桥接记账；0 = 没有）。 */
     val fileCount: Int = 0,
+    /** 列表第二行的摘要（桥接从引擎 turnOutline 取的最近一轮预览；空 = 没有）。 */
+    val preview: String = "",
+    /** 「跑完但还没打开」——列表上点一个小圆点（引擎在打开/再次开跑时清）。 */
+    val completed: Boolean = false,
 )
 
 /**

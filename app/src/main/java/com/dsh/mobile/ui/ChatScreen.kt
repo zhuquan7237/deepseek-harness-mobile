@@ -228,6 +228,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     var showSettings by remember { mutableStateOf(false) }
     var showCompanion by remember { mutableStateOf(false) }
     var readerDoc by remember { mutableStateOf<SourceDoc?>(null) }
+    var readDoc by remember { mutableStateOf<LongReadDoc?>(null) }
 
     // 公式预渲染：历史一到位就把消息里的公式排进后台渲染队列（幂等）——
     // 翻到哪一条都是成品，不再是"滚到眼前才当场编译"。
@@ -478,6 +479,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 showModels = true
                 if (state.doc == null) repo.loadModels()
             },
+            onOpenRead = { doc -> readDoc = doc },
             onPreview = {
                 keyboard?.hide()
                 preview = it
@@ -704,6 +706,11 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
         )
     }
 
+    // 评审稿《长答案先给地图》：长文速览页（章节 chips + 全文）
+    OverlayHost(readDoc) { doc ->
+        LongReadScreen(doc = doc, onDismiss = { readDoc = null })
+    }
+
     if (showSettings) {
         SessionSettingsSheet(
             state = state,
@@ -829,6 +836,7 @@ private fun MessageList(
     onOpenExternal: (String, String) -> Unit,
     onViewSource: (SourceDoc) -> Unit,
     onOpenGenerated: (SessionFile) -> Unit = {},
+    onOpenRead: (LongReadDoc) -> Unit = {},
     fetchImage: suspend (String) -> ByteArray? = { null },
     modifier: Modifier,
 ) {
@@ -895,6 +903,7 @@ private fun MessageList(
                             onOpenExternal = onOpenExternal,
                             onViewSource = onViewSource,
                             onOpenGenerated = onOpenGenerated,
+                            onOpenRead = onOpenRead,
                             fetchImage = fetchImage,
                         )
                     }
@@ -1195,6 +1204,7 @@ private fun MessageRow(
     onOpenExternal: (String, String) -> Unit = { _, _ -> },
     onViewSource: (SourceDoc) -> Unit = {},
     onOpenGenerated: (SessionFile) -> Unit = {},
+    onOpenRead: (LongReadDoc) -> Unit = {},
     fetchImage: suspend (String) -> ByteArray? = { null },
 ) {
 
@@ -1423,6 +1433,25 @@ private fun MessageRow(
                         detectTapGestures(onLongPress = { onCopy(row.text) })
                     },
             ) {
+                // 评审稿：长回答「先给地图」——章节 ≥2 时给一个速览入口
+                //（全屏读、点章节跳转；正文渲染不变，只加一个入口）
+                val readSections = remember(row.text) {
+                    if (row.text.length >= 400) splitSections(row.text) else emptyList()
+                }
+                val sectionCount = readSections.count { it.title.isNotBlank() }
+                if (done && sectionCount >= 2) {
+                    Text(
+                        "速览 · " + sectionCount + " 个章节",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.accent,
+                        modifier = Modifier
+                            .padding(bottom = 4.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(palette.accent.copy(alpha = 0.10f))
+                            .clickable { onOpenRead(LongReadDoc(readSections)) }
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
                 // 正文与代码块分开排：代码单独装进卡片（等宽、横向滚动、可复制/保存），
                 // 不再和正文混在一起看着像乱码
                 // 不能 remember(row.text)：body 是逐字显示出来的，第一帧还是空串，

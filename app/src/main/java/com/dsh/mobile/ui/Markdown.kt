@@ -667,3 +667,50 @@ private fun AnnotatedText(
         color = textColor,
     )
 }
+
+/**
+ * 「长文速览」的一节：标题（可为空 = 开头段）+ 正文。
+ */
+data class ReadSection(val title: String, val body: String)
+
+private val SECTION_HEADING = Regex("^\\s{0,3}#{1,3}\\s+(.+?)\\s*#*\\s*$")
+private val SECTION_BOLD = Regex("^\\s{0,3}\\*\\*([^*]{1,30})\\*\\*\\s*[:：]?\\s*$")
+
+/**
+ * 长回答速览（评审稿：长答案先给「地图」）：按 Markdown 标题（#~###）或整行加粗
+ * 切成小节——正文行原样保留，渲染仍走 MarkdownText。
+ * 代码围栏内的 `# 注释` 绝不当标题（fence 状态机跟着翻转）。
+ */
+fun splitSections(markdown: String): List<ReadSection> {
+    val sections = mutableListOf<ReadSection>()
+    val buffer = StringBuilder()
+    var currentTitle: String? = null
+    var inFence = false
+
+    fun flush() {
+        val body = buffer.toString().trim()
+        if (currentTitle != null || body.isNotEmpty()) {
+            sections += ReadSection(currentTitle.orEmpty(), body)
+        }
+        buffer.clear()
+        currentTitle = null
+    }
+
+    for (line in markdown.lines()) {
+        val fence = line.trimStart().startsWith("```")
+        if (fence) inFence = !inFence
+        val head = if (!fence && !inFence) {
+            SECTION_HEADING.find(line) ?: SECTION_BOLD.find(line)
+        } else {
+            null
+        }
+        if (head != null) {
+            flush()
+            currentTitle = head.groupValues[1].trim()
+        } else {
+            buffer.appendLine(line)
+        }
+    }
+    flush()
+    return sections
+}

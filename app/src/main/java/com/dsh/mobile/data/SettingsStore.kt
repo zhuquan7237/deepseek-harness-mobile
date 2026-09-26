@@ -31,6 +31,9 @@ data class StoredSession(
     val defaultLabel: String = "",
 )
 
+/** 「从上游同步」最近一次的结果：成功给时间，失败给原因（模型页展示用）。 */
+data class ProviderSync(val at: Long = 0L, val ok: Boolean = true, val msg: String = "")
+
 /** Everything that must survive a restart: where the desktop is, the device
  *  token, the last event seq (so a reconnect can ask for the gap), and theme. */
 class SettingsStore(context: Context) {
@@ -121,23 +124,38 @@ class SettingsStore(context: Context) {
     }
 
     /**
-     * 「从上游同步」最近一次成功的时间（按提供商记；0 = 从未同步）。
+     * 「从上游同步」最近一次的结果（成功给时间、失败给原因），按提供商记。
      * 存成一条 JSON 字符串，模型页一次读全，避免逐个 suspend 读 DataStore。
      */
-    suspend fun saveProviderSynced(providerId: String, at: Long) {
+    suspend fun saveProviderSync(providerId: String, sync: ProviderSync) {
         context.dshStore.edit { prefs ->
             val current = prefs[Keys.PROVIDER_SYNC]?.let { raw ->
                 runCatching { JSONObject(raw) }.getOrNull()
             } ?: JSONObject()
-            current.put(providerId, at)
+            current.put(
+                providerId,
+                JSONObject().put("at", sync.at).put("ok", sync.ok).put("msg", sync.msg),
+            )
             prefs[Keys.PROVIDER_SYNC] = current.toString()
         }
     }
 
-    suspend fun loadProviderSyncMap(): Map<String, Long> {
+    suspend fun loadProviderSyncMap(): Map<String, ProviderSync> {
         val raw = context.dshStore.data.first()[Keys.PROVIDER_SYNC].orEmpty()
         val obj = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyMap()
-        return obj.keys().asSequence().associateWith { obj.optLong(it, 0L) }
+        val result = mutableMapOf<String, ProviderSync>()
+        for (key in obj.keys()) {
+            when (val value = obj.get(key)) {
+                // 旧格式（一个时间戳）当作成功读，兼容老版本写下的数据
+                is Long -> result[key] = ProviderSync(at = value, ok = true)
+                is JSONObject -> result[key] = ProviderSync(
+                    at = value.optLong("at"),
+                    ok = value.optBoolean("ok", true),
+                    msg = value.optString("msg"),
+                )
+            }
+        }
+        return result
     }
 
     /** Forget the binding but keep the server address and theme. */

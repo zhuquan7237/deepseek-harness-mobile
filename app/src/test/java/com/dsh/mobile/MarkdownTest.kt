@@ -155,4 +155,23 @@ class MarkdownTest {
         assertEquals("鹈鹕", link.text)
         assertFalse(spans.joinToString("") { it.text }.contains("!["))
     }
+
+    @Test
+    fun splitSectionsFindsHeadingsAndBoldLines() {
+        val md = "开头一段。\n\n## 结论\n- 好了\n\n**证据链**\n1. 日志 A\n2. 日志 B\n"
+        val secs = com.dsh.mobile.ui.splitSections(md)
+        assertEquals(3, secs.size)
+        assertEquals("", secs[0].title)
+        assertEquals("结论", secs[1].title)
+        assertEquals("证据链", secs[2].title)
+        assertTrue(secs[2].body.contains("日志 A"))
+    }
+
+    @Test
+    fun splitSectionsIgnoresHashInsideCodeFence() {
+        val md = "## 真标题\n```bash\n# 这不是标题\necho hi\n```\n尾注。"
+        val secs = com.dsh.mobile.ui.splitSections(md)
+        assertEquals(1, secs.count { it.title == "真标题" })
+        assertEquals(0, secs.count { it.title == "这不是标题" })
+    }
 }

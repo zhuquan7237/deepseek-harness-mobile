@@ -74,6 +74,8 @@ object Wire {
             modelProvider = model?.first.orEmpty(),
             modelId = model?.second.orEmpty(),
             fileCount = json.optInt("producedFiles", 0),
+            preview = json.optString("preview"),
+            completed = json.optBoolean("completed", false),
         )
     }
 
@@ -85,6 +87,17 @@ object Wire {
         .replace("`", "")
         .replace(Regex("\\s+"), " ")
         .trim()
+
+    /**
+     * 列表摘要的展示清洗：Markdown 记号去掉、链接/图片留文字、空白折叠。
+     * 引擎给的预览本身已经限长且排除了注入内容，这里只管「显示好看」。
+     */
+    fun previewText(raw: String): String {
+        var t = raw.replace(Regex("!?\\[([^\\]]*)]\\([^)]*\\)"), "$1")
+        t = t.replace(Regex("[`*#_>~]+"), " ")
+        t = t.replace(Regex("\\s+"), " ").trim()
+        return t
+    }
 
     /**
      * 会话用的模型在 `projections.values.modelSelection`（`next` 优先，退回 `lastUsed`）。

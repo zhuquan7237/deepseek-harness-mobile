@@ -852,4 +852,11 @@ class WireTest {
         assertNull(com.dsh.mobile.ui.contextLabel("—"))
         assertNull(com.dsh.mobile.ui.contextLabel(""))
     }
+
+    @Test
+    fun previewTextStripsMarkdownNoise() {
+        assertEquals("执行结果 桌面 8 秒正常启动", Wire.previewText("## 执行结果 **桌面 8 秒正常启动**"))
+        assertEquals("见 文档 说明", Wire.previewText("见 [文档](https://example.com/x) 说明"))
+        assertEquals("", Wire.previewText("   "))
+    }
 }
