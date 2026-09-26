@@ -916,6 +916,13 @@ class BridgeRepository(context: Context) {
                             parsed.runningSince > 0L -> parsed.runningSince
                             else -> System.currentTimeMillis()
                         },
+                        // 进度可见（0.4.2）：重进正在跑的会话，重试/尝试时长也要恢复——否则
+                        // 「上游中断重试中」要干等到下一次重试事件才可见；字数由活体脉冲自续。
+                        taskRetry = if (!parsed.running) "" else (parsed.retryText ?: current.taskRetry),
+                        taskAttemptMs = if (!parsed.running) 0L else if (parsed.attemptMs > 0) parsed.attemptMs else current.taskAttemptMs,
+                        taskChars = if (parsed.running) current.taskChars else -1,
+                        taskReasonChars = if (parsed.running) current.taskReasonChars else -1,
+                        taskProgressAt = if (parsed.running) current.taskProgressAt else 0L,
                         stopping = parsed.running && current.stopping,
                         stopRequestedAt = if (parsed.running) current.stopRequestedAt else 0L,
                         stopAcked = parsed.running && current.stopAcked,
@@ -1521,6 +1528,7 @@ class BridgeRepository(context: Context) {
                         running = true, live = emptyList(), thinking = true, thinkingSince = System.currentTimeMillis(),
                         runSince = System.currentTimeMillis(), stopping = false, stopRequestedAt = 0L,
                         stopAcked = false, stopSendFailed = false, streamedLive = false,
+                        taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L,
                     )
                 }
             }
@@ -1546,7 +1554,8 @@ class BridgeRepository(context: Context) {
                 _state.update {
                     // live 不在这里清：已落库的由历史重载原子撤；失败/停止回合留下的
                     // 半截文字继续显示（用户看得到已生成的部分），下一个 turn/start 统一清场。
-                    it.copy(running = false, thinking = false, thinkingSince = 0L, runSince = 0L, stopping = false, stopRequestedAt = 0L, stopAcked = false, stopSendFailed = false)
+                    it.copy(running = false, thinking = false, thinkingSince = 0L, runSince = 0L, stopping = false, stopRequestedAt = 0L, stopAcked = false, stopSendFailed = false,
+                        taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L)
                 }
             }
             "assistant/chunk" -> {
@@ -1570,6 +1579,24 @@ class BridgeRepository(context: Context) {
                 // 按落库的 turn:step 原子撤（同帧切换）；先撤会留下 250ms 防抖空窗，
                 // 屏幕上就是「文字先没了、历史还没到」的一闪。
                 scheduleHistoryReload()
+            }
+            "llm/retry" -> {
+                // 上游断线自动重试（引擎策略）：把「连接中断 · 第 2/5 次重试」写进运行现场——
+                // 这是「不是卡死、是在重试」的直接证据（用户实测提问过）。
+                Wire.retryText(data)?.let { note -> _state.update { it.copy(taskRetry = note) } }
+            }
+            "assistant/attempt" -> {
+                // 一次尝试结束（成功或失败）才落这条：记录它跑了多久，供重试提示引用
+                val span = Wire.attemptSpanMs(data)
+                if (span > 0) _state.update { it.copy(taskAttemptMs = span) }
+            }
+            "assistant/progress" -> {
+                // 桥接 0.2.31 的计数脉冲（不含内容）：证明上游还在吐数据——「真在思考」的答案
+                Wire.progressCounts(data)?.let { counts ->
+                    _state.update {
+                        it.copy(taskChars = counts.first, taskReasonChars = counts.second, taskProgressAt = counts.third)
+                    }
+                }
             }
             "tool/call", "tool/result", "user/message",
             "agent/inbox/spliced" -> scheduleHistoryReload()

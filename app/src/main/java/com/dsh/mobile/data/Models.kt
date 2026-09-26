@@ -225,6 +225,12 @@ data class AppState(
     val thinkingSince: Long = 0L,
     /** 本回合开始时间（任务控制条的「已用时」；恢复历史时用 turn/start 的真实时间续上）。 */
     val runSince: Long = 0L,
+    /** 运行现场（进度可见 0.4.2）：上游重试文案 / 上次尝试时长 / 流式字数脉冲——回答「真在跑还是卡死」。 */
+    val taskRetry: String = "",
+    val taskAttemptMs: Long = 0L,
+    val taskChars: Int = -1,
+    val taskReasonChars: Int = -1,
+    val taskProgressAt: Long = 0L,
     /** 停止请求已发出、等待电脑确认——收到 turn/end 才清（绝不在断线时假装已停止）。 */
     val stopping: Boolean = false,
     val stopRequestedAt: Long = 0L,

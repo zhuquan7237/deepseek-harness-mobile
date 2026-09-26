@@ -959,4 +959,32 @@ class WireTest {
     fun transferItemsMissingListIsEmpty() {
         assertEquals(0, Wire.parseTransferItems(JSONObject()).size)
     }
+
+    @Test
+    fun retryEventReadsAsHumanText() {
+        val data = JSONObject(
+            """{"retryId":"r1","turn":2,"step":1,"retry":2,"maxRetries":5,"delayMs":528.5,"failure":{"message":"terminated","code":"TRANSPORT"}}"""
+        )
+        assertEquals("连接中断 · 第 2/5 次重试", Wire.retryText(data))
+        assertEquals(null, Wire.retryText(JSONObject("""{"turn":1}""")))
+    }
+
+    @Test
+    fun attemptSpanMeasuresFirstToLastChunk() {
+        val data = JSONObject(
+            """{"turn":2,"step":1,"stream":[{"type":"chunk","time":1000,"chunk":{"type":"block-start"}},{"type":"reasoning-chunks","time0":1500,"index":0,"dt":[10,20,30]},{"type":"chunk","time":9000,"chunk":{"type":"block-end"}}]}"""
+        )
+        assertEquals(8000L, Wire.attemptSpanMs(data))
+        assertEquals(0L, Wire.attemptSpanMs(JSONObject()))
+    }
+
+    @Test
+    fun progressPulseCarriesCountsNotContent() {
+        val data = JSONObject("""{"turn":2,"step":1,"textChars":12,"reasoningChars":3400,"at":1790443738769}""")
+        val c = Wire.progressCounts(data)
+        assertEquals(12, c?.first)
+        assertEquals(3400, c?.second)
+        assertEquals(1790443738769L, c?.third)
+        assertEquals(null, Wire.progressCounts(JSONObject()))
+    }
 }

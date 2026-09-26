@@ -995,7 +995,7 @@ private fun MessageList(
             }
         }
         if (state.thinking && live.isEmpty()) {
-            item(key = "thinking") { ThinkingRow(state.thinkingSince) }
+            item(key = "thinking") { ThinkingRow(state) }
         }
         if (state.sessionFiles.isNotEmpty()) {
             item(key = "session-files") {
@@ -2230,14 +2230,14 @@ internal fun displayTitle(t: String): String =
 
 /**
  * The one place the app is allowed to look alive while it waits: a shimmering
- * "正在思考" with the seconds elapsed, so a slow turn never reads as a freeze.
- * The desktop's engine sends no streaming deltas (verified: a whole reply lands
- * as one `assistant/message`), so this label is the only progress signal there
- * is — which is exactly why it has to move.
+ * "电脑正在处理" with the seconds elapsed, so a slow turn never reads as a freeze.
+ * 0.4.2 进度可见：再挂一段「现场」副文——模型正在思考/输出的字数（桥接 0.2.31
+ * 计数脉冲）、上游重试状态、或长时间没有新数据的事实，让「真在跑还是卡死」有答案。
  */
 @Composable
-private fun ThinkingRow(since: Long) {
+private fun ThinkingRow(state: AppState) {
     val palette = LocalDsh.current
+    val since = state.thinkingSince
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(since) {
         if (!Motion.animations) return@LaunchedEffect
@@ -2247,6 +2247,7 @@ private fun ThinkingRow(since: Long) {
         }
     }
     val seconds = if (since > 0) ((now - since) / 1000).toInt().coerceAtLeast(0) else 0
+    val phase = taskPhaseOf(state, now)
     Row(
         Modifier
             .fillMaxWidth()
@@ -2256,7 +2257,16 @@ private fun ThinkingRow(since: Long) {
     ) {
         // 第三批评审 P5：把"消息发出去了"和"电脑在处理"说清楚——这里标明是电脑端在处理。
         ShimmerText("电脑正在处理", style = MaterialTheme.typography.labelMedium)
-        if (seconds >= 3) {
+        if (phase != null) {
+            // 字数类副文每 3.5 秒跳一次：不进无障碍树，读屏不会被"忙音"轰炸；
+            // 重试（warn）是重要状态变化，保留语义让读屏能播报。
+            Text(
+                "· ${phase.text}",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (phase.warn) palette.warn else palette.textTertiary,
+                modifier = if (phase.warn) Modifier else Modifier.clearAndSetSemantics {},
+            )
+        } else if (seconds >= 3) {
             Text("· ${seconds} 秒", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
         }
     }
@@ -2803,6 +2813,16 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                         color = palette.textTertiary,
                         modifier = Modifier.clearAndSetSemantics {},
                     )
+                    // 进度可见（0.4.2）：重试 / 字样计数 / 静默时长——见 taskPhaseOf。
+                    // 字数类跳得快，不进读屏；重试是重要状态变化，保留播报。
+                    taskPhaseOf(state, now)?.let { phase ->
+                        Text(
+                            phase.text,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (phase.warn) palette.warn else palette.textSecondary,
+                            modifier = if (phase.warn) Modifier else Modifier.clearAndSetSemantics {},
+                        )
+                    }
                 }
                 Row(
                     Modifier
@@ -2848,6 +2868,46 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                 )
             }
         }
+    }
+}
+
+/** 运行现场副行（进度可见 0.4.2）：text=显示文案，warn=用警示色（上游重试）。 */
+private data class TaskPhase(val text: String, val warn: Boolean)
+
+/**
+ * 「真在跑还是卡死」的答案，按信息新鲜度排序：
+ * ① 3.5 秒内的计数脉冲 → 模型正在输出/思考 · 已 N 字（桥接 0.2.31，只在有数据时）；
+ * ② 上游断线自动重试 → 「连接中断 · 第 2/5 次重试（上次尝试 4 分 28 秒）」（引擎 llm/retry）；
+ * ③ 有过输出但安静 ≥150 秒 → 说明可能较慢/卡住（工具执行也可能安静）；
+ * ④ 一直没有任何输出 → 把等待时长摆出来（模型可能在深度思考，也可能上游有问题）。
+ */
+private fun taskPhaseOf(state: AppState, now: Long): TaskPhase? {
+    val fresh = state.taskProgressAt > 0 && now - state.taskProgressAt <= 12_000L
+    return when {
+        fresh && state.taskChars > 0 -> TaskPhase("模型正在输出 · 已 ${countText(state.taskChars)} 字", false)
+        fresh && state.taskReasonChars > 0 -> TaskPhase("模型正在思考 · 已 ${countText(state.taskReasonChars)} 字", false)
+        state.taskRetry.isNotEmpty() -> {
+            val extra = if (state.taskAttemptMs >= 5000) "（上次尝试 ${spanText(state.taskAttemptMs)}）" else ""
+            TaskPhase("${state.taskRetry}$extra", true)
+        }
+        state.taskProgressAt > 0 && now - state.taskProgressAt >= 150_000L ->
+            TaskPhase("已 ${spanText(now - state.taskProgressAt)}没有新输出（模型或工具较慢）", false)
+        state.taskProgressAt == 0L && state.runSince > 0 && now - state.runSince >= 60_000L ->
+            TaskPhase("还没有收到模型输出 · 已等待 ${spanText(now - state.runSince)}", false)
+        else -> null
+    }
+}
+
+/** 字数：<1 万按个位，≥1 万按「N.N 万」。 */
+private fun countText(n: Int): String = if (n >= 10_000) "%.1f 万".format(n / 10_000.0) else "$n"
+
+/** 「28 秒」/「4 分 28 秒」/「1 小时 02 分」。 */
+private fun spanText(ms: Long): String {
+    val sec = (ms / 1000).coerceAtLeast(0)
+    return when {
+        sec < 60 -> "$sec 秒"
+        sec < 3600 -> "${sec / 60} 分 ${(sec % 60).toString().padStart(2, '0')} 秒"
+        else -> "${sec / 3600} 小时 ${((sec % 3600) / 60).toString().padStart(2, '0')} 分"
     }
 }
 

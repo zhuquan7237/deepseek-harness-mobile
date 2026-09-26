@@ -156,6 +156,9 @@ object Wire {
         val endTime: Long = 0L,
         /** 还在跑的回合的 turn/start 时间——重进会话时用它当天花板，秒数不会从 0 重数。 */
         val runningSince: Long = 0L,
+        /** 运行中回合的现场（进度可见 0.4.2）：最近一次上游重试文案 + 上一次尝试时长。 */
+        val retryText: String? = null,
+        val attemptMs: Long = 0L,
     )
 
     /** One content block inside an assistant/user message. */
@@ -232,6 +235,9 @@ object Wire {
         var runningSince = 0L
         // 历史里最后一个事件的时间：折叠的执行记录靠它算「这一段到哪结束」
         var endTime = 0L
+        // 进度可见（0.4.2）：重进正在跑的会话时，把上游重试 / 上次尝试时长也恢复出来
+        var lastRetryText: String? = null
+        var lastAttemptMs = 0L
         val seenCalls = HashSet<String>()
         // 引擎收件箱：agent/inbox/spliced 记录"已排队/已插话但还没生效"的消息，
         // 手机发、桌面发的都在这 —— 是跨设备、重启后都不丢的唯一真相。
@@ -257,6 +263,11 @@ object Wire {
                     turnEndError(data)?.let { rows.add(ChatRow(Role.ERROR, it)) }
                     // 被输出长度上限截断的回合同理：有结束、没答案，别让用户以为卡死
                     turnEndTruncated(data)?.let { rows.add(ChatRow(Role.TRUNCATED, it)) }
+                }
+                "llm/retry" -> retryText(data)?.let { lastRetryText = it }
+                "assistant/attempt" -> {
+                    val span = attemptSpanMs(data)
+                    if (span > 0) lastAttemptMs = span
                 }
                 "step/start" -> stepStart = time
                 "approval/asked" -> {
@@ -374,7 +385,7 @@ object Wire {
         // 待生效的消息挂在末尾：它们还没进入回合，但用户必须看得见
         inbox["next-step"]?.forEach { (_, text) -> rows.add(ChatRow(Role.STEER, text)) }
         inbox["next-turn"]?.forEach { (_, text) -> rows.add(ChatRow(Role.QUEUED, text)) }
-        return HistoryParse(rows, lastTurn == "start", endTime, runningSince)
+        return HistoryParse(rows, lastTurn == "start", endTime, runningSince, lastRetryText, lastAttemptMs)
     }
 
     /** 一段连续的执行记录（思考 + 工具调用/返回），折叠成一行摘要后展示。 */
@@ -992,6 +1003,50 @@ fun isInjectedContext(text: String): Boolean =
             today.minusDays(1) -> "昨天 $hm"
             else -> "${at.monthValue}月${at.dayOfMonth}日"
         }
+    }
+
+    /** llm/retry 事件 → 人话（"连接中断 · 第 2/5 次重试"）；非重试事件返回 null。 */
+    fun retryText(data: JSONObject): String? {
+        val n = data.optInt("retry", 0)
+        if (n <= 0) return null
+        val max = data.optInt("maxRetries", 0)
+        val code = data.optJSONObject("failure")?.optString("code").orEmpty()
+        val label = when (code) {
+            "TRANSPORT" -> "连接中断"
+            "TIMEOUT" -> "上游超时"
+            "RATE_LIMIT" -> "被上游限流"
+            "SERVER" -> "上游服务错误"
+            "EMPTY_RESPONSE" -> "空响应"
+            else -> "上游中断"
+        }
+        return if (max > 0) "$label · 第 $n/$max 次重试" else "$label · 重试中"
+    }
+
+    /**
+     * assistant/attempt 的 stream 时间轴：这次尝试从第一片数据到最后一片跑了多久。
+     * 块事件带 time、增量组带 time0；取极差即可（提示用途，近似到秒级足够）。
+     */
+    fun attemptSpanMs(data: JSONObject): Long {
+        val stream = data.optJSONArray("stream") ?: return 0L
+        var min = 0L
+        var max = 0L
+        for (i in 0 until stream.length()) {
+            val part = stream.optJSONObject(i) ?: continue
+            for (key in listOf("time", "time0")) {
+                val t = part.optLong(key, 0L)
+                if (t <= 0L) continue
+                if (min == 0L || t < min) min = t
+                if (t > max) max = t
+            }
+        }
+        return if (min > 0L && max > min) max - min else 0L
+    }
+
+    /** assistant/progress（桥接 0.2.31 计数脉冲，不含内容）→ (文本字数, 思考字数, 时刻)。 */
+    fun progressCounts(data: JSONObject): Triple<Int, Int, Long>? {
+        val at = data.optLong("at", 0L)
+        if (at <= 0L) return null
+        return Triple(data.optInt("textChars", -1), data.optInt("reasoningChars", -1), at)
     }
 
     /** Epoch seconds → millis, so either unit renders sensibly. */
