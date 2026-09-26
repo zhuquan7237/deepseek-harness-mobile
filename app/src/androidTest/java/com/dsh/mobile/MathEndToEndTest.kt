@@ -49,7 +49,8 @@ class MathEndToEndTest {
         composeRule.onAllNodesWithContentDescription(description).fetchSemanticsNodes().isNotEmpty()
 
     private fun isOnPairingScreen(): Boolean = anyText("用配对码配对")
-    private fun isOnChatScreen(): Boolean = anyText("让电脑帮你完成什么？")
+    private fun isOnChatScreen(): Boolean =
+        anyText("让电脑帮你完成什么？") || anyText("输入下一项任务", substring = true)
     private fun isOnSessionsScreen(): Boolean = anyText("搜索会话", substring = true)
     private fun isConnected(): Boolean = isOnChatScreen() || anyText("已连接", substring = true)
 

@@ -145,7 +145,8 @@ class EndToEndTest {
     private fun isOnSessionsScreen(): Boolean = anyText("搜索会话", substring = true)
 
     /** 现在进 App 直接落在新对话上，所以"到家了"的判断要包括聊天页。 */
-    private fun isOnChatScreen(): Boolean = anyText("让电脑帮你完成什么？")
+    private fun isOnChatScreen(): Boolean =
+        anyText("让电脑帮你完成什么？") || anyText("输入下一项任务", substring = true)
 
     /** 已连上的两种形态：聊天页（新落地页）或会话页顶栏的「已连接」。 */
     private fun isConnected(): Boolean = isOnChatScreen() || anyText("已连接", substring = true)

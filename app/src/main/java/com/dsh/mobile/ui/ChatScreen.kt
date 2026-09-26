@@ -76,6 +76,7 @@ import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Image
@@ -481,7 +482,9 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             )
             // 用户要求：对话页右上角直达「新建对话」——不用先退回会话列表再点新建。
             // 复用 createSession()：先打开新会话（不等网络），默认模型后台套上。
-            CircleButton(Icons.Outlined.Add, "新建对话", container = false, size = 48.dp, iconSize = 24.dp) { repo.createSession() }
+            // 评审 §6（2026-09-27）：裸 ＋ 与输入框的「添加附件」混淆——换成与列表页「新建」同款
+            // Edit 图标，功能一眼可辨（附件入口保持在输入区上下文里）。
+            CircleButton(Icons.Outlined.Edit, "新建对话", container = false, size = 48.dp, iconSize = 22.dp) { repo.createSession() }
             CircleButton(Icons.Outlined.MoreVert, "更多", container = false, size = 48.dp, iconSize = 22.dp) { showActions = true }
         }
         MessageList(
@@ -2209,7 +2212,8 @@ private fun deviceTitle(state: AppState): String =
 /** 副标题 = 连接与任务状态（评审：先让人确认连的哪台电脑、它闲不闲）。 */
 private fun connMetaText(state: AppState): String = when {
     state.conn != Conn.ONLINE -> "重连中…"
-    state.running -> "已连接 · 正在执行任务"
+    // 评审 §1（2026-09-27）：顶部只留连接状态——执行详情集中在任务条一处，不再三处重复。
+    state.running -> "已连接"
     else -> "已连接 · 空闲"
 }
 
@@ -2229,25 +2233,25 @@ internal fun displayTitle(t: String): String =
     if (t.isBlank() || t.startsWith("session-")) "新对话" else t
 
 /**
- * The one place the app is allowed to look alive while it waits: a shimmering
- * "电脑正在处理" with the seconds elapsed, so a slow turn never reads as a freeze.
- * 0.4.2 进度可见：再挂一段「现场」副文——模型正在思考/输出的字数（桥接 0.2.31
- * 计数脉冲）、上游重试状态、或长时间没有新数据的事实，让「真在跑还是卡死」有答案。
+ * The one place the app is allowed to look alive while it waits：shimmer 的
+ * 「正在处理「…」」+ 阶段心跳副文（0.4.2 进度可见）。
+ * 评审 §2（2026-09-27）：任务反馈要贴着「哪条请求」——引最近一条用户消息；
+ * 秒数不再在这里重复（时间统一由任务条的「已用时」承载，一处为准）。
  */
 @Composable
 private fun ThinkingRow(state: AppState) {
     val palette = LocalDsh.current
-    val since = state.thinkingSince
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(since) {
+    LaunchedEffect(state.thinkingSince) {
         if (!Motion.animations) return@LaunchedEffect
         while (true) {
             now = System.currentTimeMillis()
             delay(1000)
         }
     }
-    val seconds = if (since > 0) ((now - since) / 1000).toInt().coerceAtLeast(0) else 0
     val phase = taskPhaseOf(state, now)
+    val taskRaw = state.history.lastOrNull { it.who == Role.USER }?.text?.replace('\n', ' ')?.trim().orEmpty()
+    val task = if (taskRaw.length > 16) taskRaw.take(16) + "…" else taskRaw
     Row(
         Modifier
             .fillMaxWidth()
@@ -2255,8 +2259,11 @@ private fun ThinkingRow(state: AppState) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // 第三批评审 P5：把"消息发出去了"和"电脑在处理"说清楚——这里标明是电脑端在处理。
-        ShimmerText("电脑正在处理", style = MaterialTheme.typography.labelMedium)
+        // 第三批评审 P5 + 本批评审 §2：标明是电脑端在处理，并带上「在处理哪条请求」。
+        ShimmerText(
+            if (task.isNotEmpty()) "正在处理「$task」" else "电脑正在处理",
+            style = MaterialTheme.typography.labelMedium,
+        )
         if (phase != null) {
             // 字数类副文每 3.5 秒跳一次：不进无障碍树，读屏不会被"忙音"轰炸；
             // 重试（warn）是重要状态变化，保留语义让读屏能播报。
@@ -2266,8 +2273,6 @@ private fun ThinkingRow(state: AppState) {
                 color = if (phase.warn) palette.warn else palette.textTertiary,
                 modifier = if (phase.warn) Modifier else Modifier.clearAndSetSemantics {},
             )
-        } else if (seconds >= 3) {
-            Text("· ${seconds} 秒", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
         }
     }
 }
@@ -2534,7 +2539,13 @@ private fun Composer(
                     ) {
                         if (draft.isEmpty()) {
                             Text(
-                                if (state.connected) "让电脑帮你完成什么？" else "重连中…",
+                                when {
+                                    !state.connected -> "重连中…"
+                                    // 评审 §5（2026-09-27）：执行中输入 = 排队到本轮之后（引擎 queue 模式），
+                                    // 把规则直接写在提示里，别让人猜是插话、排队还是打断。
+                                    state.running -> "输入下一项任务，本轮完成后发送…"
+                                    else -> "让电脑帮你完成什么？"
+                                },
                                 style = inputStyle.copy(color = palette.textTertiary),
                                 // 占位文字也按同一套实测校正，两种状态视觉位置一致
                                 onTextLayout = { result ->
@@ -2801,11 +2812,19 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
-            // ③ 正在执行（正常）
+            // ③ 正在执行（正常）：评审 §1/§7——阶段信息当主行（「模型正在思考 · 已 3.2 万字」），
+            // 停止键保留 48dp 热区但降体量（去边框、软底、次要色）。
             state.running -> {
+                val phase = taskPhaseOf(state, now)
                 Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
                 Column(Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }) {
-                    Text("正在执行", style = MaterialTheme.typography.labelMedium, color = palette.textPrimary)
+                    Text(
+                        phase?.text ?: "正在执行",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (phase?.warn == true) palette.warn else palette.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     // 计时每秒跳一次：不进无障碍树，读屏不会被"每秒忙音"轰炸（M4 0.2.61 第 5 条）。
                     Text(
                         "已用时 ${fmtClock(elapsed)}",
@@ -2813,28 +2832,18 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                         color = palette.textTertiary,
                         modifier = Modifier.clearAndSetSemantics {},
                     )
-                    // 进度可见（0.4.2）：重试 / 字样计数 / 静默时长——见 taskPhaseOf。
-                    // 字数类跳得快，不进读屏；重试是重要状态变化，保留播报。
-                    taskPhaseOf(state, now)?.let { phase ->
-                        Text(
-                            phase.text,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (phase.warn) palette.warn else palette.textSecondary,
-                            modifier = if (phase.warn) Modifier else Modifier.clearAndSetSemantics {},
-                        )
-                    }
                 }
                 Row(
                     Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, palette.outline, RoundedCornerShape(10.dp))
+                        .background(palette.surfaceHi)
                         .clickable {
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             repo.cancelTurn()
                         }
                         .heightIn(min = 48.dp)
-                        .widthIn(min = 88.dp)
-                        .padding(horizontal = 16.dp)
+                        .widthIn(min = 76.dp)
+                        .padding(horizontal = 14.dp)
                         .semantics { contentDescription = "停止生成" },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2842,10 +2851,10 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                     Icon(
                         Icons.Outlined.Stop,
                         contentDescription = null,
-                        tint = palette.textPrimary,
-                        modifier = Modifier.size(20.dp),
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(18.dp),
                     )
-                    Text("停止", style = MaterialTheme.typography.labelLarge, color = palette.textPrimary)
+                    Text("停止", style = MaterialTheme.typography.labelMedium, color = palette.textSecondary)
                 }
             }
             // ④ 无任务失联
