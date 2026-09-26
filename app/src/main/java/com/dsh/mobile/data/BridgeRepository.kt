@@ -1232,6 +1232,83 @@ class BridgeRepository(context: Context) {
         _state.update { it.copy(view = View.SETTINGS) }
     }
 
+    // ------------------------------------------------------------ 隔空传输
+
+    fun openTransfer() {
+        _state.update { it.copy(view = View.TRANSFER) }
+        loadTransfer()
+    }
+
+    fun closeTransfer() {
+        _state.update { it.copy(view = View.SESSIONS) }
+    }
+
+    /** 传输记录（quiet = true 时失败静默：后台轮询用）。 */
+    fun loadTransfer(quiet: Boolean = false) {
+        val token = _state.value.token ?: return
+        scope.launch {
+            if (!quiet) _state.update { it.copy(transferLoading = true) }
+            try {
+                val doc = api.transferList(token)
+                _state.update { it.copy(transfer = Wire.parseTransferItems(doc), transferLoading = false) }
+            } catch (e: BridgeException) {
+                _state.update { it.copy(transferLoading = false) }
+                if (!quiet) toast(e.message)
+            } catch (e: Exception) {
+                _state.update { it.copy(transferLoading = false) }
+                if (!quiet) toast("读取传输记录失败：${e.message ?: "网络错误"}")
+            }
+        }
+    }
+
+    /** 发送一个文件到电脑（原始字节上传，桥接侧上限 64MB）。 */
+    fun sendTransfer(name: String, mime: String, bytes: ByteArray) {
+        val token = _state.value.token ?: return
+        if (_state.value.transferSending) return
+        scope.launch {
+            _state.update { it.copy(transferSending = true) }
+            try {
+                api.transferSend(token, name, mime, bytes)
+                _state.update { it.copy(transferSending = false) }
+                toast("已发送到电脑：$name")
+                loadTransfer(quiet = true)
+            } catch (e: BridgeException) {
+                _state.update { it.copy(transferSending = false) }
+                toast(e.message)
+            } catch (e: Exception) {
+                _state.update { it.copy(transferSending = false) }
+                toast("发送失败：${e.message ?: "网络错误"}")
+            }
+        }
+    }
+
+    fun deleteTransfer(item: TransferItem) {
+        val token = _state.value.token ?: return
+        scope.launch {
+            try {
+                api.transferDelete(token, item.id)
+                _state.update { s -> s.copy(transfer = s.transfer.filterNot { it.id == item.id }) }
+                toast("已删除：${item.name}")
+            } catch (e: BridgeException) {
+                toast(e.message)
+            } catch (e: Exception) {
+                toast("删除失败：${e.message ?: "网络错误"}")
+            }
+        }
+    }
+
+    /** 下载一条记录的文件字节（电脑 → 手机）；失败 toast 并返回 null。 */
+    suspend fun downloadTransfer(item: TransferItem): ByteArray? = try {
+        val token = _state.value.token
+        if (token == null) null else api.transferDownload(token, item.id)
+    } catch (e: BridgeException) {
+        toast(e.message)
+        null
+    } catch (e: Exception) {
+        toast("下载失败：${e.message ?: "网络错误"}")
+        null
+    }
+
     /** 审批（K2-A 只读）：桥接端为权威；本机只展示，不提供任何裁决入口。 */
     fun loadApprovals(quiet: Boolean = true) {
         val token = _state.value.token ?: return

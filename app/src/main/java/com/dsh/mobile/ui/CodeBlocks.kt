@@ -193,6 +193,30 @@ fun saveTextToDownloads(context: Context, fileName: String, content: String): St
     }
 }.getOrNull()
 
+/** 保存任意字节文件到「下载」（隔空传输收取电脑文件用）。返回保存位置，失败 null。 */
+fun saveBytesToDownloads(context: Context, fileName: String, mime: String, bytes: ByteArray): String? = runCatching {
+    val safeName = fileName.ifBlank { "dsh-${System.currentTimeMillis()}" }
+    if (Build.VERSION.SDK_INT >= 29) {
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+            put(MediaStore.Downloads.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val resolver = context.contentResolver
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
+        resolver.openOutputStream(uri)?.use { it.write(bytes) }
+        values.clear()
+        values.put(MediaStore.Downloads.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        "下载/$safeName"
+    } else {
+        val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+        val f = File(dir, safeName)
+        f.writeBytes(bytes)
+        f.absolutePath
+    }
+}.getOrNull()
+
 /** 一眼认出「这行是错误」的启发式（"只看错误"过滤用）。 */
 private val ERROR_LINE_RE = Regex("(?i)(error|fail|✗|失败|错误|exception|fatal|panic|traceback)")
 

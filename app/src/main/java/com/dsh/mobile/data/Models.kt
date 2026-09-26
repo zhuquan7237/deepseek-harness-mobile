@@ -3,7 +3,7 @@ package com.dsh.mobile.data
 import androidx.compose.runtime.Immutable
 
 /** Which screen the shell is showing. */
-enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS, LOGS, APPROVALS }
+enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS, LOGS, APPROVALS, TRANSFER }
 
 /**
  * The live link to the desktop bridge, as the user sees it:
@@ -167,6 +167,20 @@ data class SessionFile(
     val mtime: Long = 0L,
 )
 
+/** 隔空传输的一条记录（GET /mobile/transfer/list）。 */
+@Immutable
+data class TransferItem(
+    val id: String,
+    val name: String,
+    val size: Long = 0L,
+    val mime: String = "",
+    /** phone = 来自手机（手机发出）；desktop = 来自电脑（电脑放入，等手机收取）。 */
+    val direction: String = "",
+    val at: Long = 0L,
+) {
+    val fromPhone: Boolean get() = direction == "phone"
+}
+
 data class AppState(
     val ready: Boolean = false,
     val view: View = View.PAIRING,
@@ -231,6 +245,10 @@ data class AppState(
     // files produced in the session's working directory
     val sessionFiles: List<SessionFile> = emptyList(),
     val filesLoading: Boolean = false,
+    // 隔空传输（手机 ⇄ 电脑文件互传）
+    val transfer: List<TransferItem> = emptyList(),
+    val transferLoading: Boolean = false,
+    val transferSending: Boolean = false,
     // models
     val doc: ModelDoc? = null,
     val modelsLoading: Boolean = false,

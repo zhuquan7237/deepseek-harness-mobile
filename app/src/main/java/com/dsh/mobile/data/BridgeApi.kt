@@ -43,24 +43,27 @@ class BridgeApi(private val client: OkHttpClient) {
             else -> null
         }
         builder.method(method, payload)
-        client.newCall(builder.build()).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            val json = try {
-                if (text.isBlank()) JSONObject() else JSONObject(text)
-            } catch (_: Exception) {
-                throw BridgeException("E_PROTOCOL", "服务器响应无法解析（HTTP ${response.code}）")
-            }
-            if (response.code == 401) {
-                throw BridgeException("E_UNAUTHORIZED", json.optString("message").ifEmpty { "令牌已失效，请重新配对" })
-            }
-            if (json.optBoolean("ok", true).not()) {
-                throw BridgeException(
-                    json.optString("code").ifEmpty { "E_UNKNOWN" },
-                    json.optString("message").ifEmpty { "请求失败" },
-                )
-            }
-            json
+        client.newCall(builder.build()).execute().use { response -> readEnvelope(response) }
+    }
+
+    /** 统一的响应信封处理：401 = 令牌失灵；{ok:false} = 带 code 的业务失败。 */
+    private fun readEnvelope(response: okhttp3.Response): JSONObject {
+        val text = response.body?.string().orEmpty()
+        val json = try {
+            if (text.isBlank()) JSONObject() else JSONObject(text)
+        } catch (_: Exception) {
+            throw BridgeException("E_PROTOCOL", "服务器响应无法解析（HTTP ${response.code}）")
         }
+        if (response.code == 401) {
+            throw BridgeException("E_UNAUTHORIZED", json.optString("message").ifEmpty { "令牌已失效，请重新配对" })
+        }
+        if (json.optBoolean("ok", true).not()) {
+            throw BridgeException(
+                json.optString("code").ifEmpty { "E_UNKNOWN" },
+                json.optString("message").ifEmpty { "请求失败" },
+            )
+        }
+        return json
     }
 
     /** Pair this phone with the desktop; returns the raw pair response. */
@@ -166,6 +169,54 @@ class BridgeApi(private val client: OkHttpClient) {
 
     suspend fun rename(token: String, sessionId: String, title: String): JSONObject =
         call("POST", "/mobile/sessions/${enc(sessionId)}/rename", token, JSONObject().put("title", title))
+
+    // ------------------------------------------------------------------ 隔空传输
+    // 手机 ⇄ 电脑文件互传：记录由桥接持有，双向共用一份列表。
+
+    /** 传输记录（两向共用）。 */
+    suspend fun transferList(token: String): JSONObject = call("GET", "/mobile/transfer/list", token)
+
+    /**
+     * 手机 → 电脑：原始字节上传。
+     * 上传走原始 body（query 带 name/mime）：JSON+base64 会撞上桥接 512KB 的 body 上限，
+     * 且 base64 有 33% 膨胀；大文件时给足超时。
+     */
+    suspend fun transferSend(token: String, name: String, mime: String, bytes: ByteArray): JSONObject =
+        withContext(Dispatchers.IO) {
+            val root = base.trimEnd('/')
+            if (root.isEmpty()) throw BridgeException("E_NO_SERVER", "还没有设置服务器地址")
+            val slow = client.newBuilder()
+                .writeTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            val request = Request.Builder()
+                .url(root + "/mobile/transfer/send?name=" + enc(name) + "&mime=" + enc(mime))
+                .header("Authorization", "Bearer $token")
+                .post(bytes.toRequestBody("application/octet-stream".toMediaType()))
+                .build()
+            slow.newCall(request).execute().use { response -> readEnvelope(response) }
+        }
+
+    /** 电脑 → 手机：下载文件字节。 */
+    suspend fun transferDownload(token: String, id: String): ByteArray = withContext(Dispatchers.IO) {
+        val root = base.trimEnd('/')
+        if (root.isEmpty()) throw BridgeException("E_NO_SERVER", "还没有设置服务器地址")
+        val slow = client.newBuilder()
+            .readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        val request = Request.Builder()
+            .url(root + "/mobile/transfer/get/" + enc(id))
+            .header("Authorization", "Bearer $token")
+            .build()
+        slow.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw BridgeException("E_TRANSFER", "下载失败（HTTP ${response.code}）")
+            response.body?.bytes() ?: throw BridgeException("E_TRANSFER", "下载失败（空响应）")
+        }
+    }
+
+    /** 删除一条记录（索引 + 实体文件）。 */
+    suspend fun transferDelete(token: String, id: String): JSONObject =
+        call("POST", "/mobile/transfer/delete/" + enc(id), token, JSONObject())
 
     /** Write the whole model document; the bridge turns it into engine ops. */
     suspend fun putModels(token: String, body: JSONObject): JSONObject =

@@ -520,6 +520,28 @@ object Wire {
     /** 引擎「图片生成」注记里的产物文件名（dsh-img-*.png）——聊天里据此生成图片卡。 */
     private val GENERATED_IMAGE_RE = Regex("dsh-img-[A-Za-z0-9-]+\\.(?:png|jpe?g|webp|gif)")
 
+    /** 隔空传输列表（GET /mobile/transfer/list）。 */
+    fun parseTransferItems(json: JSONObject): List<TransferItem> {
+        val items = json.optJSONArray("items") ?: return emptyList()
+        val out = ArrayList<TransferItem>(items.length())
+        for (i in 0 until items.length()) {
+            val node = items.optJSONObject(i) ?: continue
+            val id = node.optString("id")
+            if (id.isBlank()) continue
+            out.add(
+                TransferItem(
+                    id = id,
+                    name = node.optString("name").ifBlank { "未命名文件" },
+                    size = node.optLong("size", 0L),
+                    mime = node.optString("mime"),
+                    direction = node.optString("direction"),
+                    at = node.optLong("at", 0L),
+                ),
+            )
+        }
+        return out
+    }
+
     fun generatedImageNames(text: String): List<String> =
         GENERATED_IMAGE_RE.findAll(text).map { it.value }.distinct().take(6).toList()
 

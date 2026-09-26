@@ -42,6 +42,7 @@ private enum class Screen(val depth: Int) {
     MODELS(3),
     LOGS(3),
     APPROVALS(3),
+    TRANSFER(2),
 }
 
 private fun screenOf(state: AppState): Screen = when {
@@ -57,6 +58,7 @@ private fun screenOf(state: AppState): Screen = when {
     state.token == null || state.repairing -> Screen.PAIRING
     state.view == View.MODELS -> Screen.MODELS
     state.view == View.APPROVALS -> Screen.APPROVALS
+    state.view == View.TRANSFER -> Screen.TRANSFER
     state.view == View.SETTINGS -> Screen.SETTINGS
     state.view == View.CHAT && state.sessionId != null -> Screen.CHAT
     else -> Screen.SESSIONS
@@ -139,6 +141,7 @@ fun AppRoot(repo: BridgeRepository) {
                         Screen.APPROVALS -> ApprovalsScreen(state, repo)
                         Screen.LOGS -> LogsScreen(state, repo)
                         Screen.CHAT -> ChatScreen(state, repo)
+                        Screen.TRANSFER -> TransferScreen(state, repo)
                         Screen.SESSIONS -> SessionsScreen(state, repo, sessionsScroll)
                     }
                 }

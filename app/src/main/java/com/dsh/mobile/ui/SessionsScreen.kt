@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -125,6 +126,8 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
                 },
                 conn = state.conn,
             )
+            Spacer(Modifier.weight(1f))
+            CircleButton(Icons.Outlined.SwapHoriz, "文件传输") { repo.openTransfer() }
         }
 
         state.update?.let { info ->

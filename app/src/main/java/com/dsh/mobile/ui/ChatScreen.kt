@@ -401,7 +401,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             if (mime.startsWith("image/")) {
                 attachScope.launch { loadBitmap(context, uri)?.let { pendingEdit = it } }
             } else {
-                repo.toast("暂时只能发图片：文件需要电脑端配合（下一版做）")
+                repo.toast("这里先只支持图片；文件可以走「文件传输」（会话列表右上角）")
             }
         }
     }

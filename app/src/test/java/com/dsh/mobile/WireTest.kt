@@ -923,4 +923,40 @@ class WireTest {
         assertEquals(1, parsed.rows.count { it.who == Role.USER })
         assertEquals(1, parsed.rows.last { it.who == Role.USER }.images.size)
     }
+
+    @Test
+    fun transferItemsParseBothDirections() {
+        val items = JSONArray()
+            .put(
+                JSONObject()
+                    .put("id", "mu1-aa")
+                    .put("name", "桌面端发送测试.txt")
+                    .put("size", 1005L)
+                    .put("mime", "text/plain")
+                    .put("direction", "desktop")
+                    .put("at", 1758900000000L),
+            )
+            .put(
+                JSONObject()
+                    .put("id", "mu2-bb")
+                    .put("name", "照片.jpg")
+                    .put("size", 204800L)
+                    .put("mime", "image/jpeg")
+                    .put("direction", "phone")
+                    .put("at", 1758900100000L),
+            )
+            .put(JSONObject().put("name", "没有 id 的条目应被跳过"))
+        val parsed = Wire.parseTransferItems(JSONObject().put("items", items))
+        assertEquals(2, parsed.size)
+        assertEquals("桌面端发送测试.txt", parsed[0].name)
+        assertEquals(1005L, parsed[0].size)
+        assertEquals(false, parsed[0].fromPhone)
+        assertEquals(true, parsed[1].fromPhone)
+        assertEquals("image/jpeg", parsed[1].mime)
+    }
+
+    @Test
+    fun transferItemsMissingListIsEmpty() {
+        assertEquals(0, Wire.parseTransferItems(JSONObject()).size)
+    }
 }
