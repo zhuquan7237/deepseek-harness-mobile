@@ -1137,6 +1137,15 @@ private fun MessageList(
 
     val itemCount = rows.size + (if (live.isEmpty()) 0 else live.size)
     val lastLiveLength = live.lastOrNull()?.text?.length ?: 0
+    // 列表里 display 之后还有这些尾部项（与 LazyColumn 里的声明逐条对齐）：
+    // live 气泡、thinking 行、生成文件卡、空态（加载/欢迎区）。
+    // ⚠️ 跟随滚动的目标必须是「整列表的最后一项」——曾经误用 display.size-1
+    // （那只是历史段末尾），结果每次松手后新内容一到，列表就被滚到"回复开头"。
+    val tailExtra = live.size +
+        (if (state.thinking && live.isEmpty()) 1 else 0) +
+        (if (state.sessionFiles.isNotEmpty()) 1 else 0) +
+        (if (rows.isEmpty() && live.isEmpty()) 1 else 0)
+    val lastItemIndex = display.size + tailExtra - 1
     // 打开会话先落在「最新一条」上（瞬时跳转、不播动画——动画会扫过整段历史，看着就是闪）。
     // snapshotFlow 等列表真正测量出内容再跳；每个会话只跳一次（记住跳过的 sessionId）。
     var landedIn by remember { mutableStateOf<String?>(null) }
@@ -1156,11 +1165,10 @@ private fun MessageList(
     val userRows = rows.count { it.who == Role.USER }
     LaunchedEffect(userRows) {
         if (userRows <= 0) return@LaunchedEffect
-        // 等新项完成测量再滚；瞬时置底（动画扫长历史会糊成一片）。
-        // 目标用 display.size（当前组合帧的最新列表），不用 layoutInfo 里上一次测量的旧值。
-        withFrameNanos { }
-        withFrameNanos { }
-        if (display.isNotEmpty()) listState.scrollToItem(display.size - 1)
+        // 滚到列表的**绝对底部**：末项 + 超大偏移 → LazyColumn clamp 到最大滚动量。
+        // ⚠️ 只给 index 不给 offset 时，"live 气泡置顶"会在气泡比一屏高时
+        //   把视图带到"回复的开头"（真机反馈的"滑到底被弹回回复开头"）。
+        if (lastItemIndex >= 0) listState.scrollToItem(lastItemIndex, 100_000)
     }
     // ── 防「翻看时被拽回顶部」保险丝 ──────────────────────────────────────
     // LazyColumn 在 keys/测量变动的极端时序下偶发把滚动位置重置到 0（真机反馈
@@ -1200,7 +1208,7 @@ private fun MessageList(
         val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
         // 原来是"最后一条正好可见才跟随"：新一条插入的瞬间旧底会变成 total-2，
         // 判断永远差一条，发送后就不跟了。放宽到"最后两条内"都跟随。
-        if (lastVisible >= total - 2) listState.scrollToItem((display.size - 1).coerceAtLeast(0))
+        if (lastVisible >= lastItemIndex - 1) listState.scrollToItem(lastItemIndex.coerceAtLeast(0), 100_000)
     }
 }
 
