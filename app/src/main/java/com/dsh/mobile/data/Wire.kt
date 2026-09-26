@@ -165,7 +165,32 @@ object Wire {
         val name: String = "",
         val callId: String = "",
         val args: String = "",
+        /** type == "image" 时带的图片描述。 */
+        val image: RowImage? = null,
     )
+
+    /** 解析一个 image 内容块（引擎的 attachment 描述）。 */
+    private fun parseRowImage(part: JSONObject): RowImage {
+        val att = part.optJSONObject("attachment") ?: part
+        return RowImage(
+            attachmentId = att.optString("attachmentId"),
+            mediaType = att.optString("mediaType"),
+            name = att.optString("name"),
+            width = att.optInt("width", 0),
+            height = att.optInt("height", 0),
+        )
+    }
+
+    /** user/message 里的所有图片块（手机要把它显示出来，而不是只取文字丢掉）。 */
+    fun rowImagesOf(node: JSONObject): List<RowImage> {
+        val content = node.optJSONArray("content") ?: return emptyList()
+        val out = ArrayList<RowImage>()
+        for (i in 0 until content.length()) {
+            val part = content.optJSONObject(i) ?: continue
+            if (part.optString("type") == "image") out.add(parseRowImage(part))
+        }
+        return out
+    }
 
     /** Content blocks of a message-ish node, tolerating string-only content. */
     private fun partsOf(node: JSONObject): List<Part> {
@@ -184,6 +209,7 @@ object Wire {
                     name = part.optString("name"),
                     callId = part.optString("id").ifEmpty { part.optString("callId") },
                     args = decodeArgs(part.optString("arguments")),
+                    image = if (part.optString("type") == "image") parseRowImage(part) else null,
                 )
             )
         }
@@ -242,14 +268,15 @@ object Wire {
                 }
                 "user/message" -> {
                     val text = extractText(data)
+                    val images = rowImagesOf(data)
                     // The engine injects runtime context and skill reminders as
                     // user-role messages; a phone should not render them as if
                     // the human typed them.
-                    if (text.isNotBlank()) {
+                    if (text.isNotBlank() || images.isNotEmpty()) {
                         val notice = modelChangedNotice(text)
                         when {
                             notice != null -> rows.add(ChatRow(Role.NOTICE, notice))
-                            !isInjectedContext(text) -> rows.add(ChatRow(Role.USER, text, time = time))
+                            !isInjectedContext(text) -> rows.add(ChatRow(Role.USER, text, images = images, time = time))
                         }
                     }
                 }

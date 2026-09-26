@@ -81,6 +81,19 @@ data class ChatRow(
     val raw: String = "",
     /** 事件时间（epoch ms）；执行记录折叠后靠它算「这一段用了多久」。 */
     val time: Long = 0L,
+    /** 用户消息附带的图片：历史行只有 attachmentId（走桥接下载），乐观行带本地 base64。 */
+    val images: List<RowImage> = emptyList(),
+)
+
+/** 聊天里的一张图（发出去的照片，或历史里回放的照片）。 */
+data class RowImage(
+    val attachmentId: String = "",
+    val mediaType: String = "",
+    val name: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+    /** 刚发送时的本地副本（历史行为空，改从桥接取）。 */
+    val localBase64: String = "",
 )
 
 /** One in-flight assistant bubble, keyed by `turn:step`. */
@@ -210,6 +223,8 @@ data class AppState(
     val doc: ModelDoc? = null,
     val modelsLoading: Boolean = false,
     val modelLabel: String = "",
+    /** 最近一次发送在到达引擎前就失败了——用于抑制"任务已完成"的误播报。 */
+    val lastSendFailed: Boolean = false,
     /** 当前思考强度（low/medium/high…），空表示跟随电脑端默认。 */
     val reasoningEffort: String = "",
     val modelProvider: String = "",

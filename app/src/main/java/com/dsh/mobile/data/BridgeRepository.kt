@@ -766,6 +766,25 @@ class BridgeRepository(context: Context) {
         }
     }
 
+    // 聊天附件（用户发过的照片）缓存：图片基本不变，内存里留最近 12 张。
+    private val attachCache = object : LinkedHashMap<String, ByteArray>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>): Boolean = size > 12
+    }
+
+    /** 取聊天里的图片（历史行回放）：sha256 附件 id，从桥接下原始字节。 */
+    suspend fun fetchAttachment(attachmentId: String): ByteArray? {
+        if (attachmentId.isBlank()) return null
+        synchronized(attachCache) { attachCache[attachmentId]?.let { return it } }
+        val token = _state.value.token ?: return null
+        return try {
+            val bytes = api.attachment(token, attachmentId)
+            synchronized(attachCache) { attachCache[attachmentId] = bytes }
+            bytes
+        } catch (error: Exception) {
+            null
+        }
+    }
+
     /** 下载到系统「下载」目录。 */
     suspend fun downloadSessionFile(file: SessionFile): Boolean {
         val s = _state.value
@@ -889,7 +908,18 @@ class BridgeRepository(context: Context) {
         val reqId = submissionId(sid, label)
         DraftStore.savePending(appContext, sid, reqId, label, "queue")
         _state.update {
-            it.copy(history = it.history + ChatRow(Role.USER, label), running = true, sending = true, )
+            it.copy(
+                history = it.history + ChatRow(
+                    Role.USER,
+                    trimmed,
+                    images = images.map { image ->
+                        RowImage(mediaType = image.mediaType, name = image.name, localBase64 = image.base64)
+                    },
+                ),
+                running = true,
+                sending = true,
+                lastSendFailed = false,
+            )
         }
         return try {
             val content = org.json.JSONArray()
@@ -917,9 +947,20 @@ class BridgeRepository(context: Context) {
             }
             true
         } catch (error: Exception) {
-            _state.update { it.copy(history = it.history.dropLast(1), running = false, sending = false) }
+            val reason = error.message?.takeIf { it.isNotBlank() } ?: "网络错误"
+            // 失败要留痕：气泡撤掉、但聊天里留一条明文说明（只靠 2 秒的 toast 等于没提示），
+            // 内容仍然留在输入框里可以再试。lastSendFailed 抑制"任务已完成"的误播报。
+            _state.update {
+                it.copy(
+                    history = it.history.dropLast(1) +
+                        ChatRow(Role.NOTICE, "发送失败：$reason（内容还在输入框里，可再试一次）"),
+                    running = false,
+                    sending = false,
+                    lastSendFailed = true,
+                )
+            }
             if (error is BridgeException) handleApiError(error, "发送失败")
-            else fail("send", "发送失败：${error.message ?: "网络错误"}")
+            else fail("send", "发送失败：$reason")
             false
         } finally {
             submitInFlight = false
@@ -947,7 +988,7 @@ class BridgeRepository(context: Context) {
         val reqId = submissionId(sid, trimmed)
         DraftStore.savePending(appContext, sid, reqId, trimmed, "queue")
         _state.update {
-            it.copy(history = it.history + ChatRow(Role.USER, trimmed), running = true, sending = true, )
+            it.copy(history = it.history + ChatRow(Role.USER, trimmed), running = true, sending = true, lastSendFailed = false)
         }
         return try {
             api.prompt(token, sid, trimmed, "queue", reqId)
@@ -965,9 +1006,20 @@ class BridgeRepository(context: Context) {
             }
             true
         } catch (error: Exception) {
-            _state.update { it.copy(history = it.history.dropLast(1), running = false, sending = false) }
+            val reason = error.message?.takeIf { it.isNotBlank() } ?: "网络错误"
+            // 失败要留痕：气泡撤掉、但聊天里留一条明文说明（只靠 2 秒的 toast 等于没提示），
+            // 内容仍然留在输入框里可以再试。lastSendFailed 抑制"任务已完成"的误播报。
+            _state.update {
+                it.copy(
+                    history = it.history.dropLast(1) +
+                        ChatRow(Role.NOTICE, "发送失败：$reason（内容还在输入框里，可再试一次）"),
+                    running = false,
+                    sending = false,
+                    lastSendFailed = true,
+                )
+            }
             if (error is BridgeException) handleApiError(error, "发送失败")
-            else fail("send", "发送失败：${error.message ?: "网络错误"}")
+            else fail("send", "发送失败：$reason")
             false
         } finally {
             submitInFlight = false

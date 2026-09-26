@@ -104,6 +104,15 @@ class BridgeApi(private val client: OkHttpClient) {
      * 引擎的 content 数组本身支持 `{type:'image', mediaType, data(base64), name}`，
      * 而桥接自带的 prompt 路由只会拼纯文本（所以之前想发图只能绕这条路）。
      */
+    /**
+     * 引擎只收 UTC 或 IANA `Area/Location` 形态的时区名——"GMT"、"GMT+08:00" 这类会被
+     * 拒绝（真机多是 Asia/Shanghai 没问题，模拟器/部分设备是 GMT 就会静默发不出去）。
+     */
+    private fun safeTimeZone(): String {
+        val id = java.util.TimeZone.getDefault().id
+        return if (id == "UTC" || id.contains("/")) id else "UTC"
+    }
+
     suspend fun promptRich(
         token: String,
         sessionId: String,
@@ -121,7 +130,7 @@ class BridgeApi(private val client: OkHttpClient) {
                         .put("mode", "queue")
                         .put("content", content)
                         .put("requestId", requestId)
-                        .put("clientTimeZone", java.util.TimeZone.getDefault().id),
+                        .put("clientTimeZone", safeTimeZone()),
                 ),
         )
 
@@ -281,6 +290,20 @@ class BridgeApi(private val client: OkHttpClient) {
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw BridgeException("E_FILE", "下载失败（HTTP ${response.code}）")
             response.body?.bytes() ?: throw BridgeException("E_FILE", "下载失败（空响应）")
+        }
+    }
+
+    /** 聊天附件（用户发过的照片）：sha256 内容寻址，从桥接的 /mobile/attachments 取原始字节。 */
+    suspend fun attachment(token: String, attachmentId: String): ByteArray = withContext(Dispatchers.IO) {
+        val root = base.trimEnd('/')
+        if (root.isEmpty()) throw BridgeException("E_NO_SERVER", "还没有设置服务器地址")
+        val request = Request.Builder()
+            .url(root + "/mobile/attachments/" + enc(attachmentId))
+            .header("Authorization", "Bearer $token")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw BridgeException("E_ATTACHMENT", "附件读取失败（HTTP ${response.code}）")
+            response.body?.bytes() ?: throw BridgeException("E_ATTACHMENT", "附件读取失败（空响应）")
         }
     }
 

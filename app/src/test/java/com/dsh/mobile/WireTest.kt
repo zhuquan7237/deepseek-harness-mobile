@@ -859,4 +859,68 @@ class WireTest {
         assertEquals("见 文档 说明", Wire.previewText("见 [文档](https://example.com/x) 说明"))
         assertEquals("", Wire.previewText("   "))
     }
+
+    // ---------------------------------------------------------- 图片消息
+
+    @Test
+    fun userMessageWithImageParsesAttachments() {
+        val data = JSONObject()
+            .put(
+                "content",
+                JSONArray()
+                    .put(JSONObject().put("type", "text").put("text", "像这样一个软件设计界面，可以从哪几个方面优化"))
+                    .put(
+                        JSONObject().put("type", "image").put(
+                            "attachment",
+                            JSONObject()
+                                .put("attachmentId", "sha256:abc123")
+                                .put("mediaType", "image/jpeg")
+                                .put("width", 718)
+                                .put("height", 1600)
+                                .put("name", "photo.jpg"),
+                        ),
+                    ),
+            )
+            .put("role", "user")
+        val items = JSONArray().put(
+            JSONObject().put(
+                "event",
+                JSONObject().put("type", "user/message").put("time", 1L).put("data", data),
+            ),
+        )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        val row = parsed.rows.last { it.who == Role.USER }
+        assertEquals("像这样一个软件设计界面，可以从哪几个方面优化", row.text)
+        assertEquals(1, row.images.size)
+        assertEquals("sha256:abc123", row.images[0].attachmentId)
+        assertEquals(1600, row.images[0].height)
+        assertEquals("photo.jpg", row.images[0].name)
+    }
+
+    @Test
+    fun imageOnlyMessageStillShows() {
+        val data = JSONObject()
+            .put(
+                "content",
+                JSONArray().put(
+                    JSONObject().put("type", "image").put(
+                        "attachment",
+                        JSONObject()
+                            .put("attachmentId", "sha256:def456")
+                            .put("mediaType", "image/png")
+                            .put("name", "a.png"),
+                    ),
+                ),
+            )
+            .put("role", "user")
+        val items = JSONArray().put(
+            JSONObject().put(
+                "event",
+                JSONObject().put("type", "user/message").put("time", 2L).put("data", data),
+            ),
+        )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(1, parsed.rows.count { it.who == Role.USER })
+        assertEquals(1, parsed.rows.last { it.who == Role.USER }.images.size)
+    }
 }

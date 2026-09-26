@@ -46,6 +46,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import android.graphics.BitmapFactory
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -113,6 +115,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
@@ -152,6 +155,7 @@ import com.dsh.mobile.data.ChatRow
 import com.dsh.mobile.data.Conn
 import com.dsh.mobile.data.LiveBubble
 import com.dsh.mobile.data.Role
+import com.dsh.mobile.data.RowImage
 import com.dsh.mobile.data.SessionFile
 import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
@@ -186,6 +190,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Image
 import com.dsh.mobile.data.filterModels
 import androidx.compose.animation.animateContentSize
 
@@ -231,6 +236,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     var showRename by remember { mutableStateOf(false) }
     var showHostRename by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<Wire.Artifact?>(null) }
+    var viewingImage by remember { mutableStateOf<Bitmap?>(null) }
     // S2 第二批：会话设置面板 / 会话陪伴面板 / 全屏源码阅读器
     var showSettings by remember { mutableStateOf(false) }
     var showCompanion by remember { mutableStateOf(false) }
@@ -411,7 +417,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     var doneLine by remember { mutableStateOf("") }
     var doneVisible by remember { mutableStateOf(false) }
     LaunchedEffect(state.running) {
-        if (runningSeen && !state.running) {
+        if (runningSeen && !state.running && !state.lastSendFailed) {
             doneLine = WhaleLines.DONE.random()
             doneVisible = true
         }
@@ -503,6 +509,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             },
             onOpenGenerated = openFile,
             fetchImage = { name -> repo.fetchGeneratedImage(name) },
+            fetchAttach = { id -> repo.fetchAttachment(id) },
+            onOpenImage = { bmp -> viewingImage = bmp },
             onSaveCode = { lang, code ->
                 val where = saveTextToDownloads(context, codeFileName(lang), code)
                 if (where != null) repo.toast("已保存到 $where") else repo.toast("保存失败，已复制到剪贴板")
@@ -731,6 +739,28 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
         LongReadScreen(doc = doc, onDismiss = { readDoc = null })
     }
 
+    // 聊天里点开的大图（用户发过的照片）
+    OverlayHost(viewingImage) { bmp ->
+        BackHandler { viewingImage = null }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.94f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { viewingImage = null },
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = "图片预览",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+            )
+        }
+    }
+
     if (showSettings) {
         SessionSettingsSheet(
             state = state,
@@ -859,6 +889,8 @@ private fun MessageList(
     onOpenGenerated: (SessionFile) -> Unit = {},
     onOpenRead: (LongReadDoc) -> Unit = {},
     fetchImage: suspend (String) -> ByteArray? = { null },
+    fetchAttach: suspend (String) -> ByteArray? = { null },
+    onOpenImage: (Bitmap) -> Unit = {},
     modifier: Modifier,
 ) {
     val palette = LocalDsh.current
@@ -926,6 +958,8 @@ private fun MessageList(
                             onOpenGenerated = onOpenGenerated,
                             onOpenRead = onOpenRead,
                             fetchImage = fetchImage,
+                            fetchAttach = fetchAttach,
+                            onOpenImage = onOpenImage,
                         )
                     }
                 }
@@ -1264,6 +1298,8 @@ private fun MessageRow(
     onOpenGenerated: (SessionFile) -> Unit = {},
     onOpenRead: (LongReadDoc) -> Unit = {},
     fetchImage: suspend (String) -> ByteArray? = { null },
+    fetchAttach: suspend (String) -> ByteArray? = { null },
+    onOpenImage: (Bitmap) -> Unit = {},
 ) {
 
     /** Characters drawn so far; the animation only runs for a freshly arrived reply. */
@@ -1430,20 +1466,42 @@ private fun MessageRow(
                     .widthIn(max = 520.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
-                Box(
+                Column(
                     Modifier
                         .clip(RoundedCornerShape(22.dp))
                         .background(palette.bubbleUser)
                         .pointerInput(row.text) {
                             detectTapGestures(onLongPress = { onCopy(row.text) })
                         }
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .padding(
+                            horizontal = if (row.images.isEmpty()) 14.dp else 6.dp,
+                            vertical = if (row.images.isEmpty()) 10.dp else 6.dp,
+                        ),
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text(
-                        row.text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = palette.bubbleUserText,
-                    )
+                    // 发过的照片：直接显示（历史行走桥接取附件，乐观行用本地 base64）。
+                    // 之前只取文字把图丢了——用户反馈"发出去的照片在对话里不显示"就是这里。
+                    row.images.forEach { image ->
+                        ChatImageThumb(
+                            image = image,
+                            fetchAttach = fetchAttach,
+                            onOpen = onOpenImage,
+                        )
+                    }
+                    if (row.text.isNotBlank()) {
+                        Text(
+                            row.text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = palette.bubbleUserText,
+                            modifier = Modifier.padding(
+                                start = if (row.images.isEmpty()) 0.dp else 8.dp,
+                                end = if (row.images.isEmpty()) 0.dp else 8.dp,
+                                top = if (row.images.isEmpty()) 0.dp else 2.dp,
+                                bottom = if (row.images.isEmpty()) 0.dp else 4.dp,
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -2097,6 +2155,17 @@ private fun connMetaText(state: AppState): String = when {
     else -> "已连接 · 空闲"
 }
 
+/** 输入区模型标签：带提供商前缀（provider/模型，学桌面端那种写法）。 */
+private fun composedModelLabel(state: AppState): String {
+    val label = state.modelLabel
+    val provider = state.modelProvider
+    return when {
+        label.isBlank() -> "模型"
+        provider.isNotBlank() && !label.contains("/") -> "$provider/$label"
+        else -> label
+    }
+}
+
 /** S2：内部 id（session- 开头）不展示给用户；没有真标题就写「新对话」。 */
 internal fun displayTitle(t: String): String =
     if (t.isBlank() || t.startsWith("session-")) "新对话" else t
@@ -2152,6 +2221,69 @@ private fun LiveRow(bubble: LiveBubble, first: Boolean) {
                 Spacer(Modifier.height(7.dp))
             }
             Text(bubble.text, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
+        }
+    }
+}
+
+/** 聊天里发过的图片：按已知宽高比先占好位置，加载到再显示；点开看大图。 */
+@Composable
+private fun ChatImageThumb(
+    image: RowImage,
+    fetchAttach: suspend (String) -> ByteArray?,
+    onOpen: (Bitmap) -> Unit,
+) {
+    val palette = LocalDsh.current
+    var bitmap by remember(image) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(image) {
+        val bmp = withContext(Dispatchers.Default) {
+            runCatching {
+                val bytes = if (image.localBase64.isNotBlank()) {
+                    Base64.decode(image.localBase64, Base64.DEFAULT)
+                } else {
+                    fetchAttach(image.attachmentId)
+                }
+                bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+            }.getOrNull()
+        }
+        bitmap = bmp
+    }
+    val bmp = bitmap
+    val ratio = when {
+        image.width > 0 && image.height > 0 -> image.width.toFloat() / image.height.toFloat()
+        bmp != null && bmp.height > 0 -> bmp.width.toFloat() / bmp.height.toFloat()
+        else -> 0.75f
+    }
+    val maxW = 216.dp
+    val maxH = 288.dp
+    val size = if (ratio >= 1f) {
+        val w = maxW
+        w to (w / ratio).coerceAtMost(maxH)
+    } else {
+        val h = maxH
+        (h * ratio).coerceAtLeast(110.dp) to h
+    }
+    Box(
+        Modifier
+            .size(width = size.first, height = size.second)
+            .clip(RoundedCornerShape(16.dp))
+            .background(palette.surfaceHi)
+            .clickable(enabled = bmp != null) { bmp?.let(onOpen) },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (bmp != null) {
+            Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = image.name.ifBlank { "图片" },
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Icon(
+                Icons.Outlined.Image,
+                contentDescription = null,
+                tint = palette.textTertiary,
+                modifier = Modifier.size(22.dp),
+            )
         }
     }
 }
@@ -2217,9 +2349,16 @@ private fun Composer(
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
+                // 参考 ChatGPT 的输入卡：26dp 大圆角 + 极轻投影（shadow 要在 clip 之前，否则被裁掉）
+                .shadow(
+                    elevation = 6.dp,
+                    shape = RoundedCornerShape(26.dp),
+                    clip = false,
+                    ambientColor = Color.Black.copy(alpha = 0.05f),
+                    spotColor = Color.Black.copy(alpha = 0.08f),
+                )
+                .clip(RoundedCornerShape(26.dp))
                 .background(palette.surface)
-                // 高度变化（模型入口出现/消失）自己带过渡，避免和键盘动画撞在一起时"闪"
                 .animateContentSize(tween(180))
                 // 整卡任意处点一下就聚焦输入框（按钮/胶囊自己是可点的，会先消费掉）。
                 // 放在 padding 之前 = 连内边距区域也算触区，彻底没有"空气墙"。
@@ -2227,7 +2366,7 @@ private fun Composer(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                 ) { focusRequester.requestFocus() }
-                .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
         ) {
             // M4 0.2.61：草稿恢复但附件不在——明说缺几个，并给"重新选择/不带附件继续"两条路。
             if (missingAttach > 0) {
@@ -2272,25 +2411,6 @@ private fun Composer(
                     onOpen = onOpenAttachment,
                 )
             }
-            Row(
-                Modifier.fillMaxWidth(),
-                // 展开态：加号/发送键贴着底部（半屏编辑器里它们不该浮在中间）
-                verticalAlignment = if (composerExpanded) Alignment.Bottom else Alignment.CenterVertically,
-            ) {
-            // 布局照你发的那套：左边「+」，中间输入区，右边模型名（纯文本，不抢地方），最后发送键。
-            // 整行垂直居中，长模型名不会再把它挤成两行。
-            if (attachments.isEmpty()) {
-                CircleAction(
-                    background = Color.Transparent,
-                    icon = Icons.Outlined.Add,
-                    tint = palette.textPrimary,
-                    contentDescription = "添加图片或文件",
-                    enabled = !state.sending,
-                    size = 44.dp,
-                    iconSize = 24.dp,
-                ) { onAddAttachment() }
-            }
-            Spacer(Modifier.width(2.dp))
             // 输入文字居中：Compose 的 bodyLarge 行高 24sp 比字本身高，
             // 行框居中后字看着仍然偏上（CJK 字形落在基线上方）。用 LineHeightStyle
             // 把上下多余留白裁掉（Trim.Both），行框就等于字形本身，再居中才是真居中；
@@ -2307,13 +2427,13 @@ private fun Composer(
                 value = draft,
                 onValueChange = { draft = it },
                 modifier = Modifier
-                    .weight(1f)
+                    .fillMaxWidth()
                     .focusRequester(focusRequester)
                     .then(
                         // 展开态用**固定高度**：只给 min 的话，装饰盒的 fillMaxHeight 会
                         // 把输入框撑到占满剩余空间（实测 80% 屏），"半屏"就名存实亡
                         if (composerExpanded) Modifier.height(expandedMin)
-                        else Modifier.heightIn(min = 36.dp, max = 140.dp)
+                        else Modifier.heightIn(min = 44.dp, max = 168.dp)
                     )
                     .onFocusChanged { fieldFocused = it.isFocused }
                     .padding(horizontal = 6.dp, vertical = 6.dp),
@@ -2366,11 +2486,56 @@ private fun Composer(
                     }
                 },
             )
-            Spacer(Modifier.width(4.dp))
-            if (state.running) {
-                // 运行中也不白打字：可以「插话」引导当前任务，或「排队」等它跑完
-                if (draft.isNotBlank() && attachments.isEmpty()) {
-                    // 「插话」一触直达（J3 处方：常用提交不进二级菜单）；排队在下方工具行。
+            // —— 第二层：工具行（照 ChatGPT 那套：输入区在上、工具行常显在下）——
+            Row(
+                Modifier.fillMaxWidth().padding(top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                if (attachments.isEmpty()) {
+                    CircleAction(
+                        background = Color.Transparent,
+                        icon = Icons.Outlined.Add,
+                        tint = palette.textPrimary,
+                        contentDescription = "添加图片或文件",
+                        enabled = !state.sending,
+                        size = 40.dp,
+                        iconSize = 22.dp,
+                    ) { onAddAttachment() }
+                }
+                // 模型：带提供商前缀（provider/模型），常显——先看得见在用什么模型
+                ComposerModelChip(state = state, onClick = onOpenModels)
+                Spacer(Modifier.weight(1f))
+                if (state.running && draft.isNotBlank() && attachments.isEmpty()) {
+                    // 「排队」：等它跑完接着做（次要）
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable(enabled = !state.sending) {
+                                val text = draft.trim()
+                                draft = ""
+                                composerExpanded = false
+                                scope.launch {
+                                    val ok = repo.sendInbox(text, "queue")
+                                    if (!ok) draft = if (draft.isBlank()) text else text + "\n" + draft
+                                }
+                            }
+                            .heightIn(min = 40.dp)
+                            .padding(horizontal = 10.dp)
+                            .semantics { contentDescription = "排队" },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.PlaylistAdd,
+                            contentDescription = null,
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("排队", style = MaterialTheme.typography.labelMedium, color = palette.textSecondary)
+                    }
+                    // 「插话」：一触直达，引导当前任务（主）
                     Row(
                         Modifier
                             .clip(RoundedCornerShape(999.dp))
@@ -2383,9 +2548,8 @@ private fun Composer(
                                     if (!ok) draft = if (draft.isBlank()) text else text + "\n" + draft
                                 }
                             }
-                            .heightIn(min = 48.dp)
-                            .widthIn(min = 88.dp)
-                            .padding(horizontal = 14.dp)
+                            .heightIn(min = 40.dp)
+                            .padding(horizontal = 12.dp)
                             .semantics { contentDescription = "插话" },
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center,
@@ -2394,123 +2558,67 @@ private fun Composer(
                             Icons.Outlined.ArrowUpward,
                             contentDescription = null,
                             tint = palette.primaryBtn,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(16.dp),
                         )
-                        Spacer(Modifier.width(6.dp))
-                        Text("插话", style = MaterialTheme.typography.labelLarge, color = palette.primaryBtn)
+                        Spacer(Modifier.width(4.dp))
+                        Text("插话", style = MaterialTheme.typography.labelMedium, color = palette.primaryBtn)
                     }
-                    Spacer(Modifier.width(4.dp))
                 }
-                // 停止键已移到输入条上方的任务控制条（《指挥有据》v2：停止属于任务控制区）——
-                // 运行中这里只留「追加消息」入口，不再出现第二个停止键。
-            } else {
-                val ready = draft.isNotBlank() || attachments.isNotEmpty()
-                val sendBg by animateColorAsState(
-                    targetValue = if (ready) palette.accent else palette.surfaceHi,
-                    animationSpec = tween(200),
-                    label = "sendBg",
-                )
-                val sendTint by animateColorAsState(
-                    targetValue = if (ready) palette.onAccent else palette.textTertiary,
-                    animationSpec = tween(200),
-                    label = "sendTint",
-                )
-                // S2 §3.4：发送 = 48×48 圆角强调块，只留箭头（删「发送」二字与沙色底）。
-                Box(
-                    Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(sendBg)
-                        .clickable(enabled = ready && !state.sending) {
-                            val text = draft.trim()
-                            if (text.isNotEmpty() || attachments.isNotEmpty()) {
-                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                draft = ""
-                                composerExpanded = false
-                                if (attachments.isEmpty()) {
-                                    scope.launch {
-                                        val ok = repo.send(text)
-                                        if (!ok) draft = if (draft.isBlank()) text else text + "\n" + draft
-                                    }
-                                } else {
-                                    onSendWith(text, attachments)
-                                }
-                            }
-                        }
-                        .semantics { contentDescription = "发送" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Outlined.ArrowUpward,
-                        contentDescription = null,
-                        tint = sendTint,
-                        modifier = Modifier.size(22.dp),
+                // 展开/收起：把输入框拉起到约半个屏幕，只在写长文时出现（第三批评审 P4）
+                if (composerExpanded || draft.isNotBlank()) {
+                    CircleAction(
+                        background = Color.Transparent,
+                        icon = if (composerExpanded) Icons.Outlined.CloseFullscreen else Icons.Outlined.OpenInFull,
+                        tint = palette.textSecondary,
+                        contentDescription = if (composerExpanded) "收起输入框" else "展开输入框",
+                        enabled = true,
+                        size = 32.dp,
+                        iconSize = 16.dp,
+                    ) { composerExpanded = !composerExpanded }
+                }
+                // 发送：只在空闲时出现（运行中的停止键在输入条上方的任务控制条）
+                if (!state.running) {
+                    val ready = draft.isNotBlank() || attachments.isNotEmpty()
+                    val sendBg by animateColorAsState(
+                        targetValue = if (ready) palette.accent else palette.surfaceHi,
+                        animationSpec = tween(200),
+                        label = "sendBg",
                     )
-                }
-            }
-            }
-
-            // 右下角辅助行：展开键 + 模型胶囊；有内容/聚焦时滑入（空输入保持干净一行）
-            AnimatedVisibility(
-                // 只淡入淡出、不再做高度展开：键盘弹起本来就在改布局，
-                // 两个动画叠一起会有"衔接不上"的闪，交给外层 animateContentSize 统一收放
-                visible = draft.isNotBlank() || fieldFocused || attachments.isNotEmpty(),
-                enter = fadeIn(tween(160)),
-                exit = fadeOut(tween(120)),
-            ) {
-                Row(
-                    // 上留 2dp：原来 6dp 在键盘顶起时垫得太厚（真机反馈"空白别一个地方留太多"）
-                    Modifier.fillMaxWidth().padding(end = 10.dp).padding(top = 2.dp),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // 展开/收起：把输入框拉起到约半个屏幕，方便写长文本、检查排版。
-                    // 第三批评审 P4：只在真的在写东西（或已展开）时出现，空输入时这行更干净。
-                    if (composerExpanded || draft.isNotBlank()) {
-                        CircleAction(
-                            background = Color.Transparent,
-                            icon = if (composerExpanded) Icons.Outlined.CloseFullscreen else Icons.Outlined.OpenInFull,
-                            tint = palette.textSecondary,
-                            contentDescription = if (composerExpanded) "收起输入框" else "展开输入框",
-                            enabled = true,
-                            size = 30.dp,
-                            iconSize = 16.dp,
-                        ) { composerExpanded = !composerExpanded }
-                    }
-                    // 输入区模型胶囊（0.2.67 恢复，用户拍板）：与顶栏共用同一状态、同一个模型菜单，
-                    // S2「设置入口重复」的隐患由「同源同菜单」化解；空输入时随辅助行一起收起。
-                    Spacer(Modifier.width(2.dp))
-                    ComposerModelChip(state = state, onClick = onOpenModels)
-                    if (state.running && draft.isNotBlank() && attachments.isEmpty()) {
-                        Spacer(Modifier.width(8.dp))
-                        Row(
-                            Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .clickable(enabled = !state.sending) {
-                                    val text = draft.trim()
+                    val sendTint by animateColorAsState(
+                        targetValue = if (ready) palette.onAccent else palette.textTertiary,
+                        animationSpec = tween(200),
+                        label = "sendTint",
+                    )
+                    Box(
+                        Modifier
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(sendBg)
+                            .clickable(enabled = ready && !state.sending) {
+                                val text = draft.trim()
+                                if (text.isNotEmpty() || attachments.isNotEmpty()) {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     draft = ""
                                     composerExpanded = false
-                                    scope.launch {
-                                        val ok = repo.sendInbox(text, "queue")
-                                        if (!ok) draft = if (draft.isBlank()) text else text + "\n" + draft
+                                    if (attachments.isEmpty()) {
+                                        scope.launch {
+                                            val ok = repo.send(text)
+                                            if (!ok) draft = if (draft.isBlank()) text else text + "\n" + draft
+                                        }
+                                    } else {
+                                        onSendWith(text, attachments)
                                     }
                                 }
-                                .heightIn(min = 48.dp)
-                                .widthIn(min = 88.dp)
-                                .padding(horizontal = 14.dp)
-                                .semantics { contentDescription = "排队" },
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Outlined.PlaylistAdd,
-                                contentDescription = null,
-                                tint = palette.textPrimary,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text("排队", style = MaterialTheme.typography.labelLarge, color = palette.textPrimary)
-                        }
+                            }
+                            .semantics { contentDescription = "发送" },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Outlined.ArrowUpward,
+                            contentDescription = null,
+                            tint = sendTint,
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
             }
@@ -2712,9 +2820,9 @@ private fun ComposerModelChip(state: AppState, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        // 这一层空间充足，直接显示完整模型名（只在极端长的情况下才省略）
+        // 模型：带提供商前缀（provider/模型），常显
         Text(
-            state.modelLabel.ifBlank { "模型" },
+            composedModelLabel(state),
             style = MaterialTheme.typography.labelSmall,
             color = palette.textSecondary,
             maxLines = 1,

@@ -107,7 +107,15 @@ fun SessionSettingsSheet(
             }
             SettingsRow(
                 label = "模型",
-                value = state.modelLabel.ifBlank { "未选择" },
+                value = run {
+                    val label = state.modelLabel
+                    val provider = state.modelProvider
+                    when {
+                        label.isBlank() -> "未选择"
+                        provider.isNotBlank() && !label.contains("/") -> "$provider/$label"
+                        else -> label
+                    }
+                },
                 chevron = true,
                 onClick = onOpenModels,
             )
