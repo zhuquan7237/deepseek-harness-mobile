@@ -79,6 +79,48 @@ class BridgeRepository(context: Context) {
 
     private var reloadJob: Job? = null
 
+    /**
+     * 流式增量节流：chunk 先写进缓冲，每 [liveFlushMs] 才合并进 state 一次。
+     * 每个 chunk 都直接更新 state 会让消息列表每秒重绘几十次（真机表现为"闪"）；
+     * 200ms 批一次肉眼无感，重绘/重排频率降一个量级。结束/重载前必须 flush，不丢尾巴。
+     */
+    private val liveBuffer = LinkedHashMap<String, String>()
+    private var liveFlushJob: Job? = null
+
+    /** 缓冲刷新间隔（节流窗口）。调大更稳、调小更"逐字"。 */
+    private val liveFlushMs = 200L
+
+    private fun queueLiveChunk(key: String, text: String) {
+        liveBuffer[key] = (liveBuffer[key] ?: "") + text
+        if (liveFlushJob?.isActive != true) {
+            liveFlushJob = scope.launch {
+                delay(liveFlushMs)
+                flushLiveBuffer()
+            }
+        }
+    }
+
+    /**
+     * 把缓冲里的增量一次性并入 state（一次重组、一次滚动），并挂上"已流式"标记。
+     * 这是全 App 唯一写 live 气泡的地方（节流漏斗）。
+     */
+    private fun flushLiveBuffer() {
+        if (liveBuffer.isEmpty()) return
+        val pending = ArrayList(liveBuffer.entries)
+        liveBuffer.clear()
+        // 便于验证节流频率：正常约每 200ms 一条（可用来确认闪烁修复是否生效）
+        Log.i(TAG, "live flush: +${pending.sumOf { it.value.length }} chars / ${pending.size} bubble(s)")
+        _state.update { current ->
+            val live = current.live.toMutableList()
+            for ((key, text) in pending) {
+                val index = live.indexOfFirst { it.key == key }
+                if (index >= 0) live[index] = live[index].copy(text = live[index].text + text)
+                else live.add(LiveBubble(key, text))
+            }
+            current.copy(live = live, thinking = false, streamedLive = true)
+        }
+    }
+
     /** Highest event seq seen; lives outside [AppState] so events never redraw the UI. */
     @Volatile
     private var lastSeq: Long = 0L
@@ -586,6 +628,7 @@ class BridgeRepository(context: Context) {
     // ------------------------------------------------------------------- chat
 
     fun openSession(sessionId: String) {
+        liveBuffer.clear()   // 切会话：未刷出的流式残余作废
         val listed = _state.value.sessions.firstOrNull { it.sessionId == sessionId }
         // 打开历史会话要继承它自己的模型：列表里带了 projections.values.modelSelection，
         // 这里取出来当标签（模型名单缓存里有就用显示名，没有就用模型 id）
@@ -1393,14 +1436,21 @@ class BridgeRepository(context: Context) {
         }
         val data = frame.optJSONObject("data") ?: JSONObject()
         when (frame.optString("type")) {
-            "turn/start" -> _state.update {
-                it.copy(
-                    running = true, live = emptyList(), thinking = true, thinkingSince = System.currentTimeMillis(),
-                    runSince = System.currentTimeMillis(), stopping = false, stopRequestedAt = 0L,
-                    stopAcked = false, stopSendFailed = false, streamedLive = false,
-                )
+            "turn/start" -> {
+                // 新回合：上一回合的缓冲残余作废（正常已在 turn/end 冲刷过）
+                liveBuffer.clear()
+                _state.update {
+                    it.copy(
+                        running = true, live = emptyList(), thinking = true, thinkingSince = System.currentTimeMillis(),
+                        runSince = System.currentTimeMillis(), stopping = false, stopRequestedAt = 0L,
+                        stopAcked = false, stopSendFailed = false, streamedLive = false,
+                    )
+                }
             }
             "turn/end" -> {
+                // 回合结束：先把缓冲里剩余的内容刷出并清掉定时器（finish 逻辑），
+                // 不足一个节流窗口的尾巴不能丢。
+                flushLiveBuffer()
                 // 失败/被截断的回合不会再有 assistant/message，常规重载不会触发 ——
                 // 单独补一次，让 Wire.parseHistory 生成的 ERROR / 截断提示行显示出来。
                 // 对话失败属于上游模型/网络问题，**不进错误日志仓库**（用户定的分级规则：
@@ -1430,21 +1480,15 @@ class BridgeRepository(context: Context) {
                 } else {
                     val text = Wire.chunkText(data)
                     if (text.isNotEmpty()) {
+                        // 节流：先进缓冲，最多每 liveFlushMs 合并写一次 state（防高频重绘闪烁）。
                         val key = "${data.opt("turn") ?: 0}:${data.opt("step") ?: 0}"
-                        _state.update { current ->
-                            val live = current.live.toMutableList()
-                            val index = live.indexOfFirst { it.key == key }
-                            if (index >= 0) {
-                                live[index] = live[index].copy(text = live[index].text + text)
-                            } else {
-                                live.add(LiveBubble(key, text))
-                            }
-                            current.copy(live = live, thinking = false, streamedLive = true)
-                        }
+                        queueLiveChunk(key, text)
                     }
                 }
             }
             "assistant/message" -> {
+                // 先把缓冲里不足一个节流窗口的流式尾巴落地（finish 冲刷），再安排重载。
+                flushLiveBuffer()
                 // 这一步的最终消息已落库。临时气泡不在这里撤——留到历史重载成功时
                 // 按落库的 turn:step 原子撤（同帧切换）；先撤会留下 250ms 防抖空窗，
                 // 屏幕上就是「文字先没了、历史还没到」的一闪。
