@@ -55,6 +55,7 @@ class SettingsStore(context: Context) {
         val DEFAULT_PROVIDER = stringPreferencesKey("default_provider")
         val DEFAULT_MODEL = stringPreferencesKey("default_model")
         val DEFAULT_LABEL = stringPreferencesKey("default_label")
+        val HOST_ALIAS = stringPreferencesKey("host_alias")
     }
 
     suspend fun load(): StoredSession {
@@ -176,4 +177,14 @@ class SettingsStore(context: Context) {
             prefs[Keys.DEFAULT_LABEL] = label
         }
     }
+
+    /** 电脑昵称（只在这台手机显示）：空 = 回到电脑自己的名字。 */
+    suspend fun saveHostAlias(alias: String) {
+        context.dshStore.edit { prefs ->
+            prefs[Keys.HOST_ALIAS] = alias.trim()
+        }
+    }
+
+    suspend fun loadHostAlias(): String =
+        context.dshStore.data.first()[Keys.HOST_ALIAS].orEmpty()
 }

@@ -42,6 +42,15 @@ object Wire {
         )
     }
 
+    /** /mobile/meta 顶层的 host 字段（与 server 平级）：电脑名字 + 平台。 */
+    fun parseHost(json: JSONObject?): ServerInfo {
+        if (json == null) return ServerInfo()
+        return ServerInfo(
+            hostName = json.optString("name"),
+            hostPlatform = json.optString("platform"),
+        )
+    }
+
     fun parseSessions(json: JSONObject): List<SessionSummary> {
         val items = json.optJSONArray("items") ?: return emptyList()
         val out = ArrayList<SessionSummary>()

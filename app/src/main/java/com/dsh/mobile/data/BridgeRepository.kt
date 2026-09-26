@@ -117,6 +117,7 @@ class BridgeRepository(context: Context) {
 
     private suspend fun boot() {
         val stored = store.load()
+        val hostAlias = store.loadHostAlias()
         EventTrail.add("boot v${BuildConfig.VERSION_NAME} base=${stored.base.ifBlank { "-" }}")
         defaultModel = stored.defaultModel.takeIf { it.isNotBlank() }?.let {
             Triple(stored.defaultProvider, it, stored.defaultLabel.ifBlank { it })
@@ -132,6 +133,7 @@ class BridgeRepository(context: Context) {
                 overlayBall = stored.overlayBall,
                 overlayPermission = canOverlay(),
                 version = BuildConfig.VERSION_NAME,
+                hostAlias = hostAlias,
             )
         }
         refreshLogCounts()
@@ -406,10 +408,15 @@ class BridgeRepository(context: Context) {
         return try {
             val meta = api.meta(token)
             val device = Wire.parseDevice(meta.optJSONObject("device"))
+            // meta.host 与 meta.server 平级：hostName 给顶栏「你在连哪台电脑」用。
+            val host = Wire.parseHost(meta.optJSONObject("host"))
             _state.update {
                 it.copy(
                     device = device,
-                    server = Wire.parseServer(meta.optJSONObject("server")),
+                    server = Wire.parseServer(meta.optJSONObject("server")).copy(
+                        hostName = host.hostName,
+                        hostPlatform = host.hostPlatform,
+                    ),
                     publicUrl = meta.optJSONObject("capabilities")?.optString("publicUrl").orEmpty(),
                     scopes = device.scopes,
                 )
@@ -538,6 +545,14 @@ class BridgeRepository(context: Context) {
         defaultModel = null
         scope.launch { store.saveDefaultModel("", "", "") }
         toast("新对话跟随电脑端模型")
+    }
+
+    /** 电脑昵称（只在这台手机显示）：空串 = 回到电脑自己的名字。 */
+    fun setHostAlias(alias: String) {
+        val trimmed = alias.trim()
+        _state.update { it.copy(hostAlias = trimmed) }
+        scope.launch { store.saveHostAlias(trimmed) }
+        toast(if (trimmed.isEmpty()) "已恢复电脑自己的名字" else "这台电脑在这台手机上叫：$trimmed")
     }
 
     /** 现在有没有设默认模型（界面用来显示勾）。 */

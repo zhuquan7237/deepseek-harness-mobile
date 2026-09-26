@@ -49,7 +49,7 @@ class MathEndToEndTest {
         composeRule.onAllNodesWithContentDescription(description).fetchSemanticsNodes().isNotEmpty()
 
     private fun isOnPairingScreen(): Boolean = anyText("用配对码配对")
-    private fun isOnChatScreen(): Boolean = anyText("发给电脑上的 Agent…")
+    private fun isOnChatScreen(): Boolean = anyText("让电脑帮你完成什么？")
     private fun isOnSessionsScreen(): Boolean = anyText("搜索会话", substring = true)
     private fun isConnected(): Boolean = isOnChatScreen() || anyText("已连接", substring = true)
 
@@ -120,7 +120,7 @@ class MathEndToEndTest {
         runCatching {
             if (anyContent("返回")) {
                 composeRule.onAllNodesWithContentDescription("返回")[0].performClick()
-                composeRule.waitUntil(15_000) { anyText("搜索会话", substring = true) || anyText("发给电脑上的 Agent…") }
+                composeRule.waitUntil(15_000) { anyText("搜索会话", substring = true) || anyText("让电脑帮你完成什么？") }
             }
         }
         Log.i("MathE2E", "端到端完成")

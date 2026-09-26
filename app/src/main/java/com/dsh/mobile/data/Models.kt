@@ -45,6 +45,9 @@ data class ServerInfo(
     val product: String = "",
     val bridge: String = "",
     val version: Int = 0,
+    /** 电脑的名字（桥接 /mobile/meta 的 host.name）——顶栏「你在连哪台电脑」用它。 */
+    val hostName: String = "",
+    val hostPlatform: String = "",
 )
 
 @Immutable
@@ -152,6 +155,8 @@ data class AppState(
     val token: String? = null,
     val device: DeviceInfo? = null,
     val server: ServerInfo? = null,
+    /** 电脑昵称（只在这台手机显示）：空 = 显示电脑自己的名字。 */
+    val hostAlias: String = "",
     val publicUrl: String = "",
     val conn: Conn = Conn.OFFLINE,
     /** 最近一条桥接事件的时间——设置页「连接状态」行的活性指示。 */

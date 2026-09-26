@@ -96,7 +96,7 @@ class EndToEndTest {
     private fun isOnSessionsScreen(): Boolean = anyText("搜索会话", substring = true)
 
     /** 现在进 App 直接落在新对话上，所以"到家了"的判断要包括聊天页。 */
-    private fun isOnChatScreen(): Boolean = anyText("发给电脑上的 Agent…")
+    private fun isOnChatScreen(): Boolean = anyText("让电脑帮你完成什么？")
 
     /** 已连上的两种形态：聊天页（新落地页）或会话页顶栏的「已连接」。 */
     private fun isConnected(): Boolean = isOnChatScreen() || anyText("已连接", substring = true)
@@ -163,7 +163,7 @@ class EndToEndTest {
         if (!isOnChatScreen()) {
             composeRule.onAllNodesWithContentDescription("新建会话")[0].performClick()
         }
-        composeRule.waitUntil(60_000) { anyText("发给电脑上的 Agent…") }
+        composeRule.waitUntil(60_000) { anyText("让电脑帮你完成什么？") }
 
         // Send a prompt: the bubble shows immediately, then the desktop's
         // reply lands through the event stream / history refresh.
@@ -190,20 +190,25 @@ class EndToEndTest {
         composeRule.onAllNodesWithContentDescription("返回")[0].performClick()
         composeRule.waitUntil(30_000) { isOnSessionsScreen() }
         // 列表里的会话标题会被引擎的 LLM 改写（fallback "P1 mobile e2e: reply with"
-        // → 智能标题 "Reply Pong to Mobile E2E Test"）——锚要同时认两种形态，
-        // 否则通道一恢复（标题 LLM 成功）测试就找不到行。
+        // → 智能标题，实测出现过 "P1 Mobile End-to-End Response Check"——大小写与用词都不可预测）。
+        // 锚点全部忽略大小写并多留几种形态。
         val titleAnchor = hasText("mobile e2e", substring = true, ignoreCase = true) or
-            hasText("Pong", substring = true) or
-            hasText("P1 mobile", substring = true)
+            hasText("Pong", substring = true, ignoreCase = true) or
+            hasText("P1 mobile", substring = true, ignoreCase = true) or
+            hasText("End-to-End", substring = true, ignoreCase = true) or
+            hasText("Response Check", substring = true, ignoreCase = true)
+        // 0.3.2 起「测试 / 系统会话」收在默认折叠的组里——先展开，保证 E2E 行可见（没有该组时跳过）。
+        runCatching { composeRule.onAllNodesWithContentDescription("展开测试会话")[0].performClick() }
         composeRule.waitUntil(30_000) { composeRule.onAllNodes(titleAnchor).fetchSemanticsNodes().isNotEmpty() }
         composeRule.onAllNodes(titleAnchor)[0].performClick()
         composeRule.waitUntil(30_000) { isOnChatScreen() }
         // 真机 bug：打开历史会话时顶栏显示"没有选择模型"。会话自己的模型必须被继承
-        // （来自 projections.values.modelSelection，而不是 history 响应——那里没有这个字段）。
+        //（来自 projections.values.modelSelection，而不是 history 响应——那里没有这个字段）。
+        // 0.3.3 起模型只在输入区展示：先点一下输入框让模型胶囊出现，再断言它带了具体模型名。
+        composeRule.onAllNodes(hasSetTextAction())[0].performClick()
         composeRule.waitUntil(20_000) {
             anyText("deepseek", substring = true) || anyText("gpt-", substring = true) || anyText("flash", substring = true)
         }
-        composeRule.onAllNodesWithText("模型")[0].assertDoesNotExist()
 
         // The session actions P1 promised are all reachable.
         composeRule.onAllNodesWithContentDescription("更多")[0].performClick()

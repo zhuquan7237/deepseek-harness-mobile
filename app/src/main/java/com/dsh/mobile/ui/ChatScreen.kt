@@ -183,14 +183,20 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.PlayCircleOutline
 import com.dsh.mobile.data.filterModels
 import androidx.compose.animation.animateContentSize
 
-/** 空会话时的开场白：点一下就把这句话发给电脑端。 */
-private val OPENERS = listOf(
-    "你现在能做什么？",
-    "看看电脑端在跑什么",
-    "帮我总结一下今天的会话",
+/** 空会话时的快捷入口：点一下把这句**任务**填进输入框（只填不发，用户可改完再发）。 */
+private data class QuickStarter(val label: String, val prompt: String, val icon: ImageVector)
+
+private val QUICK_STARTERS = listOf(
+    QuickStarter("查看可用功能", "你都能做什么？给我说说你能在这台电脑上帮我做的事。", Icons.Outlined.AutoAwesome),
+    QuickStarter("查看电脑当前任务", "看看这台电脑现在在跑什么任务。", Icons.Outlined.PlayCircleOutline),
+    QuickStarter("总结今天的工作记录", "帮我总结一下今天在这台电脑上的会话和工作记录。", Icons.Outlined.History),
+    QuickStarter("整理下载文件夹", "帮我整理一下这台电脑的下载文件夹。先告诉我你打算怎么整理、会动哪些文件，我确认后再动手。", Icons.Outlined.FolderOpen),
 )
 
 /** Material's push curve, reused for the popover's scale-in. */
@@ -223,12 +229,18 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var showRename by remember { mutableStateOf(false) }
+    var showHostRename by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<Wire.Artifact?>(null) }
     // S2 第二批：会话设置面板 / 会话陪伴面板 / 全屏源码阅读器
     var showSettings by remember { mutableStateOf(false) }
     var showCompanion by remember { mutableStateOf(false) }
     var readerDoc by remember { mutableStateOf<SourceDoc?>(null) }
     var readDoc by remember { mutableStateOf<LongReadDoc?>(null) }
+
+    // 打开「会话设置」时若模型文档还没拉过，补一次——面板里的「模型」行不再停在"未选择"。
+    LaunchedEffect(showSettings) {
+        if (showSettings && state.doc == null) repo.loadModels()
+    }
 
     // 公式预渲染：历史一到位就把消息里的公式排进后台渲染队列（幂等）——
     // 翻到哪一条都是成品，不再是"滚到眼前才当场编译"。
@@ -446,24 +458,18 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             CircleButton(Icons.AutoMirrored.Outlined.ArrowBack, "返回", container = false, size = 48.dp, iconSize = 24.dp) { onBack() }
-            // 模型选择照 ChatGPT 放在顶栏（不占输入条地方）：点第二行直接开模型菜单，
-            // 连接状态由前面的小圆点表示，标题区仍然点开更多菜单
+            // 第三批评审 P1：主标题给「正在连的电脑」，副标题给状态——先能确认在给哪台电脑下令；
+            // 模型只留输入区那一个入口（顶栏不再重复显示模型）。
             ContextPill(
                 bare = true,
-                title = displayTitle(state.sessionTitle),
-                meta = (if (state.connected) "已连接 · " else "重连中 · ") + state.modelLabel.ifBlank { "模型" },
+                title = deviceTitle(state),
+                meta = connMetaText(state),
                 metaDot = true,
                 metaConn = state.conn,
-                metaChevron = true,
+                metaChevron = false,
                 modifier = Modifier.weight(1f),
-                // S2 §3.2：点中部打开「会话设置」（电脑名称/连接详情/模型/重连都在里面）
+                // S2 §3.2：点中部打开「会话设置」（电脑/连接/模型/重连都在里面）
                 onClick = { showSettings = true },
-                onMetaClick = {
-                    showModels = true
-                    // 从顶栏模型标签进菜单也要拉一次：之前只有"更多→切换模型"那条路会拉，
-                    // 冷启动直接点标签会一直是"没有读到模型列表"。
-                    if (state.doc == null) repo.loadModels()
-                },
             )
             CircleButton(Icons.Outlined.MoreVert, "更多", container = false, size = 48.dp, iconSize = 22.dp) { showActions = true }
         }
@@ -678,6 +684,20 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
         )
     }
 
+    // 第三批评审 P1：给「连接的电脑」起个别名（只在这台手机上显示；清空 = 回到电脑自己的名字）
+    if (showHostRename) {
+        RenameDialog(
+            title = "电脑昵称（只在这台手机显示）",
+            initial = state.hostAlias.ifBlank { state.server?.hostName.orEmpty().ifBlank { "电脑" } },
+            allowBlank = true,
+            onDismiss = { showHostRename = false },
+            onConfirm = { name ->
+                repo.setHostAlias(name)
+                showHostRename = false
+            },
+        )
+    }
+
     OverlayHost(preview) { artifact ->
         GraphicPreviewOverlay(
             artifact = artifact,
@@ -721,6 +741,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 if (state.doc == null) repo.loadModels()
             },
             onReconnect = { repo.ensureConnected() },
+            onRenameHost = { showHostRename = true },
         )
     }
 
@@ -958,9 +979,8 @@ private fun MessageList(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        // 键盘顶起时可视区只剩小半屏：收紧留白、收掉大立绘，
-                        // 推荐提问不再被切成半截（真机反馈"拉起键盘后布局不合理"）
-                        .padding(top = if (imeOpen) 8.dp else 28.dp, start = 16.dp, end = 16.dp),
+                        // 键盘顶起时可视区只剩小半屏：欢迎区整体收成一行短标签（第三批评审 P3）
+                        .padding(top = if (imeOpen) 6.dp else 28.dp, start = 16.dp, end = 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     if (!imeOpen) {
@@ -974,34 +994,72 @@ private fun MessageList(
                             )
                         }
                         Spacer(Modifier.height(8.dp))
-                    }
-                    Text(
-                        "电脑端在待命",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = palette.textPrimary,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "说点什么，它就会在电脑上开始干活。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.textSecondary,
-                    )
-                    Spacer(Modifier.height(18.dp))
-                    OPENERS.forEach { line ->
-                        Surface(
-                            color = palette.surface,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clickable { onQuickSend(line) },
+                        Text(
+                            "电脑已就绪",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = palette.textPrimary,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "说点什么，它就会在电脑上开始干活。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.textSecondary,
+                        )
+                        Spacer(Modifier.height(18.dp))
+                        QUICK_STARTERS.forEach { starter ->
+                            Surface(
+                                color = palette.surface,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .clickable { onQuickSend(starter.prompt) },
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    Icon(
+                                        starter.icon,
+                                        contentDescription = null,
+                                        tint = palette.textSecondary,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Text(
+                                        text = starter.label,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = palette.textPrimary,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        // 键盘弹起（或输入中）：只留一行可横滑的短标签，高度让给对话区
+                        Text(
+                            "电脑已就绪",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.textSecondary,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text(
-                                text = line,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = palette.textPrimary,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
-                            )
+                            QUICK_STARTERS.forEach { starter ->
+                                Text(
+                                    text = starter.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = palette.textSecondary,
+                                    maxLines = 1,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(palette.surface)
+                                        .clickable { onQuickSend(starter.prompt) }
+                                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -2028,6 +2086,17 @@ svg{display:inline-block;vertical-align:middle;max-width:92vw;height:auto;}</sty
 <body><div class="center">${artifact.markup}</div></body></html>"""
 }
 
+/** 顶栏主标题 = 正在连的这台电脑（昵称优先，其次电脑自己的名字）。 */
+private fun deviceTitle(state: AppState): String =
+    state.hostAlias.ifBlank { state.server?.hostName?.takeIf { it.isNotBlank() } ?: "电脑" }
+
+/** 副标题 = 连接与任务状态（评审：先让人确认连的哪台电脑、它闲不闲）。 */
+private fun connMetaText(state: AppState): String = when {
+    state.conn != Conn.ONLINE -> "重连中…"
+    state.running -> "已连接 · 正在执行任务"
+    else -> "已连接 · 空闲"
+}
+
 /** S2：内部 id（session- 开头）不展示给用户；没有真标题就写「新对话」。 */
 internal fun displayTitle(t: String): String =
     if (t.isBlank() || t.startsWith("session-")) "新对话" else t
@@ -2058,7 +2127,8 @@ private fun ThinkingRow(since: Long) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        ShimmerText("正在思考", style = MaterialTheme.typography.labelMedium)
+        // 第三批评审 P5：把"消息发出去了"和"电脑在处理"说清楚——这里标明是电脑端在处理。
+        ShimmerText("电脑正在处理", style = MaterialTheme.typography.labelMedium)
         if (seconds >= 3) {
             Text("· ${seconds} 秒", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
         }
@@ -2276,7 +2346,7 @@ private fun Composer(
                     ) {
                         if (draft.isEmpty()) {
                             Text(
-                                if (state.connected) "发给电脑上的 Agent…" else "重连中…",
+                                if (state.connected) "让电脑帮你完成什么？" else "重连中…",
                                 style = inputStyle.copy(color = palette.textTertiary),
                                 // 占位文字也按同一套实测校正，两种状态视觉位置一致
                                 onTextLayout = { result ->
@@ -2394,16 +2464,19 @@ private fun Composer(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // 展开/收起：把输入框拉起到约半个屏幕，方便写长文本、检查排版
-                    CircleAction(
-                        background = Color.Transparent,
-                        icon = if (composerExpanded) Icons.Outlined.CloseFullscreen else Icons.Outlined.OpenInFull,
-                        tint = palette.textSecondary,
-                        contentDescription = if (composerExpanded) "收起输入框" else "展开输入框",
-                        enabled = true,
-                        size = 30.dp,
-                        iconSize = 16.dp,
-                    ) { composerExpanded = !composerExpanded }
+                    // 展开/收起：把输入框拉起到约半个屏幕，方便写长文本、检查排版。
+                    // 第三批评审 P4：只在真的在写东西（或已展开）时出现，空输入时这行更干净。
+                    if (composerExpanded || draft.isNotBlank()) {
+                        CircleAction(
+                            background = Color.Transparent,
+                            icon = if (composerExpanded) Icons.Outlined.CloseFullscreen else Icons.Outlined.OpenInFull,
+                            tint = palette.textSecondary,
+                            contentDescription = if (composerExpanded) "收起输入框" else "展开输入框",
+                            enabled = true,
+                            size = 30.dp,
+                            iconSize = 16.dp,
+                        ) { composerExpanded = !composerExpanded }
+                    }
                     // 输入区模型胶囊（0.2.67 恢复，用户拍板）：与顶栏共用同一状态、同一个模型菜单，
                     // S2「设置入口重复」的隐患由「同源同菜单」化解；空输入时随辅助行一起收起。
                     Spacer(Modifier.width(2.dp))

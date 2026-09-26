@@ -46,6 +46,7 @@ fun SessionSettingsSheet(
     onDismiss: () -> Unit,
     onOpenModels: () -> Unit,
     onReconnect: () -> Unit,
+    onRenameHost: () -> Unit,
 ) {
     val palette = LocalDsh.current
     ModalBottomSheet(
@@ -60,11 +61,30 @@ fun SessionSettingsSheet(
                 color = palette.textPrimary,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             )
+            // 第三批评审 P1/P6：这台电脑是谁、叫什么名（点一下起昵称，只在这台手机显示）
+            val hostTitle = state.hostAlias.ifBlank {
+                state.server?.hostName?.takeIf { it.isNotBlank() } ?: "电脑"
+            }
+            val hostCaption = when {
+                state.hostAlias.isNotBlank() && !state.server?.hostName.isNullOrBlank() ->
+                    "电脑自己的名字：" + state.server?.hostName
+                !state.server?.bridge.isNullOrBlank() -> "桥接 " + state.server?.bridge
+                else -> null
+            }
             SettingsRow(
                 label = "电脑",
-                value = state.server?.product?.takeIf { it.isNotBlank() } ?: "电脑端",
-                caption = state.server?.bridge?.takeIf { it.isNotBlank() }?.let { "桥接 " + it },
+                value = hostTitle,
+                caption = hostCaption,
+                chevron = true,
+                onClick = onRenameHost,
             )
+            if (state.sessionCwd.isNotBlank()) {
+                SettingsRow(
+                    label = "工作目录",
+                    value = state.sessionCwd,
+                    caption = "任务在这台电脑上执行的位置",
+                )
+            }
             SettingsRow(
                 label = "这台手机",
                 value = state.device?.name?.takeIf { it.isNotBlank() } ?: "本机",
@@ -177,7 +197,7 @@ fun CompanionSheet(
                 Text("鲸鱼娘", style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
                 Text(
                     if (state.running) "正在陪你等这一轮跑完——结束我会提醒你一声。"
-                    else "电脑端在待命。发个任务，她就在旁边看着它干活。",
+                    else "电脑已就绪。发个任务，她就在旁边看着它干活。",
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.textSecondary,
                 )

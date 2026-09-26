@@ -666,14 +666,21 @@ private fun SessionRow(
 }
 
 @Composable
-fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+fun RenameDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+    title: String = "重命名会话",
+    /** true = 允许提交空文本（电脑昵称：清空 = 恢复电脑自己的名字）。 */
+    allowBlank: Boolean = false,
+) {
     val palette = LocalDsh.current
     var text by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
         containerColor = palette.surface,
-        title = { Text("重命名会话", color = palette.textPrimary) },
+        title = { Text(title, color = palette.textPrimary) },
         text = {
             BasicTextField(
                 value = text,
@@ -690,7 +697,7 @@ fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> 
         },
         confirmButton = {
             TextButton(onClick = {
-                if (text.isNotBlank()) onConfirm(text.trim())
+                if (text.isNotBlank() || allowBlank) onConfirm(text.trim())
                 else onDismiss()
             }) { Text("保存", color = palette.textPrimary) }
         },
