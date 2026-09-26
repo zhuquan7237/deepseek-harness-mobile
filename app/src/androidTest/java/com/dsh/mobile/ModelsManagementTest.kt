@@ -1,11 +1,14 @@
 package com.dsh.mobile
 
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.isRoot
@@ -196,7 +199,14 @@ class ModelsManagementTest {
         fields[5].performTextReplacement("mobile-test-model")
 
         composeRule.onAllNodesWithText("保存")[0].performClick()
-        composeRule.waitUntil(30_000) { anyText(providerLabel) }
+        // 保存是「乐观更新 + 串行写库」：列表先行、写库成功才关表单（见 ModelsScreen.onSave）。
+        // 先等表单退干净（含动画）——直接 anyText(providerLabel) 会命中表单里还没消失的
+        // 同名输入框（实测假信号），而此时列表行可能还没被组合出来。
+        composeRule.waitUntil(30_000) { !anyText("标识（英文，唯一）") }
+        // LazyColumn 只组合可视区：新提供商在列表最底部，用户的模型一多（实测 11 家 /
+        // 98 个模型）它根本不在语义树里——performScrollTo 以 "no existing nodes" 失败。
+        // 用 performScrollToNode 驱动列表滚过去，再断言可见。
+        composeRule.onNode(hasScrollAction()).performScrollToNode(hasText(providerLabel))
         check(anyText(providerLabel)) { "the provider never showed up after saving" }
 
         // it really landed on the desktop, not just in the phone's memory.

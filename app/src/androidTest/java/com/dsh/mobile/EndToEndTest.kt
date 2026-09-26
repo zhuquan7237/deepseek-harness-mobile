@@ -76,6 +76,55 @@ class EndToEndTest {
         }
     }
 
+    /** App 的 DataStore 里存着设备 token（debug 构建可读；同 ModelsManagementTest.deviceToken）。 */
+    private fun deviceToken(): String? {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val file = java.io.File(ctx.filesDir, "datastore/dsh_mobile.preferences_pb")
+        if (!file.exists()) return null
+        val text = file.readBytes().toString(Charsets.ISO_8859_1)
+        val at = text.indexOf("token")
+        if (at < 0) return null
+        return Regex("[A-Za-z0-9_-]{40,}").find(text.substring(at))?.value
+    }
+
+    /** 带 Bearer token 的 GET（/mobile/sessions 等需要鉴权的接口）。 */
+    private fun rawAuthed(path: String, token: String): String? {
+        val req = Request.Builder().url(host + path).header("Authorization", "Bearer $token").get().build()
+        return client.newCall(req).execute().use { it.body?.string() }
+    }
+
+    /**
+     * 最新一条 E2E 会话的「模型特征词」（muse-spark-1.3 → spark；gpt-6-luna → luna）。
+     *
+     * 型号名绝对不能写死在断言里：用户随时会换默认模型（实测 xjm/gpt-6-luna →
+     * loveyou/muse-spark-1.3 之后，写死的 "gpt-"/"flash" 直接把测试变成假失败）。
+     * 会话标题会被引擎 LLM 改写，锚点沿用 titleAnchor 的几种形态、忽略大小写。
+     */
+    private fun sessionModelWord(): String? = runCatching {
+        val token = deviceToken() ?: return@runCatching null
+        val body = rawAuthed("/mobile/sessions?view=lite", token) ?: return@runCatching null
+        val arr = JSONObject(body).optJSONArray("items") ?: return@runCatching null
+        val anchors = listOf("mobile e2e", "pong", "p1 mobile", "end-to-end", "response check")
+        var best: JSONObject? = null
+        var bestAt = Long.MIN_VALUE
+        for (i in 0 until arr.length()) {
+            val s = arr.optJSONObject(i) ?: continue
+            val values = s.optJSONObject("projections")?.optJSONObject("values") ?: continue
+            val title = (values.opt("title") as? String).orEmpty()
+            if (anchors.none { title.contains(it, ignoreCase = true) }) continue
+            val at = s.optLong("updatedAt")
+            if (at > bestAt) { bestAt = at; best = s }
+        }
+        val ms = best?.optJSONObject("projections")?.optJSONObject("values")?.optJSONObject("modelSelection")
+        val model = ms?.optJSONObject("lastUsed")?.optString("model").orEmpty()
+            .ifBlank { ms?.optJSONObject("next")?.optString("model").orEmpty() }
+        if (model.isBlank()) return@runCatching null
+        model.split('-', '.', '_', ' ', '/')
+            .filter { it.length >= 4 && it.all(Char::isLetterOrDigit) }
+            .maxByOrNull { it.length }
+            ?.lowercase()
+    }.getOrNull()
+
     private fun shell(command: String) {
         val pfd = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
         try {
@@ -85,8 +134,8 @@ class EndToEndTest {
         }
     }
 
-    private fun anyText(text: String, substring: Boolean = false): Boolean =
-        composeRule.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes().isNotEmpty()
+    private fun anyText(text: String, substring: Boolean = false, ignoreCase: Boolean = false): Boolean =
+        composeRule.onAllNodesWithText(text, substring = substring, ignoreCase = ignoreCase).fetchSemanticsNodes().isNotEmpty()
 
     private fun anyContent(description: String): Boolean =
         composeRule.onAllNodesWithContentDescription(description).fetchSemanticsNodes().isNotEmpty()
@@ -206,9 +255,12 @@ class EndToEndTest {
         //（来自 projections.values.modelSelection，而不是 history 响应——那里没有这个字段）。
         // 0.3.3 起模型只在输入区展示：先点一下输入框让模型胶囊出现，再断言它带了具体模型名。
         composeRule.onAllNodes(hasSetTextAction())[0].performClick()
-        composeRule.waitUntil(20_000) {
-            anyText("deepseek", substring = true) || anyText("gpt-", substring = true) || anyText("flash", substring = true)
-        }
+        // 型号名不写死：用户换默认模型会把写死的 "gpt-"/"flash" 断言变成假失败
+        // （实测 xjm/gpt-6-luna → loveyou/muse-spark-1.3）。从桥接读这条会话自己的
+        // modelSelection，用它的特征词断言——要验的就是「会话继承它自己的模型」。
+        val modelWord = sessionModelWord()
+        checkNotNull(modelWord) { "拿不到 E2E 会话的模型：/mobile/sessions 没给出可用的 modelSelection" }
+        composeRule.waitUntil(20_000) { anyText(modelWord, substring = true, ignoreCase = true) }
 
         // The session actions P1 promised are all reachable.
         composeRule.onAllNodesWithContentDescription("更多")[0].performClick()
