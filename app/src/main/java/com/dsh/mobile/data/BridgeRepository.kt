@@ -745,10 +745,20 @@ class BridgeRepository(context: Context) {
         scope.launch {
             if (!quiet) _state.update { it.copy(filesLoading = true) }
             try {
-                val list = Wire.parseSessionFiles(api.sessionFiles(token, sid))
+                val resp = api.sessionFiles(token, sid)
+                val listedCwd = resp.optString("cwd").trim()
+                val list = Wire.parseSessionFiles(resp)
                 _state.update { current ->
-                    if (current.sessionId == sid) current.copy(sessionFiles = list, filesLoading = false)
-                    else current.copy(filesLoading = false)
+                    if (current.sessionId == sid) {
+                        current.copy(
+                            sessionFiles = list,
+                            filesLoading = false,
+                            // 文件响应也带工作目录：链接/交付物点开预览要用它把绝对路径折成相对路径。
+                            sessionCwd = if (listedCwd.isNotEmpty()) listedCwd else current.sessionCwd,
+                        )
+                    } else {
+                        current.copy(filesLoading = false)
+                    }
                 }
             } catch (error: Exception) {
                 if (!quiet) _state.update { it.copy(filesLoading = false) }
@@ -933,8 +943,12 @@ class BridgeRepository(context: Context) {
                         },
                         // 进度可见（0.4.2）：重进正在跑的会话，重试/尝试时长也要恢复——否则
                         // 「上游中断重试中」要干等到下一次重试事件才可见；字数由活体脉冲自续。
-                        taskRetry = if (!parsed.running) "" else (parsed.retryText ?: current.taskRetry),
-                        taskAttemptMs = if (!parsed.running) 0L else if (parsed.attemptMs > 0) parsed.attemptMs else current.taskAttemptMs,
+                        // 0.4.6：重试横幅只认「历史里尚未被进展事件收尾的那次重试」——
+                        // 解析器现在会在 assistant/message、step/end、回合边界把它清掉，
+                        // 这里不再兜底保留旧值（旧值正是「换模型跑得好好的，横幅还挂着
+                        // 正在重试」的根源）。
+                        taskRetry = if (!parsed.running) "" else parsed.retryText.orEmpty(),
+                        taskAttemptMs = if (!parsed.running) 0L else parsed.attemptMs,
                         taskChars = if (parsed.running) current.taskChars else -1,
                         taskReasonChars = if (parsed.running) current.taskReasonChars else -1,
                         taskProgressAt = if (parsed.running) current.taskProgressAt else 0L,
@@ -1687,6 +1701,11 @@ class BridgeRepository(context: Context) {
                 }
             }
             "assistant/chunk" -> {
+                // 0.4.6：有内容在流 = 之前那次重试已经出结果（成功开始输出），横幅立刻撤；
+                // 若这次尝试最终仍失败，新的 llm/retry 会把它重新设回来。
+                if (_state.value.taskRetry.isNotEmpty()) {
+                    _state.update { it.copy(taskRetry = "", taskAttemptMs = 0L) }
+                }
                 // A streaming adapter may send thinking first; it belongs in the
                 // running indicator, never inside the reply bubble.
                 if (Wire.chunkIsReasoning(data)) {
@@ -1703,6 +1722,11 @@ class BridgeRepository(context: Context) {
             "assistant/message" -> {
                 // 先把缓冲里不足一个节流窗口的流式尾巴落地（finish 冲刷），再安排重载。
                 flushLiveBuffer()
+                // 0.4.6：消息落地 = 之前那次重试已经过去（成功产出）；横幅立刻撤。
+                // 若这次尝试仍失败，新的 llm/retry 会把它重新设回来。
+                if (_state.value.taskRetry.isNotEmpty()) {
+                    _state.update { it.copy(taskRetry = "", taskAttemptMs = 0L) }
+                }
                 // 本轮用量（0.4.5）：同一轮多步累加、换轮重置——统计条用「最近一轮」。
                 val usage = Wire.usageOf(data)
                 if (usage != null) {
@@ -1736,7 +1760,9 @@ class BridgeRepository(context: Context) {
                 }
             }
             "tool/call", "tool/result", "user/message",
-            "agent/inbox/spliced" -> scheduleHistoryReload()
+            "agent/inbox/spliced",
+            // 0.4.6：电脑摆出交付物 → 重载历史，聊天里立刻出现交付物卡
+            "deliverables/presented" -> scheduleHistoryReload()
         }
     }
 

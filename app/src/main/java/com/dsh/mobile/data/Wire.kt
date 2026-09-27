@@ -223,6 +223,37 @@ object Wire {
         return out
     }
 
+    /** `D:\a\b\x.svg` → `x.svg`（Windows/Unix 两种斜杠都认）。 */
+    fun fileName(path: String): String = path.replace('\\', '/').substringAfterLast('/').ifBlank { path }
+
+    /**
+     * 电脑上的绝对路径 → 会话工作目录内的相对路径（桥接 /fs 通道只认相对路径，越界
+     * 一律拒绝）。不在目录里或拿不准时返回 null——宁可如实提示，不乱猜。
+     */
+    fun relativeInCwd(path: String, cwd: String): String? {
+        if (path.isBlank() || cwd.isBlank()) return null
+        val p = path.removePrefix("file://").replace('\\', '/').trimEnd('/')
+        val c = cwd.replace('\\', '/').trimEnd('/')
+        if (c.isEmpty() || !p.startsWith("$c/", ignoreCase = true)) return null
+        val rel = p.substring(c.length + 1)
+        if (rel.isBlank() || rel.contains("..")) return null
+        return rel
+    }
+
+    /** deliverables/presented 事件 → 交付文件列表（空路径与重复路径略过）。 */
+    fun deliveredFilesOf(data: JSONObject): List<DeliveredFile> {
+        val arr = data.optJSONArray("files") ?: return emptyList()
+        val out = ArrayList<DeliveredFile>(arr.length())
+        val seen = HashSet<String>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val path = o.optString("path").trim()
+            if (path.isEmpty() || !seen.add(path)) continue
+            out.add(DeliveredFile(path = path, name = fileName(path), description = o.optString("description").trim()))
+        }
+        return out
+    }
+
     /**
      * 从事件 data 里取本轮用量（`data.usage`；0.4.5）。全零/空对象视作没有——
      * 统计条宁可不显示，也不摆一串 0。
@@ -300,9 +331,15 @@ object Wire {
                     lastTurn = "start"
                     stepStart = time
                     runningSince = time
+                    // 新回合开始：上一回合的重试现场作废（0.4.6——重试文案不许跨回合借尸还魂）
+                    lastRetryText = null
+                    lastAttemptMs = 0L
                 }
                 "turn/end" -> {
                     lastTurn = "end"
+                    // 回合结束：重试现场作废（横幅只属于进行中的回合）
+                    lastRetryText = null
+                    lastAttemptMs = 0L
                     // 失败的回合要显式告诉用户原因（真机反馈"没输出也没有报错"）。
                     // 注意：对话失败属于上游模型/网络问题，**不进错误日志仓库**（用户定的
                     // 分级规则——日志只收应用自身的问题：崩溃/配对/连接等）；聊天里照常显示。
@@ -316,6 +353,16 @@ object Wire {
                     if (span > 0) lastAttemptMs = span
                 }
                 "step/start" -> stepStart = time
+                // 步骤收尾 = 这一步已有产出或明确结束，重试现场作废（0.4.6）
+                "step/end" -> {
+                    lastRetryText = null
+                    lastAttemptMs = 0L
+                }
+                "deliverables/presented" -> {
+                    // 0.4.6：电脑把文件摆到台面——聊天里出「交付物卡」，点开即预览。
+                    val files = deliveredFilesOf(data)
+                    if (files.isNotEmpty()) rows.add(ChatRow(Role.DELIVERED, "", files = files, time = time))
+                }
                 "approval/asked" -> {
                     val toolName = data.optString("toolName")
                     // N03 前置边界：手机只读——说清去哪处理，不假装手机能批
@@ -339,6 +386,9 @@ object Wire {
                     }
                 }
                 "assistant/message" -> {
+                    // 消息落地 = 这一步已经有确定产出，之前挂着的重试横幅作废（0.4.6）
+                    lastRetryText = null
+                    lastAttemptMs = 0L
                     val msg = data.optJSONObject("message") ?: data
                     val parts = partsOf(msg)
                     // 这一步的 "turn:step"：历史落地后用它撤掉对应的流式临时气泡

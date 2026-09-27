@@ -14,7 +14,7 @@ enum class View { PAIRING, SCAN, SESSIONS, CHAT, SETTINGS, MODELS, LOGS, APPROVA
 enum class Conn { CONNECTING, ONLINE, OFFLINE }
 
 /** Who said a message in the conversation log. */
-enum class Role { USER, ASSISTANT, TOOL, REASONING, NOTICE, ERROR, TRUNCATED, EMPTY_REPLY, APPROVAL, STEER, QUEUED, GENERATED_IMAGE }
+enum class Role { USER, ASSISTANT, TOOL, REASONING, NOTICE, ERROR, TRUNCATED, EMPTY_REPLY, APPROVAL, STEER, QUEUED, GENERATED_IMAGE, DELIVERED }
 
 /** 一条审批事实（K2-A 只读）：来自桥接 GET /mobile/approvals 与会话事件。 */
 @Immutable
@@ -115,6 +115,8 @@ data class ChatRow(
      * 历史重刷出来的行默认 false——落库本身就是送达证据。
      */
     val pendingAck: Boolean = false,
+    /** 交付物（deliverables/presented）：电脑摆到台面的文件，聊天里出卡片、点开即预览。 */
+    val files: List<DeliveredFile> = emptyList(),
 )
 
 /** 聊天里的一张图（发出去的照片，或历史里回放的照片）。 */
@@ -126,6 +128,15 @@ data class RowImage(
     val height: Int = 0,
     /** 刚发送时的本地副本（历史行为空，改从桥接取）。 */
     val localBase64: String = "",
+)
+
+/** 一件交付物（deliverables/presented 事件里的一行）。 */
+@Immutable
+data class DeliveredFile(
+    /** 电脑上的绝对路径（归属校验与提示用）。 */
+    val path: String,
+    val name: String,
+    val description: String = "",
 )
 
 /**

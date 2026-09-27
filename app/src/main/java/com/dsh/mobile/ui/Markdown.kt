@@ -37,10 +37,18 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.LinkInteractionListener
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dsh.mobile.ui.theme.LocalDsh
+
+/** 0.4.6：消息里链接的点击去向（ChatScreen 注入：http(s) 外开、电脑文件路径走预览）。 */
+val LocalDshLinkHandler = compositionLocalOf<((String) -> Unit)?> { null }
 
 /**
  * 电脑端回的是 Markdown（标题、列表、表格、行内代码…）。手机上原先直接当纯文本画，
@@ -605,6 +613,19 @@ private fun annotated(
         jobs.forEach { (span, _) -> MathRender.ensure(span.text, span.display, argb, sizeCss, pad) }
     }
 
+    // 0.4.6：链接可点——http(s) 外开，电脑文件路径走预览（去向由 ChatScreen 注入）。
+    val linkHandler = LocalDshLinkHandler.current
+    val uriHandler = LocalUriHandler.current
+    val linkListener = remember(linkHandler, uriHandler) {
+        LinkInteractionListener { clicked ->
+            val url = (clicked as? LinkAnnotation.Url)?.url.orEmpty()
+            when {
+                linkHandler != null -> linkHandler(url)
+                url.startsWith("http://") || url.startsWith("https://") -> runCatching { uriHandler.openUri(url) }
+            }
+        }
+    }
+
     val inline = HashMap<String, InlineTextContent>()
     val out = buildAnnotatedString {
         var mathId = 0
@@ -642,7 +663,19 @@ private fun annotated(
                         else -> null
                     },
                 )
-                withStyle(s) { append(span.text) }
+                if (span.link != null) {
+                    pushLink(
+                        LinkAnnotation.Url(
+                            url = span.link,
+                            styles = TextLinkStyles(style = SpanStyle(color = palette.link, textDecoration = TextDecoration.Underline)),
+                            linkInteractionListener = linkListener,
+                        ),
+                    )
+                    withStyle(s) { append(span.text) }
+                    pop()
+                } else {
+                    withStyle(s) { append(span.text) }
+                }
             }
         }
     }

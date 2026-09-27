@@ -1083,4 +1083,105 @@ class WireTest {
         assertEquals(103L, u.output)
         assertEquals(2, parsed.lastUsageTurn)
     }
+
+    // ---------------------------------------------------- 重试现场（0.4.6）
+
+    @Test
+    fun retryBannerOnlySurvivesWhileRetryIsPending() {
+        // 打开历史时重试仍在进行（停在 retry-started 上）：横幅必须可见——
+        // 重进正在跑的会话不能装作没事。
+        val items = JSONArray()
+        items.put(JSONObject("""{"event":{"type":"turn/start","data":{"turn":1}}}"""))
+        items.put(
+            JSONObject(
+                """{"event":{"type":"assistant/attempt","data":{"turn":1,"step":1,"stream":[{"type":"chunk","time":1000},{"type":"chunk","time":3400}]}}}"""
+            )
+        )
+        items.put(
+            JSONObject(
+                """{"event":{"type":"llm/retry","data":{"turn":1,"step":1,"retry":5,"maxRetries":5,"failure":{"code":"SERVER"}}}}"""
+            )
+        )
+        items.put(JSONObject("""{"event":{"type":"llm/retry-started","data":{"turn":1,"step":1,"retry":5}}}"""))
+        val pending = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(true, pending.running)
+        assertEquals("上游服务错误 · 第 5/5 次重试", pending.retryText)
+        assertEquals(2400L, pending.attemptMs)
+    }
+
+    @Test
+    fun retryBannerClearsOnceProgressHappens() {
+        // 真机现场：旧回合挂 5 次、换模型后新回合在跑——历史里躺着旧重试文案，
+        // 横幅不许“借尸还魂”。回合边界与新消息落地都必须把它清掉。
+        val items = JSONArray()
+        items.put(JSONObject("""{"event":{"type":"turn/start","data":{"turn":1}}}"""))
+        items.put(
+            JSONObject(
+                """{"event":{"type":"llm/retry","data":{"turn":1,"step":1,"retry":5,"maxRetries":5,"failure":{"code":"SERVER"}}}}"""
+            )
+        )
+        items.put(JSONObject("""{"event":{"type":"llm/retry-started","data":{"turn":1,"step":1,"retry":5}}}"""))
+        items.put(
+            JSONObject(
+                """{"event":{"type":"turn/end","data":{"turn":1,"reason":{"kind":"aborted","reason":{"kind":"user"}}}}}"""
+            )
+        )
+        items.put(JSONObject("""{"event":{"type":"turn/start","data":{"turn":2}}}"""))
+        // 新回合自己也吃了一次重试（然后消息落地）——这时的横幅同样必须归零
+        items.put(
+            JSONObject(
+                """{"event":{"type":"llm/retry","data":{"turn":2,"step":1,"retry":1,"maxRetries":5,"failure":{"code":"SERVER"}}}}"""
+            )
+        )
+        items.put(
+            JSONObject(
+                """{"event":{"type":"assistant/message","data":{"turn":2,"step":1,"message":{"content":[{"type":"text","text":"续上了"}]}}}}"""
+            )
+        )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(true, parsed.running)
+        assertEquals(null, parsed.retryText)
+        assertEquals(0L, parsed.attemptMs)
+    }
+
+    // ---------------------------------------------------- 交付物 + 路径（0.4.6）
+
+    @Test
+    fun deliveredFilesParseWithNamesAndDedup() {
+        val data = JSONObject(
+            """{"turn":2,"files":[{"description":"鹈鹕骑自行车的 SVG 插画","path":"D:\\DeepSeek\\pelican-riding-bike.svg"},{"path":"D:\\DeepSeek\\pelican-riding-bike.svg"},{"path":"  "}]}"""
+        )
+        val files = Wire.deliveredFilesOf(data)
+        assertEquals(1, files.size)
+        assertEquals("pelican-riding-bike.svg", files[0].name)
+        assertEquals("鹈鹕骑自行车的 SVG 插画", files[0].description)
+        assertEquals(0, Wire.deliveredFilesOf(JSONObject("""{}""")).size)
+    }
+
+    @Test
+    fun deliveredRowAppearsInHistory() {
+        val items = JSONArray()
+        items.put(
+            JSONObject(
+                """{"event":{"type":"deliverables/presented","data":{"turn":2,"files":[{"description":"插画","path":"D:\\DeepSeek\\a.svg"}]}}}"""
+            )
+        )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        assertEquals(1, parsed.rows.size)
+        assertEquals(Role.DELIVERED, parsed.rows[0].who)
+        assertEquals("a.svg", parsed.rows[0].files[0].name)
+    }
+
+    @Test
+    fun relativePathRespectsCwdBoundary() {
+        assertEquals(
+            "pelican-riding-bike.svg",
+            Wire.relativeInCwd("D:\\DeepSeek\\pelican-riding-bike.svg", "D:\\DeepSeek"),
+        )
+        assertEquals("sub/a.svg", Wire.relativeInCwd("D:/DeepSeek/sub/a.svg", "D:\\DeepSeek"))
+        assertEquals("x.svg", Wire.relativeInCwd("d:\\deepseek\\x.svg", "D:\\DeepSeek"))
+        assertEquals(null, Wire.relativeInCwd("D:\\Other\\x.svg", "D:\\DeepSeek"))
+        assertEquals(null, Wire.relativeInCwd("D:\\DeepSeek\\..\\x.svg", "D:\\DeepSeek"))
+        assertEquals(null, Wire.relativeInCwd("D:\\DeepSeek\\x.svg", ""))
+    }
 }

@@ -1,6 +1,7 @@
 package com.dsh.mobile.ui
 
 import androidx.compose.ui.text.font.FontFamily
+import android.content.Intent
 import android.graphics.drawable.Drawable
 import android.util.Log
 import org.json.JSONArray
@@ -103,7 +104,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -336,6 +339,24 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             viewingLoading = false
         }
     }
+    // 链接点击去向（0.4.6）：http(s) 交给浏览器；电脑上的文件路径 → 直接开预览。
+    // 消息里的 [pelican-riding-bike.svg](D:\...) 这类链接、交付物卡片点击共用它。
+    val openLink: (String) -> Unit = { link ->
+        val url = link.trim().removePrefix("file://")
+        when {
+            url.startsWith("http://", true) || url.startsWith("https://", true) ->
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                    .onFailure { repo.toast("打不开这个链接：${it.message ?: "未知原因"}") }
+            else -> {
+                val rel = Wire.relativeInCwd(url, state.sessionCwd)
+                if (rel != null) openFile(SessionFile(path = rel, name = Wire.fileName(url)))
+                else repo.toast("这个文件不在电脑的会话目录里，请到电脑上查看")
+            }
+        }
+    }
+    // 引用稳定 + 值最新：Markdown 里经 CompositionLocal 读取，重组不抖动。
+    val latestOpenLink = rememberUpdatedState(openLink)
+    val linkHandler: (String) -> Unit = remember { { url -> latestOpenLink.value(url) } }
     // ---- 附件：待发图片、缩略图、编辑中的图、来源弹层 ----
     var attachments by remember { mutableStateOf<List<AttachImage>>(emptyList()) }
     // 62-4：草稿附件本体——加入草稿时把字节写进应用私有目录，重启后从那里恢复；
@@ -498,45 +519,48 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
             CircleButton(Icons.Outlined.Edit, "新建对话", container = false, size = 48.dp, iconSize = 22.dp) { repo.createSession() }
             CircleButton(Icons.Outlined.MoreVert, "更多", container = false, size = 48.dp, iconSize = 22.dp) { showActions = true }
         }
-        MessageList(
-            state = state,
-            onCopy = { text ->
-                clipboard.setText(AnnotatedString(text))
-                repo.toast("已复制")
-            },
-            onRegenerate = { repo.regenerate() },
-            onRetry = { repo.retryLastPrompt() },
-            onSwitchModel = {
-                showModels = true
-                if (state.doc == null) repo.loadModels()
-            },
-            onOpenRead = { doc -> readDoc = doc },
-            onPreview = {
-                keyboard?.hide()
-                preview = it
-            },
-            onQuickSend = { line -> quickFill = line },
-            onRevealDone = { repo.revealConsumed() },
-            onOpenFiles = {
-                filesSheet = true
-                repo.loadSessionFiles()
-            },
-            onOpenExternal = { lang, code -> openCodeExternally(context, lang, code) },
-            onViewSource = { doc ->
-                keyboard?.hide()
-                readerDoc = doc
-            },
-            onOpenGenerated = openFile,
-            fetchImage = { name -> repo.fetchGeneratedImage(name) },
-            fetchAttach = { id -> repo.fetchAttachment(id) },
-            onOpenImage = { bmp -> viewingImage = bmp },
-            onSaveCode = { lang, code ->
-                val where = saveTextToDownloads(context, codeFileName(lang), code)
-                if (where != null) repo.toast("已保存到 $where") else repo.toast("保存失败，已复制到剪贴板")
-                if (where == null) clipboard.setText(AnnotatedString(code))
-            },
-            modifier = Modifier.weight(1f),
-        )
+        // 0.4.6：把「链接去向」注入给消息渲染层——Markdown 链接、交付物卡片都读它。
+        CompositionLocalProvider(LocalDshLinkHandler provides linkHandler) {
+            MessageList(
+                state = state,
+                onCopy = { text ->
+                    clipboard.setText(AnnotatedString(text))
+                    repo.toast("已复制")
+                },
+                onRegenerate = { repo.regenerate() },
+                onRetry = { repo.retryLastPrompt() },
+                onSwitchModel = {
+                    showModels = true
+                    if (state.doc == null) repo.loadModels()
+                },
+                onOpenRead = { doc -> readDoc = doc },
+                onPreview = {
+                    keyboard?.hide()
+                    preview = it
+                },
+                onQuickSend = { line -> quickFill = line },
+                onRevealDone = { repo.revealConsumed() },
+                onOpenFiles = {
+                    filesSheet = true
+                    repo.loadSessionFiles()
+                },
+                onOpenExternal = { lang, code -> openCodeExternally(context, lang, code) },
+                onViewSource = { doc ->
+                    keyboard?.hide()
+                    readerDoc = doc
+                },
+                onOpenGenerated = openFile,
+                fetchImage = { name -> repo.fetchGeneratedImage(name) },
+                fetchAttach = { id -> repo.fetchAttachment(id) },
+                onOpenImage = { bmp -> viewingImage = bmp },
+                onSaveCode = { lang, code ->
+                    val where = saveTextToDownloads(context, codeFileName(lang), code)
+                    if (where != null) repo.toast("已保存到 $where") else repo.toast("保存失败，已复制到剪贴板")
+                    if (where == null) clipboard.setText(AnnotatedString(code))
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
         AnimatedVisibility(
             visible = doneVisible,
             enter = fadeIn(tween(200)) + slideInVertically(tween(260, easing = MenuEasing)) { it / 3 },
@@ -1737,7 +1761,31 @@ private fun MessageRow(
                 }
             }
         }
+        Role.DELIVERED -> DeliveredRow(row)
         Role.TOOL -> ToolRow(row, onPreview)
+    }
+}
+
+/**
+ * 交付物行（0.4.6）：电脑把文件「摆到台面」（deliverables/presented）时，
+ * 聊天里出现可点开的卡片；点开走文件预览通道（SVG/图片/文本/网页）。
+ */
+@Composable
+private fun DeliveredRow(row: ChatRow) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        row.files.take(8).forEach { file -> DeliveredCard(file) }
+        if (row.files.size > 8) {
+            Text(
+                "另有 ${row.files.size - 8} 个文件未列出",
+                style = MaterialTheme.typography.labelSmall,
+                color = LocalDsh.current.textTertiary,
+            )
+        }
     }
 }
 

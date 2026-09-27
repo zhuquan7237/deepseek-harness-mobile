@@ -39,10 +39,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.border
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -72,6 +77,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.dsh.mobile.data.DeliveredFile
 import com.dsh.mobile.data.SessionFile
 import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
@@ -195,10 +201,23 @@ private fun FileListRow(file: SessionFile, onOpen: () -> Unit, onDownload: () ->
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            val subtitle = when {
+                file.size > 0 && file.mtime > 0 -> "${Wire.formatSize(file.size)} · ${Wire.timeText(file.mtime)}"
+                file.size > 0 -> Wire.formatSize(file.size)
+                else -> when (Wire.fileKind(file.name)) {
+                    "svg" -> "SVG 图形"
+                    "html" -> "网页"
+                    "image" -> "图片"
+                    "text" -> "文本"
+                    else -> "交付文件"
+                }
+            }
             Text(
-                "${Wire.formatSize(file.size)} · ${Wire.timeText(file.mtime)}",
+                subtitle,
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.textTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         Spacer(Modifier.width(6.dp))
@@ -595,6 +614,70 @@ svg{display:inline-block;vertical-align:middle;max-width:92vw;height:auto;}</sty
 <body><div class="center">$svg</div></body></html>"""
 
 // --------------------------------------------------------------- 图片生成卡片
+
+/**
+ * 交付物卡片（0.4.6）：电脑把文件「摆到台面」（deliverables/presented）时，
+ * 聊天里出现这张卡——点开直接预览（SVG/图片/文本走文件预览通道，越界如实提示）。
+ */
+@Composable
+fun DeliveredCard(file: DeliveredFile) {
+    val palette = LocalDsh.current
+    val linkHandler = LocalDshLinkHandler.current
+    val kind = Wire.fileKind(file.name)
+    val icon = when (kind) {
+        "svg", "image" -> Icons.Outlined.Image
+        "html" -> Icons.Outlined.Language
+        else -> Icons.Outlined.Description
+    }
+    val kindLabel = when (kind) {
+        "svg" -> "SVG 图形"
+        "html" -> "网页"
+        "image" -> "图片"
+        "text" -> "文本"
+        else -> "文件"
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(palette.surface)
+            .border(1.dp, palette.divider, RoundedCornerShape(14.dp))
+            .clickable { linkHandler?.invoke(file.path) }
+            .padding(start = 14.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = palette.textSecondary, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                file.name,
+                style = MaterialTheme.typography.titleSmall,
+                color = palette.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                file.description.ifBlank { kindLabel } + " · 点开预览",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(palette.surfaceHi)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("预览", style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
+            Icon(Icons.Outlined.OpenInFull, contentDescription = null, tint = palette.textSecondary, modifier = Modifier.size(13.dp))
+        }
+    }
+}
 
 /**
  * 聊天里的「图片生成」卡片（引擎把产物存到电脑的 dsh-home/generated，
