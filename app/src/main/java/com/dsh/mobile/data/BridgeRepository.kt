@@ -664,6 +664,8 @@ class BridgeRepository(context: Context) {
                 thinking = false,
                 thinkingSince = 0L,
                 sessionFiles = emptyList(),
+                lastUsage = null,
+                usageTurn = 0,
                 modelProvider = provider,
                 modelId = model,
                 modelLabel = label,
@@ -908,6 +910,8 @@ class BridgeRepository(context: Context) {
                     current.copy(
                         history = parsed.rows,
                         historyEndTime = parsed.endTime,
+                        lastUsage = parsed.lastUsage,
+                        usageTurn = parsed.lastUsageTurn,
                         // 已落库的流式气泡在这里原子撤掉（同帧与历史行交接，防闪窗）
                         live = if (settled.isEmpty()) current.live
                         else current.live.filterNot { it.key in settled },
@@ -1699,6 +1703,15 @@ class BridgeRepository(context: Context) {
             "assistant/message" -> {
                 // 先把缓冲里不足一个节流窗口的流式尾巴落地（finish 冲刷），再安排重载。
                 flushLiveBuffer()
+                // 本轮用量（0.4.5）：同一轮多步累加、换轮重置——统计条用「最近一轮」。
+                val usage = Wire.usageOf(data)
+                if (usage != null) {
+                    val turn = data.optInt("turn", 0)
+                    _state.update { st ->
+                        val merged = if (turn > 0 && turn == st.usageTurn) (st.lastUsage ?: TurnUsage()) + usage else usage
+                        st.copy(lastUsage = merged, usageTurn = turn)
+                    }
+                }
                 // 这一步的最终消息已落库。临时气泡不在这里撤——留到历史重载成功时
                 // 按落库的 turn:step 原子撤（同帧切换）；先撤会留下 250ms 防抖空窗，
                 // 屏幕上就是「文字先没了、历史还没到」的一闪。

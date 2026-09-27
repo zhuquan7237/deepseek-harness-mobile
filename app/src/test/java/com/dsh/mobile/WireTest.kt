@@ -1021,4 +1021,66 @@ class WireTest {
         assertEquals(1790443738769L, c?.third)
         assertEquals(null, Wire.progressCounts(JSONObject()))
     }
+
+    // ---------------------------------------------------- 本轮用量（0.4.5）
+
+    @Test
+    fun parsesTurnUsageWithCacheHit() {
+        val data = JSONObject(
+            """{"turn":2,"usage":{"inputTokens":173,"outputTokens":3,"totalTokens":8240,"cacheReadTokens":8064}}"""
+        )
+        val u = Wire.usageOf(data)!!
+        assertEquals(173L, u.input)
+        assertEquals(8064L, u.cacheRead)
+        assertEquals(0L, u.cacheWrite)
+        assertEquals(3L, u.output)
+        assertEquals(8240L, u.total)
+        assertEquals(98, u.cacheHitPercent)
+    }
+
+    @Test
+    fun usageEdgesWithoutCacheOrWithNothing() {
+        val plain = Wire.usageOf(JSONObject("""{"usage":{"inputTokens":8750,"outputTokens":38}}"""))!!
+        assertEquals(0, plain.cacheHitPercent)
+        assertNull(Wire.usageOf(JSONObject("""{"usage":{}}""")))
+        assertNull(Wire.usageOf(JSONObject("""{}""")))
+        assertNull(Wire.usageOf(null))
+    }
+
+    @Test
+    fun formatsTokenCountsForTheStrip() {
+        assertEquals("875", Wire.formatTok(875))
+        assertEquals("8.8K", Wire.formatTok(8788))
+        assertEquals("8K", Wire.formatTok(8000))
+        assertEquals("141K", Wire.formatTok(141051))
+        assertEquals("1.2M", Wire.formatTok(1234567))
+        assertEquals("12,672", Wire.formatExact(12672))
+        assertEquals("875", Wire.formatExact(875))
+    }
+
+    @Test
+    fun historyMergesUsageOfLastTurn() {
+        val items = JSONArray()
+        items.put(
+            JSONObject(
+                """{"event":{"type":"assistant/message","data":{"turn":1,"step":1,"usage":{"inputTokens":7584,"outputTokens":2,"cacheReadTokens":640},"message":{"content":[{"type":"text","text":"甲"}]}}}}"""
+            )
+        )
+        items.put(
+            JSONObject(
+                """{"event":{"type":"assistant/message","data":{"turn":2,"step":1,"usage":{"inputTokens":5000,"outputTokens":100},"message":{"content":[{"type":"text","text":"乙"}]}}}}"""
+            )
+        )
+        items.put(
+            JSONObject(
+                """{"event":{"type":"assistant/message","data":{"turn":2,"step":2,"usage":{"inputTokens":173,"outputTokens":3,"cacheReadTokens":8064},"message":{"content":[{"type":"text","text":"丙"}]}}}}"""
+            )
+        )
+        val parsed = Wire.parseHistory(JSONObject().put("items", items))
+        val u = parsed.lastUsage!!
+        assertEquals(5173L, u.input)
+        assertEquals(8064L, u.cacheRead)
+        assertEquals(103L, u.output)
+        assertEquals(2, parsed.lastUsageTurn)
+    }
 }

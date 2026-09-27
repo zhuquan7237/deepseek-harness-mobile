@@ -90,6 +90,7 @@ import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material.icons.outlined.CloseFullscreen
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -160,6 +161,7 @@ import com.dsh.mobile.R
 import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.ChatRow
+import com.dsh.mobile.data.TurnUsage
 import com.dsh.mobile.data.Conn
 import com.dsh.mobile.data.LiveBubble
 import com.dsh.mobile.data.Role
@@ -238,6 +240,8 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     val clipboard = LocalClipboardManager.current
 
     var showActions by remember { mutableStateOf(false) }
+    // 0.4.5：输入框上方「本轮用量」统计条的明细弹层
+    var showUsage by remember { mutableStateOf(false) }
     // I6/M3：推荐提问只填入输入框（不替用户直接开跑）；发送由用户自己按。
     var quickFill by remember { mutableStateOf<String?>(null) }
     var showModels by remember { mutableStateOf(false) }
@@ -584,6 +588,7 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                     showModels = true
                     if (state.doc == null) repo.loadModels()
                 },
+                onOpenUsage = { showUsage = true },
                 attachments = attachments,
                 previews = attachPreviews,
                 onRemoveAttachment = { index ->
@@ -701,6 +706,16 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
                 }
                 Spacer(Modifier.height(16.dp))
             }
+        }
+    }
+
+    if (showUsage) {
+        ModalBottomSheet(
+            onDismissRequest = { showUsage = false },
+            containerColor = palette.surface,
+            dragHandle = { SheetHandle() },
+        ) {
+            UsageDetailSheet(state.lastUsage)
         }
     }
 
@@ -2524,6 +2539,7 @@ private fun Composer(
     state: AppState,
     repo: BridgeRepository,
     onOpenModels: () -> Unit,
+    onOpenUsage: () -> Unit,
     attachments: List<AttachImage>,
     previews: List<Bitmap>,
     onRemoveAttachment: (Int) -> Unit,
@@ -2569,13 +2585,14 @@ private fun Composer(
     val focusRequester = remember { FocusRequester() }
     // "半个屏幕"按窗口高度算；键盘顶起时它仍能完整留在可视区（.42 与键盘高度量级相当）
     val expandedMin = (LocalConfiguration.current.screenHeightDp.dp * 0.42f).coerceIn(180.dp, 420.dp)
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.Bottom,
     ) {
+        // 0.4.5 本轮用量：输入框上方一行「总 tok · 缓存命中%」（点开是明细）。
+        state.lastUsage?.let { usage -> UsageStrip(usage, onOpenUsage) }
         Column(
             Modifier
                 .fillMaxWidth()
@@ -3083,6 +3100,104 @@ private fun fmtClock(ms: Long): String {
     return when {
         sec < 3600 -> "%02d:%02d".format(sec / 60, sec % 60)
         else -> "${sec / 3600} 小时 ${"%02d".format((sec % 3600) / 60)} 分"
+    }
+}
+
+/**
+ * 输入框上方的本轮用量（0.4.5）：`[库图标] 8.2K tok · 缓存命中 98%`。
+ * 安静的一行字（12sp 三级色）——看一眼命中率，点开是明细。数据来自引擎
+ * usage 字段（实时事件与历史重载两条路都带），口径与电脑官方客户端一致。
+ */
+@Composable
+private fun UsageStrip(usage: TurnUsage, onClick: () -> Unit) {
+    val palette = LocalDsh.current
+    val hit = usage.cacheHitPercent
+    val label = buildString {
+        append(Wire.formatTok(usage.total))
+        append(" tok")
+        if (hit != null) {
+            append(" · 缓存命中 ")
+            append(hit)
+            append('%')
+        }
+    }
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 5.dp)
+            .semantics { contentDescription = "本轮用量 $label，点开看明细" },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Storage,
+            contentDescription = null,
+            tint = palette.textTertiary,
+            modifier = Modifier.size(13.dp),
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
+    }
+}
+
+/**
+ * 「本轮用量」明细（0.4.5）：缓存命中 = 缓存读取 ÷（未缓存输入 + 缓存读取 + 缓存写入），
+ * 与电脑端官方客户端同口径；同一轮的多个步骤已合并计算。
+ */
+@Composable
+private fun UsageDetailSheet(usage: TurnUsage?) {
+    if (usage == null) return
+    val palette = LocalDsh.current
+    val hit = usage.cacheHitPercent
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 22.dp)
+            .navigationBarsPadding(),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("本轮用量", style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
+            Text(
+                "${Wire.formatTok(usage.total)} tok",
+                style = MaterialTheme.typography.labelMedium,
+                color = palette.textSecondary,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        usageLine("缓存命中", hit?.let { "$it%" } ?: "—", accented = hit != null && hit > 0)
+        usageLine("未缓存输入", "${Wire.formatExact(usage.input)} tok")
+        if (usage.cacheRead > 0) usageLine("缓存读取", "${Wire.formatExact(usage.cacheRead)} tok")
+        if (usage.cacheWrite > 0) usageLine("缓存写入", "${Wire.formatExact(usage.cacheWrite)} tok")
+        usageLine("输出", "${Wire.formatExact(usage.output)} tok")
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "命中越高，重复的上下文越多、越省时省钱。同一轮的多个步骤已合并。",
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.textTertiary,
+        )
+        Spacer(Modifier.height(18.dp))
+    }
+}
+
+/** 明细的一行：左标签、右数值（命中率用旧金点一下，其余常规色）。 */
+@Composable
+private fun usageLine(label: String, value: String, accented: Boolean = false) {
+    val palette = LocalDsh.current
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = palette.textSecondary)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (accented) palette.gold else palette.textPrimary,
+        )
     }
 }
 

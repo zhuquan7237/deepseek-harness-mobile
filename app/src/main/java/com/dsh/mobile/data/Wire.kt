@@ -159,6 +159,10 @@ object Wire {
         /** 运行中回合的现场（进度可见 0.4.2）：最近一次上游重试文案 + 上一次尝试时长。 */
         val retryText: String? = null,
         val attemptMs: Long = 0L,
+        /** 最近一轮的用量（输入框上方统计条 0.4.5）；没有用量数据时为 null。 */
+        val lastUsage: TurnUsage? = null,
+        /** lastUsage 所属轮号（同轮多步已合并进 lastUsage）。 */
+        val lastUsageTurn: Int = 0,
     )
 
     /** One content block inside an assistant/user message. */
@@ -219,6 +223,44 @@ object Wire {
         return out
     }
 
+    /**
+     * 从事件 data 里取本轮用量（`data.usage`；0.4.5）。全零/空对象视作没有——
+     * 统计条宁可不显示，也不摆一串 0。
+     */
+    fun usageOf(data: JSONObject?): TurnUsage? {
+        val u = data?.optJSONObject("usage") ?: return null
+        val input = u.optLong("inputTokens", 0L)
+        val output = u.optLong("outputTokens", 0L)
+        val read = u.optLong("cacheReadTokens", 0L)
+        val write = u.optLong("cacheWriteTokens", 0L)
+        if (input <= 0L && output <= 0L && read <= 0L && write <= 0L) return null
+        return TurnUsage(input, read, write, output)
+    }
+
+    /** 8788 → `8.8K`；141051 → `141K`；1234567 → `1.2M`；875 → `875`。 */
+    fun formatTok(n: Long): String = when {
+        n < 1000L -> n.toString()
+        n < 100_000L -> trimZero(n / 1000.0) + "K"
+        n < 1_000_000L -> Math.round(n / 1000.0).toString() + "K"
+        else -> trimZero(n / 1_000_000.0) + "M"
+    }
+
+    /** 精确千分位：12672 → `12,672`。明细卡片用。 */
+    fun formatExact(n: Long): String {
+        val s = n.toString()
+        val out = StringBuilder()
+        for (i in s.indices) {
+            if (i > 0 && (s.length - i) % 3 == 0) out.append(',')
+            out.append(s[i])
+        }
+        return out.toString()
+    }
+
+    private fun trimZero(v: Double): String {
+        val s = String.format(java.util.Locale.US, "%.1f", v)
+        return if (s.endsWith(".0")) s.dropLast(2) else s
+    }
+
     /** Turn the history page into display rows plus a running guess: the last
      *  turn-ish event wins (start without a later end = in flight).
      *
@@ -239,6 +281,10 @@ object Wire {
         var lastRetryText: String? = null
         var lastAttemptMs = 0L
         val seenCalls = HashSet<String>()
+        // 本轮用量（0.4.5）：同一轮多步 assistant/message 的 usage 按轮号累加，
+        // 统计条展示「最近一轮」的总账（口径与官方客户端一致）。
+        val turnUsage = HashMap<Int, TurnUsage>()
+        var maxUsageTurn = 0
         // 引擎收件箱：agent/inbox/spliced 记录"已排队/已插话但还没生效"的消息，
         // 手机发、桌面发的都在这 —— 是跨设备、重启后都不丢的唯一真相。
         val inbox = LinkedHashMap<String, MutableList<Pair<String, String>>>()
@@ -305,6 +351,14 @@ object Wire {
                         .joinToString("\n\n") { it.text }.trim()
                     val answer = parts.filter { it.type == "text" }
                         .joinToString("\n\n") { it.text }.trim()
+                    // 本轮用量（0.4.5）：这一步的 usage 归到其轮号（同轮多步累加）。
+                    usageOf(data)?.let { u ->
+                        val t = data.optInt("turn", 0)
+                        if (t > 0) {
+                            turnUsage[t] = (turnUsage[t] ?: TurnUsage()) + u
+                            if (t > maxUsageTurn) maxUsageTurn = t
+                        }
+                    }
                     if (reasoning.isNotEmpty()) {
                         val seconds = if (stepStart > 0 && time > stepStart) (time - stepStart) / 1000 else 0L
                         rows.add(
@@ -386,7 +440,16 @@ object Wire {
         // 待生效的消息挂在末尾：它们还没进入回合，但用户必须看得见
         inbox["next-step"]?.forEach { (_, text) -> rows.add(ChatRow(Role.STEER, text)) }
         inbox["next-turn"]?.forEach { (_, text) -> rows.add(ChatRow(Role.QUEUED, text)) }
-        return HistoryParse(rows, lastTurn == "start", endTime, runningSince, lastRetryText, lastAttemptMs)
+        return HistoryParse(
+            rows,
+            lastTurn == "start",
+            endTime,
+            runningSince,
+            lastRetryText,
+            lastAttemptMs,
+            lastUsage = if (maxUsageTurn > 0) turnUsage[maxUsageTurn] else null,
+            lastUsageTurn = maxUsageTurn,
+        )
     }
 
     /** 一段连续的执行记录（思考 + 工具调用/返回），折叠成一行摘要后展示。 */

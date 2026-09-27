@@ -128,6 +128,36 @@ data class RowImage(
     val localBase64: String = "",
 )
 
+/**
+ * 一轮（turn）的 token 用量（0.4.5，引擎 usage 字段；缓存字段只在上游报告时存在）。
+ * 口径与电脑端官方客户端一致：billedInput = 未缓存输入 + 缓存读取 + 缓存写入；
+ * 「缓存命中」= 缓存读取 ÷ billedInput；统计条上的总量 = billedInput + 输出。
+ */
+@Immutable
+data class TurnUsage(
+    val input: Long = 0L,
+    val cacheRead: Long = 0L,
+    val cacheWrite: Long = 0L,
+    val output: Long = 0L,
+) {
+    val billedInput: Long get() = input + cacheRead + cacheWrite
+    val total: Long get() = billedInput + output
+
+    /** 0..100；没有计费输入时 null。99.5%+ 但没满格压到 99——不许「差一点显示 100%」。 */
+    val cacheHitPercent: Int?
+        get() = if (billedInput <= 0L) null else {
+            val r = kotlin.math.round(cacheRead * 100.0 / billedInput).toInt()
+            if (r >= 100 && cacheRead < billedInput) 99 else r.coerceAtMost(100)
+        }
+
+    operator fun plus(other: TurnUsage) = TurnUsage(
+        input + other.input,
+        cacheRead + other.cacheRead,
+        cacheWrite + other.cacheWrite,
+        output + other.output,
+    )
+}
+
 /** One in-flight assistant bubble, keyed by `turn:step`. */
 @Immutable
 data class LiveBubble(val key: String, val text: String)
@@ -295,6 +325,10 @@ data class AppState(
      * true 时顶栏显示"正在补齐…"——不用绿点冒充恢复完整（C01/G01）。
      */
     val syncing: Boolean = false,
+    /** 最近一轮（turn）的 token 用量——输入框上方那条「tok · 缓存命中%」（0.4.5）。 */
+    val lastUsage: TurnUsage? = null,
+    /** lastUsage 归属的轮号：同一轮多步要累加、换轮要重置。 */
+    val usageTurn: Int = 0,
     /** 当前思考强度（low/medium/high…），空表示跟随电脑端默认。 */
     val reasoningEffort: String = "",
     val modelProvider: String = "",
