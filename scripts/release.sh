@@ -169,6 +169,24 @@ if [ -d "$REPO_APP_DIR" ]; then
     printf '==> 清单已回写仓库副本\n'
 fi
 
+# ---------------------------------------------------------------- 5b. 镜像同步（best-effort）
+# 服务器镜像 /opt/dsh-relay/dl/ 是手机端「未配对/跨网」时的更新源。
+# 2026-09-27 发现它停在 0.4.2（0.4.3 漏同步）——同一条链两个月里没人点开过就很难发现，
+# 所以把它并入发布流程；SSH 不通时只警告，不阻断发布（另有公网镜像兜底）。
+MIRROR_KEY="$HOME/.ssh/aliyun-light-8.148.233.40.pem"
+MIRROR_HOST="root@8.148.233.40"
+if [ -f "$MIRROR_KEY" ]; then
+    printf '==> 同步服务器镜像（best-effort）\n'
+    if scp -i "$MIRROR_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 \
+            "$APK" "$MIRROR_HOST:/opt/dsh-relay/dl/dsh-mobile.apk" 2>/dev/null \
+        && scp -i "$MIRROR_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 \
+            "$PUBLISH_DIR/app-update.json" "$MIRROR_HOST:/opt/dsh-relay/dl/app-update.json" 2>/dev/null; then
+        printf '==> 镜像已同步（cn.zhuquan.xyz:8443 / relay.zhuquan.xyz 的 /dl/）\n'
+    else
+        printf '!! 镜像同步失败（不阻断发布）——记得手动 scp 到 /opt/dsh-relay/dl/\n'
+    fi
+fi
+
 # ---------------------------------------------------------------- 6. 提交与推送
 printf '==> 提交并推送\n'
 git commit -am "release v$VERSION"
