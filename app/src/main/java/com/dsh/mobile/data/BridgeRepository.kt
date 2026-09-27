@@ -207,12 +207,14 @@ class BridgeRepository(context: Context) {
         if (!ok && _state.value.token == null) return // meta said the token is gone
         connect()
         loadSessions()
+        loadQuestions(quiet = true)
     }
 
     private fun onReconnected() {
         scope.launch {
             refreshMeta(quiet = true)
             loadSessions()
+            loadQuestions(quiet = true)
             _state.value.sessionId?.let { loadHistory(it, quiet = true) }
         }
     }
@@ -1349,6 +1351,65 @@ class BridgeRepository(context: Context) {
         loadApprovals(quiet = true)
     }
 
+    // ------------------------------------------------------------ 模型提问（可作答）
+
+    /** 读一次权威清单（桥接内存态）；帧到达/重连/作答后都会来这兜底。 */
+    fun loadQuestions(quiet: Boolean = true) {
+        val token = _state.value.token ?: return
+        scope.launch {
+            try {
+                val doc = api.questions(token)
+                if (doc.optBoolean("ok", false)) {
+                    val list = Wire.parseQuestions(doc)
+                    _state.update { it.copy(questions = list) }
+                }
+            } catch (error: BridgeException) {
+                if (!quiet) handleApiError(error, "读取提问失败")
+            } catch (error: Exception) {
+                if (!quiet) fail("api", "读取提问失败：${error.message ?: "网络错误"}")
+            }
+        }
+    }
+
+    private var lastQuestionsReload = 0L
+    private fun scheduleQuestionsReload() {
+        val now = System.currentTimeMillis()
+        if (now - lastQuestionsReload < 800) return
+        lastQuestionsReload = now
+        loadQuestions(quiet = true)
+    }
+
+    /** 回答一条模型提问（手机端作答；与电脑端同时可见，先答的生效）。 */
+    fun answerQuestion(eventId: String, answers: JSONArray) {
+        val token = _state.value.token ?: return
+        if (eventId.isEmpty() || _state.value.questionBusy == eventId) return
+        _state.update { it.copy(questionBusy = eventId) }
+        scope.launch {
+            try {
+                val doc = api.answerQuestion(token, eventId, answers)
+                if (doc.optBoolean("ok", false)) {
+                    EventTrail.add("question answered")
+                    _state.update { cur ->
+                        cur.copy(questions = cur.questions.filterNot { it.eventId == eventId }, questionBusy = "")
+                    }
+                } else {
+                    val message = doc.optString("message").ifBlank { "回答失败" }
+                    _state.update { it.copy(questionBusy = "") }
+                    fail("question", message)
+                    loadQuestions(quiet = true)
+                }
+            } catch (error: BridgeException) {
+                _state.update { it.copy(questionBusy = "") }
+                handleApiError(error, "回答失败")
+                loadQuestions(quiet = true)
+            } catch (error: Exception) {
+                _state.update { it.copy(questionBusy = "") }
+                fail("question", "回答失败：${error.message ?: "网络错误"}")
+                loadQuestions(quiet = true)
+            }
+        }
+    }
+
     fun openScan() {
         _state.update { it.copy(view = View.SCAN) }
     }
@@ -1500,6 +1561,25 @@ class BridgeRepository(context: Context) {
         if (evType == "approval/asked" || evType == "approval/decided") {
             scheduleApprovalsReload()
             if (sid.isNotEmpty() && sid == s.sessionId) scheduleHistoryReload()
+            return
+        }
+        // 模型提问（可作答）：帧里带着完整提问——先就地更新，再节流拉一次权威清单兜底。
+        if (evType == "question/asked" || evType == "question/resolved") {
+            val data = frame.optJSONObject("data") ?: JSONObject()
+            if (evType == "question/asked") {
+                Wire.parsePendingQuestion(data)?.let { asked ->
+                    _state.update { cur ->
+                        if (cur.questions.any { it.eventId == asked.eventId }) cur
+                        else cur.copy(questions = cur.questions + asked)
+                    }
+                }
+            } else {
+                val eventId = data.optString("eventId")
+                if (eventId.isNotEmpty()) {
+                    _state.update { cur -> cur.copy(questions = cur.questions.filterNot { it.eventId == eventId }) }
+                }
+            }
+            scheduleQuestionsReload()
             return
         }
         if (sid.isNotEmpty() && sid != s.sessionId) {

@@ -962,6 +962,56 @@ fun isInjectedContext(text: String): Boolean =
         return parse(doc.optJSONArray("pending")) to parse(doc.optJSONArray("recent"))
     }
 
+    /** GET /mobile/questions → 待回答的模型提问清单。 */
+    fun parseQuestions(doc: JSONObject): List<PendingQuestion> {
+        val arr = doc.optJSONArray("pending") ?: return emptyList()
+        val out = ArrayList<PendingQuestion>(arr.length())
+        for (i in 0 until arr.length()) {
+            val item = arr.optJSONObject(i) ?: continue
+            parsePendingQuestion(item)?.let { out.add(it) }
+        }
+        return out
+    }
+
+    /** question/asked 帧的 data（或清单项）→ 一条待回答提问；字段不全就当没看见。 */
+    fun parsePendingQuestion(json: JSONObject): PendingQuestion? {
+        val eventId = json.optString("eventId")
+        val sessionId = json.optString("sessionId")
+        val qArr = json.optJSONArray("questions") ?: return null
+        if (eventId.isEmpty() || sessionId.isEmpty() || qArr.length() == 0) return null
+        val questions = ArrayList<QuestionItem>(qArr.length())
+        for (i in 0 until qArr.length()) {
+            val q = qArr.optJSONObject(i) ?: continue
+            val id = q.optString("id")
+            if (id.isEmpty()) continue
+            val oArr = q.optJSONArray("options")
+            val options = ArrayList<QuestionOption>(oArr?.length() ?: 0)
+            if (oArr != null) {
+                for (j in 0 until oArr.length()) {
+                    val o = oArr.optJSONObject(j) ?: continue
+                    val label = o.optString("label")
+                    if (label.isNotEmpty()) options.add(QuestionOption(label = label, description = o.optString("description")))
+                }
+            }
+            questions.add(
+                QuestionItem(
+                    id = id,
+                    question = q.optString("question"),
+                    header = q.optString("header"),
+                    options = options,
+                    multiSelect = q.optBoolean("multiSelect", q.optBoolean("multi_select", false)),
+                )
+            )
+        }
+        if (questions.isEmpty()) return null
+        return PendingQuestion(
+            eventId = eventId,
+            sessionId = sessionId,
+            questions = questions,
+            createdAt = json.optLong("createdAt", 0L),
+        )
+    }
+
     /** 工具名 → 概括文案（与桥接端同一套，只暴露「要审批什么类型」）。 */
     fun approvalTitleOf(toolName: String): String {
         val name = toolName.lowercase()

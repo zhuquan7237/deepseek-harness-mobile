@@ -89,6 +89,16 @@ class BridgeApi(private val client: OkHttpClient) {
     /** 审批（K2-A 只读列表）。 */
     suspend fun approvals(token: String): JSONObject = call("GET", "/mobile/approvals", token)
 
+    suspend fun questions(token: String): JSONObject = call("GET", "/mobile/questions", token)
+
+    suspend fun answerQuestion(token: String, eventId: String, answers: JSONArray): JSONObject =
+        call(
+            "POST",
+            "/mobile/questions/answer",
+            token,
+            JSONObject().put("eventId", eventId).put("answers", answers),
+        )
+
     suspend fun sessions(token: String, query: String): JSONObject {
         // view=lite：桥接 0.2.23 起服务端只回手机用的字段（载荷 ~1/4.5）；
         // 老桥接忽略未知参数、还回全量，解析端兼容两种形状。

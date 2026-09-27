@@ -30,6 +30,27 @@ data class ApprovalInfo(
     val closedAt: Long = 0L,
 )
 
+/** 模型提问（ask_user_question）：手机可直接作答，先答的（电脑/手机）生效。 */
+@Immutable
+data class QuestionOption(val label: String = "", val description: String = "")
+
+@Immutable
+data class QuestionItem(
+    val id: String = "",
+    val question: String = "",
+    val header: String = "",
+    val options: List<QuestionOption> = emptyList(),
+    val multiSelect: Boolean = false,
+)
+
+@Immutable
+data class PendingQuestion(
+    val eventId: String = "",
+    val sessionId: String = "",
+    val questions: List<QuestionItem> = emptyList(),
+    val createdAt: Long = 0L,
+)
+
 @Immutable
 data class DeviceInfo(
     val id: String = "",
@@ -209,6 +230,9 @@ data class AppState(
     val approvalsRecent: List<ApprovalInfo> = emptyList(),
     val approvalsLoaded: Boolean = false,
     val approvalsComplete: Boolean = true,
+    // 模型提问（可作答）：待回答清单 + 正在提交的 eventId（提交中防重）
+    val questions: List<PendingQuestion> = emptyList(),
+    val questionBusy: String = "",
     // 鲸鱼娘悬浮球（应用外）：开关 + 系统「显示在其他应用上层」权限
     val overlayBall: Boolean = false,
     val overlayPermission: Boolean = false,

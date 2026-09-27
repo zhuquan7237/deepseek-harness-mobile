@@ -3,6 +3,8 @@ package com.dsh.mobile.ui
 import androidx.compose.ui.text.font.FontFamily
 import android.graphics.drawable.Drawable
 import android.util.Log
+import org.json.JSONArray
+import org.json.JSONObject
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -68,6 +70,9 @@ import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.PendingActions
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Computer
@@ -161,6 +166,8 @@ import com.dsh.mobile.data.Role
 import com.dsh.mobile.data.RowImage
 import com.dsh.mobile.data.SessionFile
 import com.dsh.mobile.data.Wire
+import com.dsh.mobile.data.PendingQuestion
+import com.dsh.mobile.data.QuestionItem
 import com.dsh.mobile.ui.theme.LocalDsh
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
@@ -535,6 +542,14 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
         }
         // 任务控制条（运行/停止/失联）：在输入区之上——停止的唯一边常住入口。
         TaskControlStrip(state = state, repo = repo)
+        // 模型提问卡（ask_user_question）：手机直接作答；电脑端同时看到，先答的生效。
+        state.questions.firstOrNull { it.sessionId == state.sessionId }?.let { pending ->
+            QuestionCard(
+                question = pending,
+                busy = state.questionBusy == pending.eventId,
+                onAnswer = { answers -> repo.answerQuestion(pending.eventId, answers) },
+            )
+        }
         // 她浮在输入框上沿：Box + align + offset 不占布局空间（原来独占一行，输入框
         // 上面会空出一整条）；先画她、后画输入框，所以下半身被输入框盖住 = 趴在框沿上。
         // 她的说话气泡允许压过下面的对话内容——再点一下就会消失。
@@ -1833,6 +1848,129 @@ private fun PreviewChip(kind: String, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelSmall,
             color = palette.accent,
         )
+    }
+}
+
+/**
+ * 模型提问卡（ask_user_question）：手机端直接作答，电脑端网页同时可见——先答的生效。
+ * 单一单选的常规情形点选项即提交；多选/多问题勾选后按「提交」；每题都能改自定义回答。
+ */
+@Composable
+private fun QuestionCard(question: PendingQuestion, busy: Boolean, onAnswer: (JSONArray) -> Unit) {
+    val palette = LocalDsh.current
+    var selections by remember(question.eventId) { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    var customs by remember(question.eventId) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var customOpen by remember(question.eventId) { mutableStateOf<Set<String>>(emptySet()) }
+
+    fun composeAnswers(sel: Map<String, Set<String>>, cus: Map<String, String>): JSONArray {
+        val arr = JSONArray()
+        for (q in question.questions) {
+            val custom = cus[q.id]?.trim().orEmpty()
+            val item = JSONObject()
+                .put("id", q.id)
+                .put("selected", JSONArray(sel[q.id].orEmpty().toList()))
+            if (custom.isNotEmpty()) item.put("custom", custom)
+            arr.put(item)
+        }
+        return arr
+    }
+
+    fun complete(sel: Map<String, Set<String>>, cus: Map<String, String>): Boolean =
+        question.questions.all { q -> sel[q.id].orEmpty().isNotEmpty() || cus[q.id]?.isNotBlank() == true }
+
+    fun submit(sel: Map<String, Set<String>>, cus: Map<String, String>) {
+        if (busy || !complete(sel, cus)) return
+        onAnswer(composeAnswers(sel, cus))
+    }
+
+    fun choose(q: QuestionItem, label: String) {
+        if (busy) return
+        val current = selections[q.id].orEmpty()
+        val next = selections + (q.id to if (q.multiSelect) (if (label in current) current - label else current + label) else setOf(label))
+        selections = next
+        // 单问题单选 & 没在打字 → 点一下就交（少一次点击）
+        if (question.questions.size == 1 && !q.multiSelect && customs[q.id]?.isBlank() != false) submit(next, customs)
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .border(1.dp, palette.accent.copy(alpha = 0.4f), RoundedCornerShape(18.dp)),
+        shape = RoundedCornerShape(18.dp),
+        color = palette.surface,
+        shadowElevation = 6.dp,
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Outlined.PendingActions, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
+                Text("模型在等你回答", style = MaterialTheme.typography.labelMedium, color = palette.textSecondary)
+            }
+            for (q in question.questions) {
+                if (q.header.isNotBlank()) {
+                    Text(q.header, style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
+                }
+                Text(q.question, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
+                for (option in q.options) {
+                    val selected = option.label in selections[q.id].orEmpty()
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (selected) palette.accent.copy(alpha = 0.12f) else palette.surfaceHi)
+                            .clickable(enabled = !busy) { choose(q, option.label) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            when {
+                                q.multiSelect && selected -> Icons.Outlined.CheckBox
+                                q.multiSelect -> Icons.Outlined.CheckBoxOutlineBlank
+                                selected -> Icons.Outlined.CheckCircle
+                                else -> Icons.Outlined.RadioButtonUnchecked
+                            },
+                            contentDescription = null,
+                            tint = if (selected) palette.accent else palette.textTertiary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            option.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (selected) palette.accent else palette.textPrimary,
+                        )
+                        if (option.description.isNotBlank()) {
+                            Text(option.description, style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
+                        }
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+                if (q.id in customOpen) {
+                    FormField(
+                        label = "自定义回答",
+                        value = customs[q.id].orEmpty(),
+                        placeholder = "直接输入你的回答…",
+                        onChange = { value -> customs = customs + (q.id to value) },
+                    )
+                } else {
+                    Text(
+                        "其他答案…",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.accent,
+                        modifier = Modifier.clickable(enabled = !busy) { customOpen = customOpen + q.id },
+                    )
+                }
+            }
+            val manual = question.questions.size > 1 || question.questions.any { it.multiSelect }
+            val customAny = question.questions.any { customs[it.id]?.isNotBlank() == true }
+            if (busy) {
+                Text("已提交，等电脑确认…", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
+            } else if (manual || customAny) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    PrimaryCta(icon = Icons.Outlined.Check, text = "提交", onClick = { submit(selections, customs) })
+                }
+            }
+        }
     }
 }
 
