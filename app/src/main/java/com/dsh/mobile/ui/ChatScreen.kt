@@ -1578,6 +1578,15 @@ private fun MessageRow(
                             ),
                         )
                     }
+                    // 回执之前不装已送达：桥接没回话，就明白写着"发送中…"
+                    if (row.pendingAck) {
+                        Text(
+                            "发送中…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.bubbleUserText.copy(alpha = 0.55f),
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
                 }
             }
         }
@@ -1901,7 +1910,15 @@ private fun QuestionCard(question: PendingQuestion, busy: Boolean, onAnswer: (JS
         color = palette.surface,
         shadowElevation = 6.dp,
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // 小屏 + 大键盘 + 多问题：卡片可能比屏幕还高，底部「提交」以前会被裁掉
+        // 点不到（P0-011）。封顶 300dp、内部可滚——提交行永远够得着。
+        Column(
+            Modifier
+                .heightIn(max = 300.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Outlined.PendingActions, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
                 Text("模型在等你回答", style = MaterialTheme.typography.labelMedium, color = palette.textSecondary)
@@ -2350,6 +2367,8 @@ private fun deviceTitle(state: AppState): String =
 /** 副标题 = 连接与任务状态（评审：先让人确认连的哪台电脑、它闲不闲）。 */
 private fun connMetaText(state: AppState): String = when {
     state.conn != Conn.ONLINE -> "重连中…"
+    // 刚连上、还在补齐权威状态：别用"已连接"冒充"恢复完整"（C01/G01）。
+    state.syncing -> "已连接 · 正在补齐…"
     // 评审 §1（2026-09-27）：顶部只留连接状态——执行详情集中在任务条一处，不再三处重复。
     state.running -> "已连接"
     else -> "已连接 · 空闲"

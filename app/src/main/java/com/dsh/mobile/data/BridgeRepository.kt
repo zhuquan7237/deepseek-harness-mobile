@@ -212,10 +212,19 @@ class BridgeRepository(context: Context) {
 
     private fun onReconnected() {
         scope.launch {
-            refreshMeta(quiet = true)
-            loadSessions()
-            loadQuestions(quiet = true)
-            _state.value.sessionId?.let { loadHistory(it, quiet = true) }
+            // 重连不直接亮"已连接"绿灯：先把四份权威状态补齐（元信息/列表/提问/
+            // 当前会话历史），补完才收回「正在补齐…」。绿点=恢复完整，不再=握手成功。
+            _state.update { it.copy(syncing = true) }
+            try {
+                refreshMeta(quiet = true)
+                loadSessions()
+                loadQuestions(quiet = true)
+                _state.value.sessionId?.let { loadHistory(it, quiet = true) }
+                // 列表/提问各自异步落地，给它们一小段窗口（都是轻接口）
+                kotlinx.coroutines.delay(700)
+            } finally {
+                _state.update { it.copy(syncing = false) }
+            }
         }
     }
 
@@ -965,15 +974,17 @@ class BridgeRepository(context: Context) {
         submitInFlight = true
         val reqId = submissionId(sid, label)
         DraftStore.savePending(appContext, sid, reqId, label, "queue")
+        val optimistic = ChatRow(
+            Role.USER,
+            trimmed,
+            images = images.map { image ->
+                RowImage(mediaType = image.mediaType, name = image.name, localBase64 = image.base64)
+            },
+            pendingAck = true,
+        )
         _state.update {
             it.copy(
-                history = it.history + ChatRow(
-                    Role.USER,
-                    trimmed,
-                    images = images.map { image ->
-                        RowImage(mediaType = image.mediaType, name = image.name, localBase64 = image.base64)
-                    },
-                ),
+                history = it.history + optimistic,
                 running = true,
                 sending = true,
                 lastSendFailed = false,
@@ -995,6 +1006,12 @@ class BridgeRepository(context: Context) {
             }
             api.promptRich(token, sid, content, reqId)
             DraftStore.clearPending(appContext, sid)
+            // 回执到了：撤下"发送中"
+            _state.update { st ->
+                val idx = st.history.indexOfFirst { row -> row === optimistic }
+                if (idx < 0) st
+                else st.copy(history = st.history.toMutableList().also { list -> list[idx] = list[idx].copy(pendingAck = false) })
+            }
             _state.update {
                 it.copy(
                     sending = false,
@@ -1006,12 +1023,14 @@ class BridgeRepository(context: Context) {
             true
         } catch (error: Exception) {
             val reason = error.message?.takeIf { it.isNotBlank() } ?: "网络错误"
-            // 失败要留痕：气泡撤掉、但聊天里留一条明文说明（只靠 2 秒的 toast 等于没提示），
-            // 内容仍然留在输入框里可以再试。lastSendFailed 抑制"任务已完成"的误播报。
+            // 失败要留痕：按对象身份精确撤掉这条乐观气泡（原来的 dropLast(1) 在
+            // 电脑端已回显同名消息时会删错行），补一条明文说明；内容留在输入框可再试。
             _state.update {
+                val list = it.history.toMutableList()
+                val idx = list.indexOfFirst { row -> row === optimistic }
+                if (idx >= 0) list.removeAt(idx)
                 it.copy(
-                    history = it.history.dropLast(1) +
-                        ChatRow(Role.NOTICE, "发送失败：$reason（内容还在输入框里，可再试一次）"),
+                    history = list + ChatRow(Role.NOTICE, "发送失败：$reason（内容还在输入框里，可再试一次）"),
                     running = false,
                     sending = false,
                     lastSendFailed = true,
@@ -1045,12 +1064,21 @@ class BridgeRepository(context: Context) {
         submitInFlight = true
         val reqId = submissionId(sid, trimmed)
         DraftStore.savePending(appContext, sid, reqId, trimmed, "queue")
+        // 乐观行带"发送中"标记：回执回来之前不冒充已送达（以前气泡出现与否
+        // 和"电脑是否收到"完全无关）。
+        val optimistic = ChatRow(Role.USER, trimmed, pendingAck = true)
         _state.update {
-            it.copy(history = it.history + ChatRow(Role.USER, trimmed), running = true, sending = true, lastSendFailed = false)
+            it.copy(history = it.history + optimistic, running = true, sending = true, lastSendFailed = false)
         }
         return try {
             api.prompt(token, sid, trimmed, "queue", reqId)
             DraftStore.clearPending(appContext, sid)
+            // 回执到了：撤下"发送中"（气泡保留；之后历史重刷会用落库行替换它）
+            _state.update { st ->
+                val idx = st.history.indexOfFirst { row -> row === optimistic }
+                if (idx < 0) st
+                else st.copy(history = st.history.toMutableList().also { list -> list[idx] = list[idx].copy(pendingAck = false) })
+            }
             // The "desktop is working" row has to be there the moment the
             // request lands — `turn/start` can take a beat, and a blank screen
             // after sending is exactly what "手机端没有任何反馈" looked like.
@@ -1065,12 +1093,14 @@ class BridgeRepository(context: Context) {
             true
         } catch (error: Exception) {
             val reason = error.message?.takeIf { it.isNotBlank() } ?: "网络错误"
-            // 失败要留痕：气泡撤掉、但聊天里留一条明文说明（只靠 2 秒的 toast 等于没提示），
-            // 内容仍然留在输入框里可以再试。lastSendFailed 抑制"任务已完成"的误播报。
+            // 失败要留痕：按对象身份精确撤掉这条乐观气泡（原来的 dropLast(1) 在
+            // 电脑端已回显同名消息时会删错行），补一条明文说明；内容留在输入框可再试。
             _state.update {
+                val list = it.history.toMutableList()
+                val idx = list.indexOfFirst { row -> row === optimistic }
+                if (idx >= 0) list.removeAt(idx)
                 it.copy(
-                    history = it.history.dropLast(1) +
-                        ChatRow(Role.NOTICE, "发送失败：$reason（内容还在输入框里，可再试一次）"),
+                    history = list + ChatRow(Role.NOTICE, "发送失败：$reason（内容还在输入框里，可再试一次）"),
                     running = false,
                     sending = false,
                     lastSendFailed = true,
@@ -1127,6 +1157,10 @@ class BridgeRepository(context: Context) {
         val s = _state.value
         val sid = s.sessionId ?: return
         val token = s.token ?: return
+        // 防连点（P0-003）：同一波停止 1.2 秒内只发一次，"重试停止"是更晚的手势、
+        // 不受影响。连点不再变成多份停止请求。
+        val nowTap = System.currentTimeMillis()
+        if (s.stopping && nowTap - s.stopRequestedAt < 1200) return
         // 三层事实：本地已响应（stopping）→ 电脑已收到（stopAcked）→ 真正停止（turn/end）。
         // 任何一层都不冒充下一层（J1《聊天页会诊》01；界面全部状态显示在任务控制条）。
         _state.update {
@@ -1622,12 +1656,22 @@ class BridgeRepository(context: Context) {
                 // 日志只收应用自身的问题——崩溃/配对/连接等）。聊天里照常显示原因行。
                 val turnError = Wire.turnEndError(data)
                 val turnCut = Wire.turnEndTruncated(data)
+                val aborted = Wire.turnEndAborted(data)
                 val failed = turnError != null || turnCut != null
                 if (failed) {
                     scheduleHistoryReload()
                     // 失败回合的 running true→false 也会被完成提醒当成"任务完成"庆祝
                     // 一下（上一版只压了发送失败）；这里一并压住。
                     _state.update { it.copy(lastSendFailed = true) }
+                } else if (aborted) {
+                    // 用户自己按了停止——唯一允许说"已停止"的地方。它不是"完成"：
+                    // 不弹任务完成、鲸鱼球不庆祝；聊天下留一条可核实的终态行。
+                    _state.update {
+                        it.copy(
+                            history = it.history + ChatRow(Role.NOTICE, "已停止 —— 你按的停止已生效，电脑端确认本轮结束"),
+                            lastSendFailed = true,
+                        )
+                    }
                 } else completionPending = true
                 // 这一回合可能产出了新文件：静默刷新本会话的生成文件列表（卡片随之出现）
                 _state.value.sessionId?.let { sid -> loadSessionFiles(sid, quiet = true) }

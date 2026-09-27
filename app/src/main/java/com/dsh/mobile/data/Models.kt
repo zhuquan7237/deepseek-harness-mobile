@@ -110,6 +110,11 @@ data class ChatRow(
      * 原子地撤掉临时气泡——不留「live 先没了、历史还没到」的空白闪窗。
      */
     val turnKey: String = "",
+    /**
+     * 乐观发送行：true = 桥接还没回执（气泡带"发送中…"小字）。发送成功即撤下；
+     * 历史重刷出来的行默认 false——落库本身就是送达证据。
+     */
+    val pendingAck: Boolean = false,
 )
 
 /** 聊天里的一张图（发出去的照片，或历史里回放的照片）。 */
@@ -285,6 +290,11 @@ data class AppState(
     val modelLabel: String = "",
     /** 最近一次发送在到达引擎前就失败了——用于抑制"任务已完成"的误播报。 */
     val lastSendFailed: Boolean = false,
+    /**
+     * 重连后正在做「补齐」对账（元信息 / 会话列表 / 提问 / 当前会话历史）。
+     * true 时顶栏显示"正在补齐…"——不用绿点冒充恢复完整（C01/G01）。
+     */
+    val syncing: Boolean = false,
     /** 当前思考强度（low/medium/high…），空表示跟随电脑端默认。 */
     val reasoningEffort: String = "",
     val modelProvider: String = "",

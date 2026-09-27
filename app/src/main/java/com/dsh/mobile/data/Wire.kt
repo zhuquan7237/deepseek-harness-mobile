@@ -272,7 +272,8 @@ object Wire {
                 "step/start" -> stepStart = time
                 "approval/asked" -> {
                     val toolName = data.optString("toolName")
-                    rows.add(ChatRow(Role.APPROVAL, "等待你在电脑上审批 · ${approvalTitleOf(toolName)}", time = time))
+                    // N03 前置边界：手机只读——说清去哪处理，不假装手机能批
+                    rows.add(ChatRow(Role.APPROVAL, "等待你在电脑上审批 · ${approvalTitleOf(toolName)}（手机只读，请到电脑处理）", time = time))
                 }
                 "approval/decided" -> {
                     rows.add(ChatRow(Role.NOTICE, "审批已处理：${approvalResolutionText(data.optString("outcome"))}", time = time))
@@ -506,6 +507,17 @@ object Wire {
         val reason = data.optJSONObject("reason") ?: return null
         if (reason.optString("kind") != "max-tokens") return null
         return "输出达到长度上限被截断，这一回合没能写完 —— 点「继续」让它接着往下写"
+    }
+
+    /**
+     * 回合是否因**用户主动停止**而结束（`reason.kind = "aborted"`）。
+     * 这是"停止"唯一的权威依据（桥接实测 payload：
+     * `{"reason":{"kind":"aborted","reason":{"kind":"user"}}}`）。
+     * 其余结束理由都不是用户按的——绝不能显示成"已停止"。
+     */
+    fun turnEndAborted(data: JSONObject): Boolean {
+        val reason = data.optJSONObject("reason") ?: return false
+        return reason.optString("kind") == "aborted"
     }
 
     /** 会话工作目录里的文件列表。 */

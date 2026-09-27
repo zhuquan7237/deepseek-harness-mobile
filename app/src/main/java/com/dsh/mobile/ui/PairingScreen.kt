@@ -288,12 +288,34 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
             }
         }
 
-        Text(
-            "在电脑端打开引擎界面左下角的「设置」→「手机配对」，配对码和二维码都在那里（5 分钟有效）。" +
-                "配对后这台手机默认获得「查看会话 + 发消息」权限；模型配置等更敏感的操作需要电脑端重新授权。",
-            style = MaterialTheme.typography.labelSmall,
-            color = palette.textSecondary,
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                "第一次使用（三步）",
+                style = MaterialTheme.typography.labelMedium,
+                color = palette.textSecondary,
+            )
+            Text(
+                "1）电脑上安装并启动 DeepSeek Harness；",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+            )
+            Text(
+                "2）电脑左下角「设置 → 手机配对」，拿到服务器地址和配对码（5 分钟有效）；",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+            )
+            Text(
+                "3）把地址和配对码填到上面，点「用配对码配对」。",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+            )
+            Text(
+                "网络范围：同一 Wi-Fi 下直连；不在同一网络时需要在电脑端开启远程中继。" +
+                    "配对后默认获得「查看会话 + 发消息」权限；模型配置等更敏感的操作需要电脑端重新授权。",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+            )
+        }
         // 配对失败/连不上时最需要日志：入口放这里，不用等配对成功
         Text(
             "连接遇到问题？查看错误日志",

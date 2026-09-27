@@ -51,7 +51,8 @@ fun ApprovalsScreen(state: AppState, repo: BridgeRepository) {
             Text("审批", style = MaterialTheme.typography.titleLarge, color = palette.textPrimary)
         }
         Text(
-            "电脑上的操作停下来等你确认；当前版本请到电脑上处理。",
+            "电脑上的操作停下来等你确认。手机只读、不会替你批准——请到电脑上处理；" +
+                "不处理会一直等待，到电脑上批准或拒绝后任务才会继续。",
             style = MaterialTheme.typography.bodySmall,
             color = palette.textSecondary,
             modifier = Modifier.padding(bottom = 8.dp),
@@ -119,7 +120,7 @@ private fun ApprovalCard(approval: ApprovalInfo, pending: Boolean) {
             val timeText = Wire.timeText(at)
             Text(
                 buildString {
-                    append(if (pending) "等待中" else Wire.approvalResolutionText(approval.resolution))
+                    append(if (pending) "等待中 · 到电脑上批准或拒绝" else Wire.approvalResolutionText(approval.resolution))
                     if (timeText.isNotEmpty()) append(" · ").append(timeText)
                 },
                 style = MaterialTheme.typography.bodySmall,

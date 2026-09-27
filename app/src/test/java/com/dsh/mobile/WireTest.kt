@@ -451,7 +451,8 @@ class WireTest {
         val parsed = Wire.parseHistory(JSONObject().put("items", items))
         assertEquals(2, parsed.rows.size)
         assertEquals(Role.APPROVAL, parsed.rows[0].who)
-        assertEquals("等待你在电脑上审批 · 执行命令需要审批", parsed.rows[0].text)
+        // N03 前置边界：审批行必须写明"手机只读、到电脑处理"
+        assertEquals("等待你在电脑上审批 · 执行命令需要审批（手机只读，请到电脑处理）", parsed.rows[0].text)
         assertEquals(Role.NOTICE, parsed.rows[1].who)
         assertEquals("审批已处理：已批准（仅本次）", parsed.rows[1].text)
     }
@@ -668,6 +669,39 @@ class WireTest {
         assertNull(Wire.turnEndTruncated(JSONObject()))
         assertNull(Wire.turnEndTruncated(JSONObject().put("reason", JSONObject().put("kind", "completed"))))
         assertNull(Wire.turnEndTruncated(JSONObject().put("reason", JSONObject().put("kind", "error"))))
+    }
+
+    // ------------------------------------------------- aborted（停止事实链 P0-006）
+
+    @Test
+    fun turnEndAbortedOnlyForUserStop() {
+        // 桥接实测形态：用户按停止 = {"reason":{"kind":"aborted","reason":{"kind":"user"}}}
+        val stopped = JSONObject().put(
+            "reason",
+            JSONObject().put("kind", "aborted").put("reason", JSONObject().put("kind", "user")),
+        )
+        assertTrue(Wire.turnEndAborted(stopped))
+        // 其余结束理由都不是"用户按的停止"——绝不能显示成已停止
+        assertFalse(Wire.turnEndAborted(JSONObject().put("reason", JSONObject().put("kind", "completed"))))
+        assertFalse(Wire.turnEndAborted(JSONObject().put("reason", JSONObject().put("kind", "error"))))
+        assertFalse(Wire.turnEndAborted(JSONObject().put("reason", JSONObject().put("kind", "max-tokens"))))
+        assertFalse(Wire.turnEndAborted(JSONObject().put("reason", JSONObject().put("kind", "blocked"))))
+        assertFalse(Wire.turnEndAborted(JSONObject().put("reason", JSONObject().put("kind", "interrupted"))))
+        assertFalse(Wire.turnEndAborted(JSONObject()))
+    }
+
+    @Test
+    fun abortedNeverLooksLikeErrorAndViceVersa() {
+        // 两个"失败"解析必须对 aborted 返回 null，否则停止会被渲染成"请求失败"
+        val stopped = JSONObject().put(
+            "reason",
+            JSONObject().put("kind", "aborted").put("reason", JSONObject().put("kind", "user")),
+        )
+        assertNull(Wire.turnEndError(stopped))
+        assertNull(Wire.turnEndTruncated(stopped))
+        // 反向：error 不是 aborted
+        val errored = JSONObject().put("reason", JSONObject().put("kind", "error"))
+        assertFalse(Wire.turnEndAborted(errored))
     }
 
     @Test
