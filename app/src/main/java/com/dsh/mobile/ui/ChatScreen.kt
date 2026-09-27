@@ -2377,7 +2377,8 @@ private fun GraphicPreviewOverlay(artifact: Wire.Artifact, onClose: () -> Unit, 
                     modifier = Modifier.fillMaxSize(),
                     factory = { context ->
                         WebView(context).apply {
-                            settings.javaScriptEnabled = artifact.kind == "html"
+                            // 互动 SVG 的脚本要跑（与文件预览同规，0.4.7）
+                            settings.javaScriptEnabled = artifact.kind == "html" || artifact.kind == "svg"
                             settings.domStorageEnabled = true
                             settings.allowFileAccess = false
                             settings.allowContentAccess = false
@@ -2411,6 +2412,9 @@ private fun GraphicPreviewOverlay(artifact: Wire.Artifact, onClose: () -> Unit, 
  *  2) **flex / table 包 SVG 布局异常**（Chrome 正常、WebView 不）。
  * 因此居中用 **ghost 行内技法**：.center 全高 + ::before 占位 + svg{vertical-align:middle}——
  * 纯行内流布局，只用 vw 封宽（vw 实测可用）。改这段 CSS 前必须先在模拟器实测渲染。
+ *  3) **SVG 自带的 `svg{…}` 样式会劫持这条包装规则**——`display:block` 会把内联 svg
+ *     塌成不可见（2026-09-28 coastal-cycling.svg 实案）；包装规则用 !important 封住
+ *     display/vertical-align/height 三行，别裸写。
  */
 private fun artifactPage(artifact: Wire.Artifact): String = if (artifact.kind != "svg") {
     artifact.markup
@@ -2419,7 +2423,7 @@ private fun artifactPage(artifact: Wire.Artifact): String = if (artifact.kind !=
 <style>html,body{margin:0;padding:0;background:#ffffff;}
 .center{position:fixed;top:0;left:0;right:0;bottom:0;text-align:center;white-space:nowrap;}
 .center::before{content:"";display:inline-block;height:100%;width:0;vertical-align:middle;}
-svg{display:inline-block;vertical-align:middle;max-width:92vw;height:auto;}</style></head>
+svg{display:inline-block !important;vertical-align:middle !important;max-width:92vw;height:auto !important;}</style></head>
 <body><div class="center">${artifact.markup}</div></body></html>"""
 }
 

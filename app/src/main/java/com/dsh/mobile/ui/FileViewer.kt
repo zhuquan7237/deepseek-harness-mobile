@@ -201,17 +201,7 @@ private fun FileListRow(file: SessionFile, onOpen: () -> Unit, onDownload: () ->
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            val subtitle = when {
-                file.size > 0 && file.mtime > 0 -> "${Wire.formatSize(file.size)} · ${Wire.timeText(file.mtime)}"
-                file.size > 0 -> Wire.formatSize(file.size)
-                else -> when (Wire.fileKind(file.name)) {
-                    "svg" -> "SVG 图形"
-                    "html" -> "网页"
-                    "image" -> "图片"
-                    "text" -> "文本"
-                    else -> "交付文件"
-                }
-            }
+            val subtitle = fileSubtitle(file)
             Text(
                 subtitle,
                 style = MaterialTheme.typography.labelSmall,
@@ -339,7 +329,7 @@ fun FileViewerOverlay(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(Wire.formatSize(file.size), style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
+                    Text(fileSubtitle(file), style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
                 }
                 Spacer(Modifier.width(8.dp))
                 CircleButton(Icons.Outlined.Download, "下载") { onDownload() }
@@ -553,7 +543,9 @@ private fun WebPreview(
             if (web.tag != url) {
                 web.tag = url
                 web.stopLoading()
-                web.settings.javaScriptEnabled = kind == "html"
+                // svg 也要开脚本：模型生成的互动 SVG（动画/声音按钮）靠它动起来（0.4.7）；
+                // 脚本出错最多是不动，静态骨架照常显示。
+                web.settings.javaScriptEnabled = kind == "html" || kind == "svg"
                 // 子资源请求要靠 cookie 带票据（URL 上的 ?t= 只覆盖首帧请求）
                 val ticket = url.substringAfter("?t=", "")
                 if (ticket.isNotEmpty()) {
@@ -603,6 +595,8 @@ fun dataUrlPage(html: String): String {
 /**
  * SVG 文件预览页：把 svg 直接内联进深色页（不再用 <img src=远端>）。
  * CSS 与 artifactPage 同理（ghost 行内居中；不用 flex/table/vh——WebView 的 vh 会算成 0）。
+ * 0.4.7：包装规则加 !important——SVG 自带的 `svg{…}` 样式（如 display:block）会劫持
+ * 这两行，把内联的 svg 塌成不可见（coastal-cycling.svg 实案）；必须夺回 display/vertical-align。
  */
 fun inlineSvgPage(svg: String): String =
     """<!doctype html><html><head><meta charset="utf-8">
@@ -610,8 +604,21 @@ fun inlineSvgPage(svg: String): String =
 <style>html,body{margin:0;padding:0;background:#101114;}
 .center{position:fixed;top:0;left:0;right:0;bottom:0;text-align:center;white-space:nowrap;}
 .center::before{content:"";display:inline-block;height:100%;width:0;vertical-align:middle;}
-svg{display:inline-block;vertical-align:middle;max-width:92vw;height:auto;}</style></head>
+svg{display:inline-block !important;vertical-align:middle !important;max-width:92vw;height:auto !important;}</style></head>
 <body><div class="center">$svg</div></body></html>"""
+
+/** 列表行与预览顶栏共用的副标题：有尺寸给「尺寸 · 时间」，没有就给类型名——别摆「0 B」。 */
+private fun fileSubtitle(file: SessionFile): String = when {
+    file.size > 0 && file.mtime > 0 -> "${Wire.formatSize(file.size)} · ${Wire.timeText(file.mtime)}"
+    file.size > 0 -> Wire.formatSize(file.size)
+    else -> when (Wire.fileKind(file.name)) {
+        "svg" -> "SVG 图形"
+        "html" -> "网页"
+        "image" -> "图片"
+        "text" -> "文本"
+        else -> "交付文件"
+    }
+}
 
 // --------------------------------------------------------------- 图片生成卡片
 
