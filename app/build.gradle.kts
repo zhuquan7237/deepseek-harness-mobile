@@ -12,8 +12,8 @@ android {
         applicationId = "com.dsh.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 103
-        versionName = "0.4.7"
+        versionCode = 104
+        versionName = "0.4.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
