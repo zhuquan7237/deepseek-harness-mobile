@@ -126,6 +126,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
@@ -2458,22 +2459,15 @@ internal fun displayTitle(t: String): String =
 
 /**
  * The one place the app is allowed to look alive while it waits：shimmer 的
- * 「正在处理「…」」+ 阶段心跳副文（0.4.2 进度可见）。
+ * 「正在处理「…」」（0.4.2 进度可见）。
  * 评审 §2（2026-09-27）：任务反馈要贴着「哪条请求」——引最近一条用户消息；
  * 秒数不再在这里重复（时间统一由任务条的「已用时」承载，一处为准）。
+ * 0.4.8 排版重做：阶段文案（「模型正在输出…」等）也不再在这里重复——它与底部
+ * 任务条第一行完全相同、上下紧挨着显示两遍（实测截图：视觉冗余）。此处只负责
+ * 「在处理哪条请求」，状态与度量一律归任务条一处。
  */
 @Composable
 private fun ThinkingRow(state: AppState) {
-    val palette = LocalDsh.current
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(state.thinkingSince) {
-        if (!Motion.animations) return@LaunchedEffect
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(1000)
-        }
-    }
-    val phase = taskPhaseOf(state, now)
     val taskRaw = state.history.lastOrNull { it.who == Role.USER }?.text?.replace('\n', ' ')?.trim().orEmpty()
     val task = if (taskRaw.length > 16) taskRaw.take(16) + "…" else taskRaw
     Row(
@@ -2488,16 +2482,6 @@ private fun ThinkingRow(state: AppState) {
             if (task.isNotEmpty()) "正在处理「$task」" else "电脑正在处理",
             style = MaterialTheme.typography.labelMedium,
         )
-        if (phase != null) {
-            // 字数类副文每 3.5 秒跳一次：不进无障碍树，读屏不会被"忙音"轰炸；
-            // 重试（warn）是重要状态变化，保留语义让读屏能播报。
-            Text(
-                "· ${phase.text}",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (phase.warn) palette.warn else palette.textTertiary,
-                modifier = if (phase.warn) Modifier else Modifier.clearAndSetSemantics {},
-            )
-        }
     }
 }
 
@@ -2966,18 +2950,24 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
             // ① 停止的三层事实（J1 会诊 01）：本地已响应（stopping）→ 电脑已收到（stopAcked）
             //    → 真正停止（收到 turn/end 才清）。任何一层都不冒充下一层。
             state.running && state.stopping -> {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(palette.textTertiary))
                 Column(Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }) {
-                    Text(
-                        when {
-                            state.stopSendFailed -> "停止请求未发送成功"
-                            !state.connected -> "连接中断，结束状态待核实"
-                            !state.stopAcked -> "正在发送停止请求…"
-                            else -> "电脑已收到停止请求，等待本轮结束"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = palette.textPrimary,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(palette.textTertiary))
+                        Text(
+                            when {
+                                state.stopSendFailed -> "停止请求未发送成功"
+                                !state.connected -> "连接中断，结束状态待核实"
+                                !state.stopAcked -> "正在发送停止请求…"
+                                else -> "电脑已收到停止请求，等待本轮结束"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.textPrimary,
+                        )
+                    }
+                    Spacer(Modifier.height(3.dp))
                     Text(
                         when {
                             state.stopSendFailed -> "任务可能仍在电脑上执行。"
@@ -2987,6 +2977,7 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = palette.textTertiary,
+                        modifier = Modifier.padding(start = 16.dp),
                     )
                 }
                 when {
@@ -3021,7 +3012,7 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
             }
             // ② 执行中失联：说清「电脑可能仍在执行」
             state.running && !state.connected -> {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(palette.textTertiary))
+                Box(Modifier.size(8.dp).clip(CircleShape).background(palette.textTertiary))
                 Text(
                     "连接已断开，任务可能仍在电脑上执行。恢复连接后确认状态。",
                     style = MaterialTheme.typography.labelSmall,
@@ -3040,52 +3031,74 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
             }
             // ③ 正在执行（正常）：评审 §1/§7——阶段信息当主行（「模型正在思考 · 已 3.2 万字」），
             // 停止键保留 48dp 热区但降体量（去边框、软底、次要色）。
+            // 0.4.8 排版重做：状态圆点与主行同排（旧版挂在两行正中，视觉「沉在交界」）；
+            // 度量行相对主行文字缩进对齐（圆点宽 + 间距），两行之间补 3dp 呼吸。
             state.running -> {
                 val phase = taskPhaseOf(state, now)
-                Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
+                val warn = phase?.warn == true
+                // 呼吸圆点：运行中的「还活着」信号（动效总开关关闭时恒为 1f）。
+                val pulse = rememberPulseAlpha()
                 Column(Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .alpha(pulse)
+                                .clip(CircleShape)
+                                .background(if (warn) palette.warn else palette.accent),
+                        )
+                        Text(
+                            phase?.text ?: "正在执行",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (warn) palette.warn else palette.textPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.height(3.dp))
+                    // 度量行（0.4.8）：已用时每秒跳一次 + 实时字数；tabular 数字防抖动，
+                    // 不进无障碍树（读屏不会被"每秒忙音"轰炸，M4 0.2.61 第 5 条）。
+                    // 对比度按 0.4.8 排版评审上调一档（textTertiary → textSecondary）。
                     Text(
-                        phase?.text ?: "正在执行",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (phase?.warn == true) palette.warn else palette.textPrimary,
+                        taskMetricsOf(state, elapsed),
+                        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                        color = palette.textSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                    )
-                    // 计时每秒跳一次：不进无障碍树，读屏不会被"每秒忙音"轰炸（M4 0.2.61 第 5 条）。
-                    Text(
-                        "已用时 ${fmtClock(elapsed)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = palette.textTertiary,
-                        modifier = Modifier.clearAndSetSemantics {},
+                        modifier = Modifier
+                            .padding(start = 16.dp)
+                            .clearAndSetSemantics {},
                     )
                 }
                 Row(
                     Modifier
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(999.dp))
                         .background(palette.surfaceHi)
                         .clickable {
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             repo.cancelTurn()
                         }
                         .heightIn(min = 48.dp)
-                        .widthIn(min = 76.dp)
-                        .padding(horizontal = 14.dp)
+                        .padding(horizontal = 12.dp)
                         .semantics { contentDescription = "停止生成" },
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     Icon(
                         Icons.Outlined.Stop,
                         contentDescription = null,
                         tint = palette.textSecondary,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(16.dp),
                     )
                     Text("停止", style = MaterialTheme.typography.labelMedium, color = palette.textSecondary)
                 }
             }
             // ④ 无任务失联
             else -> {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(palette.textTertiary))
+                Box(Modifier.size(8.dp).clip(CircleShape).background(palette.textTertiary))
                 Text(
                     "与电脑的连接已断开。重新连接后可以继续操作。",
                     style = MaterialTheme.typography.labelSmall,
@@ -3110,27 +3123,42 @@ private fun TaskControlStrip(state: AppState, repo: BridgeRepository) {
 private data class TaskPhase(val text: String, val warn: Boolean)
 
 /**
- * 「真在跑还是卡死」的答案，按信息新鲜度排序：
- * ① 3.5 秒内的计数脉冲 → 模型正在输出/思考 · 已 N 字（桥接 0.2.31，只在有数据时）；
- * ② 上游断线自动重试 → 「连接中断 · 第 2/5 次重试（上次尝试 4 分 28 秒）」（引擎 llm/retry）；
- * ③ 有过输出但安静 ≥150 秒 → 说明可能较慢/卡住（工具执行也可能安静）；
- * ④ 一直没有任何输出 → 把等待时长摆出来（模型可能在深度思考，也可能上游有问题）。
+ * 「真在跑还是卡死」的答案，按信息新鲜度排序（0.4.8 重做：阈值从 150 秒收紧到
+ * 20 秒软提示 / 60 秒警示，并覆盖「发出去了但上游一直没动静」的等待窗）：
+ * ① 上游断线自动重试 → 「连接中断 · 第 2/5 次重试（上次尝试 4 分 28 秒）」（引擎 llm/retry）；
+ * ② 还没有收到任何进度、已等待 ≥30 秒 → 「上游还没有开始响应」；
+ * ③ 有过进度（或任何事件）但安静 ≥60 秒 → 警示色；≥20 秒 → 软提示（模型或工具较慢）；
+ * ④ 有计数 → 「模型正在输出/思考…」——计数不再随 12 秒过期消失，字数常驻度量行。
+ * 新鲜度一律用**本地到达时间**（桥接帧的 at 是电脑时钟，跨设备比会漂）。
  */
 private fun taskPhaseOf(state: AppState, now: Long): TaskPhase? {
-    val fresh = state.taskProgressAt > 0 && now - state.taskProgressAt <= 12_000L
+    val progressAt = state.taskProgressAt
+    val startedAt = if (state.runSince > 0) state.runSince else progressAt
+    val quietAnchor = maxOf(progressAt, state.turnActivityAt, startedAt)
+    val quietFor = if (quietAnchor > 0) now - quietAnchor else 0L
+    val waitedFor = if (startedAt > 0) now - startedAt else 0L
     return when {
-        fresh && state.taskChars > 0 -> TaskPhase("模型正在输出 · 已 ${countText(state.taskChars)} 字", false)
-        fresh && state.taskReasonChars > 0 -> TaskPhase("模型正在思考 · 已 ${countText(state.taskReasonChars)} 字", false)
         state.taskRetry.isNotEmpty() -> {
             val extra = if (state.taskAttemptMs >= 5000) "（上次尝试 ${spanText(state.taskAttemptMs)}）" else ""
             TaskPhase("${state.taskRetry}$extra", true)
         }
-        state.taskProgressAt > 0 && now - state.taskProgressAt >= 150_000L ->
-            TaskPhase("已 ${spanText(now - state.taskProgressAt)}没有新输出（模型或工具较慢）", false)
-        state.taskProgressAt == 0L && state.runSince > 0 && now - state.runSince >= 60_000L ->
-            TaskPhase("还没有收到模型输出 · 已等待 ${spanText(now - state.runSince)}", false)
-        else -> null
+        progressAt == 0L && waitedFor >= 30_000L ->
+            TaskPhase("上游还没有开始响应 · 已等待 ${spanText(waitedFor)}", waitedFor >= 120_000L)
+        quietFor >= 60_000L -> TaskPhase("已 ${spanText(quietFor)}没有新输出", true)
+        quietFor >= 20_000L -> TaskPhase("已 ${spanText(quietFor)}没有新输出（模型或工具较慢）", false)
+        state.taskChars > 0 -> TaskPhase("模型正在输出…", false)
+        state.taskReasonChars > 0 -> TaskPhase("模型正在思考…", false)
+        progressAt == 0L -> TaskPhase("已发送 · 等待模型响应", false)
+        else -> TaskPhase("模型正在思考…", false)
     }
+}
+
+/** 任务度量行（0.4.8）：已用时每秒跳一次 + 实时字数——「我在等它出了多少字」的直答。 */
+private fun taskMetricsOf(state: AppState, elapsed: Long): String {
+    val parts = mutableListOf("已用时 ${fmtClock(elapsed)}")
+    if (state.taskChars > 0) parts += "输出 ${countText(state.taskChars)} 字"
+    if (state.taskReasonChars > 0) parts += "思考 ${countText(state.taskReasonChars)} 字"
+    return parts.joinToString(" · ")
 }
 
 /** 字数：<1 万按个位，≥1 万按「N.N 万」。 */

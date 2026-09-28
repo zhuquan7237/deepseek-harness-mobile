@@ -301,6 +301,8 @@ data class AppState(
     val taskChars: Int = -1,
     val taskReasonChars: Int = -1,
     val taskProgressAt: Long = 0L,
+    /** 本回合最近一次任意事件（含工具调用）的本地到达时间——安静提醒的锚点（0.4.8）。 */
+    val turnActivityAt: Long = 0L,
     /** 停止请求已发出、等待电脑确认——收到 turn/end 才清（绝不在断线时假装已停止）。 */
     val stopping: Boolean = false,
     val stopRequestedAt: Long = 0L,

@@ -166,3 +166,21 @@ fun <T : Any> OverlayHost(
         pinned.value?.let { content(it) }
     }
 }
+
+/**
+ * 呼吸圆点（0.4.8）：运行中的状态圆点透明度 1 ↔ 0.35 慢呼吸——比任何文字都更
+ * 直接的「还活着」信号，同时给任务条一点生命感。动效总开关（[Motion.animations]）
+ * 关闭时恒为 1f（系统「移除动画」下保持静态）。
+ */
+@Composable
+fun rememberPulseAlpha(): Float {
+    if (!Motion.animations) return 1f
+    val transition = rememberInfiniteTransition(label = "dot-pulse")
+    val alpha by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.35f,
+        animationSpec = infiniteRepeatable(tween(850), repeatMode = RepeatMode.Reverse),
+        label = "dot-alpha",
+    )
+    return alpha
+}

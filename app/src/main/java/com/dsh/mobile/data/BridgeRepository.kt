@@ -952,6 +952,13 @@ class BridgeRepository(context: Context) {
                         taskChars = if (parsed.running) current.taskChars else -1,
                         taskReasonChars = if (parsed.running) current.taskReasonChars else -1,
                         taskProgressAt = if (parsed.running) current.taskProgressAt else 0L,
+                        // 安静锚点：重进运行中的会话时用历史里的回合开始时间兜底（0.4.8）
+                        turnActivityAt = when {
+                            !parsed.running -> 0L
+                            current.turnActivityAt > 0L -> current.turnActivityAt
+                            parsed.runningSince > 0L -> parsed.runningSince
+                            else -> System.currentTimeMillis()
+                        },
                         stopping = parsed.running && current.stopping,
                         stopRequestedAt = if (parsed.running) current.stopRequestedAt else 0L,
                         stopAcked = parsed.running && current.stopAcked,
@@ -960,10 +967,13 @@ class BridgeRepository(context: Context) {
                         revealText = if (fresh) last?.text else current.revealText,
                         modelProvider = selection?.first ?: current.modelProvider,
                         modelId = selection?.second ?: current.modelId,
-                        modelLabel = if (current.modelLabel.isBlank() && selection != null) {
-                            selection.second
-                        } else {
-                            current.modelLabel
+                        // 0.4.8：换了模型时标签要跟上——旧值会让胶囊显示成「cpa/muse-spark-1.3」
+                        // 这种「新 provider + 旧模型名」的混搭（实测：别的设备切完模型后）。
+                        modelLabel = when {
+                            selection == null -> current.modelLabel
+                            current.modelId != selection.second -> selection.second
+                            current.modelLabel.isBlank() -> selection.second
+                            else -> current.modelLabel
                         },
                     )
                 }
@@ -1085,8 +1095,15 @@ class BridgeRepository(context: Context) {
         // 乐观行带"发送中"标记：回执回来之前不冒充已送达（以前气泡出现与否
         // 和"电脑是否收到"完全无关）。
         val optimistic = ChatRow(Role.USER, trimmed, pendingAck = true)
+        // 0.4.8：发送即起表——任务条立刻有「已发送 · 等待模型响应」+ 计时 + 安静提醒锚点，
+        // 不再等 turn/start 到达才出现（上游慢时那段空窗正是「没反应」的观感来源）。
+        val sendNow = System.currentTimeMillis()
         _state.update {
-            it.copy(history = it.history + optimistic, running = true, sending = true, lastSendFailed = false)
+            it.copy(
+                history = it.history + optimistic, running = true, sending = true, lastSendFailed = false,
+                runSince = sendNow, turnActivityAt = sendNow,
+                taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L,
+            )
         }
         return try {
             api.prompt(token, sid, trimmed, "queue", reqId)
@@ -1604,9 +1621,16 @@ class BridgeRepository(context: Context) {
 
     private fun handleEvent(frame: JSONObject) {
         val s = _state.value
-        // 活性时间：设置页「连接状态」行显示「刚刚 / N 分钟前还有活动」
-        _state.update { it.copy(lastEventAt = System.currentTimeMillis()) }
         val sid = frame.optString("sessionId")
+        val nowAt = System.currentTimeMillis()
+        // 活性时间：设置页「连接状态」行显示「刚刚 / N 分钟前还有活动」；当前会话跑动中
+        // 时同时刷新安静锚点——任何事件（含工具调用）都算一次「它还在动」的证据（0.4.8）。
+        _state.update {
+            it.copy(
+                lastEventAt = nowAt,
+                turnActivityAt = if (it.running && (sid.isEmpty() || sid == it.sessionId)) nowAt else it.turnActivityAt,
+            )
+        }
         // 审批只读（K2-A）：任何会话的审批事实都刷新本机审批视图；发生在当前会话里的
         // 审批同时触发历史重读（聊天里出现「等待你在电脑上审批」行）。
         val evType = frame.optString("type")
@@ -1655,10 +1679,11 @@ class BridgeRepository(context: Context) {
             "turn/start" -> {
                 // 新回合：上一回合的缓冲残余作废（正常已在 turn/end 冲刷过）
                 liveBuffer.clear()
+                val startedAt = System.currentTimeMillis()
                 _state.update {
                     it.copy(
-                        running = true, live = emptyList(), thinking = true, thinkingSince = System.currentTimeMillis(),
-                        runSince = System.currentTimeMillis(), stopping = false, stopRequestedAt = 0L,
+                        running = true, live = emptyList(), thinking = true, thinkingSince = startedAt,
+                        runSince = startedAt, turnActivityAt = startedAt, stopping = false, stopRequestedAt = 0L,
                         stopAcked = false, stopSendFailed = false, streamedLive = false,
                         taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L,
                     )
@@ -1697,7 +1722,7 @@ class BridgeRepository(context: Context) {
                     // live 不在这里清：已落库的由历史重载原子撤；失败/停止回合留下的
                     // 半截文字继续显示（用户看得到已生成的部分），下一个 turn/start 统一清场。
                     it.copy(running = false, thinking = false, thinkingSince = 0L, runSince = 0L, stopping = false, stopRequestedAt = 0L, stopAcked = false, stopSendFailed = false,
-                        taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L)
+                        taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L, turnActivityAt = 0L)
                 }
             }
             "assistant/chunk" -> {
@@ -1752,10 +1777,12 @@ class BridgeRepository(context: Context) {
                 if (span > 0) _state.update { it.copy(taskAttemptMs = span) }
             }
             "assistant/progress" -> {
-                // 桥接 0.2.31 的计数脉冲（不含内容）：证明上游还在吐数据——「真在思考」的答案
+                // 桥接 0.2.31 的计数脉冲（不含内容）：证明上游还在吐数据——「真在思考」的答案。
+                // 0.4.8：新鲜度以**本地到达时间**为准（桥接帧里的 at 是电脑时钟，跨设备比较会漂）。
                 Wire.progressCounts(data)?.let { counts ->
+                    val local = System.currentTimeMillis()
                     _state.update {
-                        it.copy(taskChars = counts.first, taskReasonChars = counts.second, taskProgressAt = counts.third)
+                        it.copy(taskChars = counts.first, taskReasonChars = counts.second, taskProgressAt = local)
                     }
                 }
             }
