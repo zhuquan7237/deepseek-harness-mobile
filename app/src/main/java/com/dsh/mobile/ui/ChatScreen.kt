@@ -22,7 +22,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -1440,11 +1440,14 @@ private fun MessageRow(
         ) {
             Surface(color = palette.danger.copy(alpha = 0.12f), shape = RoundedCornerShape(14.dp)) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    Text(
-                        "⚠️ $body",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.danger,
-                    )
+                    // 报错原文（模型提供方的 503/403 等）：长按 = 系统选择，可整段或局部复制。
+                    SelectionContainer {
+                        Text(
+                            "⚠️ $body",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.danger,
+                        )
+                    }
                     // 对话失败是上游提供方的问题，不进日志仓库（用户定的分级规则）——
                     // 因此这里没有日志编号和发送按钮，只如实显示原因 + 一键重试。
                     Spacer(Modifier.height(8.dp))
@@ -1482,12 +1485,13 @@ private fun MessageRow(
                     Modifier.padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        "✂️ $body",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.warn,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
+                    SelectionContainer(modifier = Modifier.weight(1f, fill = false)) {
+                        Text(
+                            "✂️ $body",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.warn,
+                        )
+                    }
                     Spacer(Modifier.width(10.dp))
                     Text(
                         "继续",
@@ -1511,12 +1515,13 @@ private fun MessageRow(
                     Modifier.padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        "🫥 $body",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.warn,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
+                    SelectionContainer(modifier = Modifier.weight(1f, fill = false)) {
+                        Text(
+                            "🫥 $body",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.warn,
+                        )
+                    }
                     Spacer(Modifier.width(10.dp))
                     Text(
                         "重试",
@@ -1547,11 +1552,13 @@ private fun MessageRow(
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text(
-                        body,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.warn,
-                    )
+                    SelectionContainer {
+                        Text(
+                            body,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.warn,
+                        )
+                    }
                 }
             }
         }
@@ -1561,14 +1568,16 @@ private fun MessageRow(
             onOpen = { name, size -> onOpenGenerated(SessionFile(path = "@generated/$name", name = name, size = size, mtime = 0L)) },
         )
         Role.NOTICE -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Text(
-                row.text,
-                style = MaterialTheme.typography.labelMedium,
-                color = palette.textTertiary,
-                maxLines = 1,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
-            )
+            SelectionContainer {
+                Text(
+                    row.text,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.textTertiary,
+                    maxLines = 1,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+                )
+            }
         }
         Role.USER -> Column(
             Modifier
@@ -1586,9 +1595,6 @@ private fun MessageRow(
                     Modifier
                         .clip(RoundedCornerShape(22.dp))
                         .background(palette.bubbleUser)
-                        .pointerInput(row.text) {
-                            detectTapGestures(onLongPress = { onCopy(row.text) })
-                        }
                         .padding(
                             horizontal = if (row.images.isEmpty()) 14.dp else 6.dp,
                             vertical = if (row.images.isEmpty()) 10.dp else 6.dp,
@@ -1606,17 +1612,20 @@ private fun MessageRow(
                         )
                     }
                     if (row.text.isNotBlank()) {
-                        Text(
-                            row.text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = palette.bubbleUserText,
-                            modifier = Modifier.padding(
-                                start = if (row.images.isEmpty()) 0.dp else 8.dp,
-                                end = if (row.images.isEmpty()) 0.dp else 8.dp,
-                                top = if (row.images.isEmpty()) 0.dp else 2.dp,
-                                bottom = if (row.images.isEmpty()) 0.dp else 4.dp,
-                            ),
-                        )
+                        // 长按 = 系统自带选择（可局部复制），不再是「一键全文复制」。
+                        SelectionContainer {
+                            Text(
+                                row.text,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = palette.bubbleUserText,
+                                modifier = Modifier.padding(
+                                    start = if (row.images.isEmpty()) 0.dp else 8.dp,
+                                    end = if (row.images.isEmpty()) 0.dp else 8.dp,
+                                    top = if (row.images.isEmpty()) 0.dp else 2.dp,
+                                    bottom = if (row.images.isEmpty()) 0.dp else 4.dp,
+                                ),
+                            )
+                        }
                     }
                     // 回执之前不装已送达：桥接没回话，就明白写着"发送中…"
                     if (row.pendingAck) {
@@ -1668,11 +1677,7 @@ private fun MessageRow(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 6.dp)
-                    // 长按正文复制整条原文（Markdown 源文）；代码卡/链接有自己的手势，不受影响
-                    .pointerInput(row.text) {
-                        detectTapGestures(onLongPress = { onCopy(row.text) })
-                    },
+                    .padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 6.dp),
             ) {
                 // 评审稿：长回答「先给地图」——章节 ≥2 时给一个速览入口
                 //（全屏读、点章节跳转；正文渲染不变，只加一个入口）
@@ -1707,11 +1712,15 @@ private fun MessageRow(
                     when (seg) {
                         // 电脑端回的是 Markdown：标题/列表/表格都按真排版画，
                         // 否则手机上看到的是一堆 `|` `-` `#`
-                        is MsgSegment.Body -> MarkdownText(
-                            text = seg.text,
-                            color = palette.textPrimary,
-                            modifier = Modifier.padding(bottom = 6.dp),
-                        )
+                        is MsgSegment.Body -> SelectionContainer {
+                            // 长按正文 = 系统自带选择（可局部复制）；代码卡/链接保留各自手势，
+                            // 整条复制仍可用消息下方的「复制」按钮。
+                            MarkdownText(
+                                text = seg.text,
+                                color = palette.textPrimary,
+                                modifier = Modifier.padding(bottom = 6.dp),
+                            )
+                        }
                         is MsgSegment.Code -> {
                             // S2：被交付物卡覆盖的图形/网页源码段不再重复铺代码卡。
                             val cover = artifactRef != null &&
