@@ -23,6 +23,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import com.dsh.mobile.BuildConfig
 import java.util.concurrent.TimeUnit
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.os.SystemClock
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.net.Inet4Address
 
 /**
  * Single source of truth for the whole app: the pairing, the session list, the
@@ -68,6 +75,22 @@ class BridgeRepository(context: Context) {
         completionPending = true
     }
     private val stream = EventStream(client, scope)
+
+    /** 自动选线：探测专用短超时客户端 —— 绝不动主客户端，正常请求不受影响。 */
+    private val probeClient = OkHttpClient.Builder()
+        .connectTimeout(1500, TimeUnit.MILLISECONDS)
+        .readTimeout(3000, TimeUnit.MILLISECONDS)
+        .callTimeout(5000, TimeUnit.MILLISECONDS)
+        .build()
+    private val probeApi = BridgeApi(probeClient)
+    private val routeBook = RouteBook()
+    private val routeLock = Mutex()
+
+    /** 当前线路连续失败次数（按 WS 重连周期计），以及上次切换/探测时间。 */
+    private var failStreak = 0
+    private var lastSwitchAt = 0L
+    private var lastProbeAt = 0L
+    private var probeJob: Job? = null
 
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
@@ -148,11 +171,37 @@ class BridgeRepository(context: Context) {
             val was = _state.value.connected
             EventTrail.add("conn -> $conn")
             if (_state.value.conn != conn) _state.update { it.copy(conn = conn) }
-            if (conn == Conn.ONLINE && !was) onReconnected()
+            when (conn) {
+                Conn.ONLINE -> {
+                    failStreak = 0
+                    if (!was) onReconnected()
+                    // 连上并坐稳之后再探测线路：探测永远排在正常连接之后。
+                    scheduleProbe(settleMs = 2500)
+                }
+                Conn.OFFLINE -> {
+                    failStreak += 1
+                    if (failStreak >= RoutePlan.FAILOVER_STREAK) maybeFailover()
+                }
+                else -> Unit
+            }
         }
         stream.lastSeq = { lastSeq }
 
         scope.launch { boot() }
+
+        // 网络切换（WiFi⇄流量、到家/离家）：没连上就立刻重连；连着的稍后重新探测线路。
+        runCatching {
+            val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    scope.launch {
+                        delay(1500)
+                        if (_state.value.token != null && !_state.value.connected) connect()
+                        scheduleProbe(settleMs = 0)
+                    }
+                }
+            })
+        }
     }
 
     // ------------------------------------------------------------------ boot
@@ -160,7 +209,14 @@ class BridgeRepository(context: Context) {
     private suspend fun boot() {
         val stored = store.load()
         val hostAlias = store.loadHostAlias()
-        EventTrail.add("boot v${BuildConfig.VERSION_NAME} base=${stored.base.ifBlank { "-" }}")
+        routeBook.fromJson(stored.routes)
+        val bootBase = routeBook.bootBase(stored.base, wifiPrefix())
+        routeBook.add(bootBase)
+        EventTrail.add("boot v${BuildConfig.VERSION_NAME} base=${bootBase.ifBlank { "-" }}")
+        if (bootBase.isNotBlank() && bootBase != stored.base.trimEnd('/')) {
+            EventTrail.add("boot 线路校正 → ${bootBase.take(60)}")
+            scope.launch { store.saveBase(bootBase) }
+        }
         defaultModel = stored.defaultModel.takeIf { it.isNotBlank() }?.let {
             Triple(stored.defaultProvider, it, stored.defaultLabel.ifBlank { it })
         }
@@ -182,15 +238,15 @@ class BridgeRepository(context: Context) {
         // 未配对也要自动查更新：停在配对页的用户同样要收到新版本提醒。
         // 检查走公共镜像（服务器上的发布清单），不依赖任何人的电脑开着。
         autoCheckUpdate()
-        if (stored.token.isBlank() || stored.base.isBlank()) {
-            _state.update { it.copy(ready = true, view = View.PAIRING, base = stored.base) }
+        if (stored.token.isBlank() || bootBase.isBlank()) {
+            _state.update { it.copy(ready = true, view = View.PAIRING, base = bootBase) }
             return
         }
-        api.base = stored.base
+        api.base = bootBase
         _state.update {
             it.copy(
                 ready = true,
-                base = stored.base,
+                base = bootBase,
                 token = stored.token,
                 device = Wire.parseDevice(stored.device),
                 view = View.SESSIONS,
@@ -307,6 +363,11 @@ class BridgeRepository(context: Context) {
                     throw BridgeException("E_PAIRING", "配对响应不完整，请重试")
                 }
                 store.savePair(used, token, device)
+                routeBook.add(used)
+                attempts.lastOrNull { it.error == null }?.let { done ->
+                    routeBook.record(used, done.millis, true, System.currentTimeMillis())
+                }
+                scope.launch { store.saveRoutes(routeBook.toJson()) }
                 api.base = used
                 _state.update {
                     it.copy(
@@ -399,6 +460,8 @@ class BridgeRepository(context: Context) {
     /** Forget the binding locally (the desktop keeps its record until revoked). */
     fun unpair() {
         stream.stop()
+        probeJob?.cancel()
+        failStreak = 0
         scope.launch { store.clearBinding() }
         _state.update {
             AppState(ready = true, theme = it.theme, base = it.base, view = View.PAIRING)
@@ -422,6 +485,169 @@ class BridgeRepository(context: Context) {
         val token = s.token ?: return
         if (s.base.isBlank()) return
         stream.start(EventStream.wsUrl(s.base, token))
+    }
+
+    // ------------------------------------------------------------ 自动选线（RoutePlan 决策 / RouteBook 登记）
+    //
+    // 红线：选择本身绝不拖慢连接 ——
+    //   1) 首连用的还是存下来的那条线，探测永远发生在「已连上」之后；
+    //   2) 探测走独立的短超时客户端，不占主连接；
+    //   3) 只有「当前线连续失败」或「候选跨档更快 / 换成局域网」才切换，带 30s 冷却。
+
+    /** 手机当前 WiFi 的网段前缀（如 "192.168.1."）；不在 WiFi 上给空串。 */
+    private fun wifiPrefix(): String {
+        return try {
+            val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val net = cm.activeNetwork ?: return ""
+            val caps = cm.getNetworkCapabilities(net) ?: return ""
+            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return ""
+            val addr = cm.getLinkProperties(net)?.linkAddresses
+                ?.firstOrNull { it.address is Inet4Address }?.address as? Inet4Address ?: return ""
+            addr.hostAddress?.substringBeforeLast('.')?.plus('.') ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun shortName(base: String): String = hostOf(base) ?: base.take(48)
+
+    /** 单次探测：GET meta，成功给毫秒、失败给 null。走独立客户端，绝不影响主连接。 */
+    private suspend fun probeOnce(base: String, token: String): Long? = try {
+        val t0 = SystemClock.elapsedRealtime()
+        probeApi.base = base
+        probeApi.meta(token)
+        SystemClock.elapsedRealtime() - t0
+    } catch (error: BridgeException) {
+        if (error.code == "E_UNAUTHORIZED") handleUnauthorized()
+        null
+    } catch (_: Exception) {
+        null
+    }
+
+    /** 探测入口：节流 + 同一时间只挂一个任务；[settleMs] 用于「先让连接坐稳」。 */
+    private fun scheduleProbe(settleMs: Long) {
+        if (_state.value.token == null) return
+        probeJob?.cancel()
+        probeJob = scope.launch {
+            delay(settleMs)
+            maybeProbeRound()
+        }
+    }
+
+    private fun maybeProbeRound() {
+        if (System.currentTimeMillis() - lastProbeAt < 90_000L) return
+        if (!routeLock.tryLock()) return
+        scope.launch {
+            try {
+                if (System.currentTimeMillis() - lastProbeAt < 90_000L) return@launch
+                val s = _state.value
+                val token = s.token ?: return@launch
+                val active = s.base
+                if (active.isBlank()) return@launch
+                val prefix = wifiPrefix()
+                val candidates = routeBook.candidatesFor(active, prefix)
+                if (candidates.isEmpty()) return@launch
+                // 只有真的开始探测了才占节流窗口 —— 候选为空提前返回时不占，
+                // 免得「刚好在前 90 秒里没有候选」把后续探测一并掐掉。
+                lastProbeAt = System.currentTimeMillis()
+                val healthy = HashMap<String, Long>()
+                for (cand in candidates) {
+                    val ms = probeOnce(cand, token)
+                    if (ms != null) {
+                        healthy[cand] = ms
+                        routeBook.record(
+                            cand, ms, true, System.currentTimeMillis(),
+                            if (cand.startsWith("http://")) prefix else "",
+                        )
+                    } else {
+                        routeBook.record(cand, -1L, false, System.currentTimeMillis())
+                    }
+                }
+                EventTrail.add(
+                    "probe: " + candidates.joinToString(" ") { c ->
+                        shortName(c) + "=" + (healthy[c]?.let { "${it}ms" } ?: "fail")
+                    }
+                )
+                applyVerdict("probe", healthy)
+                routeBook.prune()
+                store.saveRoutes(routeBook.toJson())
+            } finally {
+                routeLock.unlock()
+            }
+        }
+    }
+
+    /** 故障切换：当前线连续失败后，快速探测备用线，换上第一条打通了的。 */
+    private fun maybeFailover() {
+        if (System.currentTimeMillis() - lastSwitchAt < RoutePlan.MIN_SWITCH_GAP_MS) return
+        scope.launch {
+            routeLock.withLock {
+                val s = _state.value
+                val token = s.token ?: return@withLock
+                val active = s.base
+                if (active.isBlank() || s.connected) return@withLock
+                val prefix = wifiPrefix()
+                for (cand in routeBook.candidatesFor(active, prefix)) {
+                    if (cand == active) continue
+                    val ms = probeOnce(cand, token)
+                    routeBook.record(
+                        cand, ms ?: -1L, ms != null, System.currentTimeMillis(),
+                        if (ms != null && cand.startsWith("http://")) prefix else "",
+                    )
+                    if (ms != null) {
+                        performSwitch(cand, "failover")
+                        break
+                    }
+                }
+                store.saveRoutes(routeBook.toJson())
+            }
+        }
+    }
+
+    /** 探测结论 → 决策（升级类在这里切；故障类由 [maybeFailover] 走）。 */
+    private fun applyVerdict(tag: String, healthy: Map<String, Long>) {
+        val s = _state.value
+        val active = s.base.trimEnd('/')
+        val verdict = RoutePlan.decide(
+            activeMs = routeBook.msOf(active),
+            healthy = healthy,
+            activeIsLan = active.startsWith("http://"),
+            failStreak = failStreak,
+            sinceSwitchMs = System.currentTimeMillis() - lastSwitchAt,
+        )
+        Log.i(TAG, "route $tag → ${verdict.kind} ${verdict.base ?: ""} (active=${routeBook.msOf(active) ?: "?"}ms streak=$failStreak)")
+        if (verdict.kind != RoutePlan.Kind.UPGRADE) return
+        if (s.running || s.syncing) {
+            // 正忙：不打断正在跑的回合；等闲下来再切（最多等 90 秒）。
+            val decidedFrom = active
+            scope.launch {
+                repeat(6) {
+                    delay(15_000)
+                    if (_state.value.base.trimEnd('/') != decidedFrom) return@launch
+                    if (!_state.value.running && !_state.value.syncing) {
+                        performSwitch(verdict.base!!, "upgrade")
+                        return@launch
+                    }
+                }
+            }
+            return
+        }
+        scope.launch { performSwitch(verdict.base!!, "upgrade") }
+    }
+
+    /** 执行换线：持久化 + API + WS 一起切；hello since=lastSeq 会把缺口补齐。 */
+    private suspend fun performSwitch(newBase: String, reason: String) {
+        val value = newBase.trim().trimEnd('/')
+        if (value.isBlank() || value == _state.value.base.trimEnd('/')) return
+        if (reason == "failover" && _state.value.connected) return
+        lastSwitchAt = System.currentTimeMillis()
+        failStreak = 0
+        EventTrail.add("线路切换($reason) ${shortName(_state.value.base)} → ${shortName(value)}")
+        Log.i(TAG, "route switch ($reason) ${_state.value.base} -> $value")
+        store.saveBase(value)
+        api.base = value
+        _state.update { it.copy(base = value) }
+        connect()
     }
 
     /** Called when the app comes back to the foreground. */
@@ -459,7 +685,15 @@ class BridgeRepository(context: Context) {
     private suspend fun refreshMeta(quiet: Boolean): Boolean {
         val token = _state.value.token ?: return false
         return try {
+            val t0 = SystemClock.elapsedRealtime()
             val meta = api.meta(token)
+            val costMs = SystemClock.elapsedRealtime() - t0
+            _state.value.base.takeIf { it.isNotBlank() }?.let { current ->
+                routeBook.record(current, costMs, true, System.currentTimeMillis())
+            }
+            // 桥接未来会在 capabilities.lanBase 里下发局域网地址；未下发时为空串，逻辑保持休眠。
+            meta.optJSONObject("capabilities")?.optString("lanBase").orEmpty().trim()
+                .takeIf { it.startsWith("http://") }?.let { routeBook.add(it) }
             val device = Wire.parseDevice(meta.optJSONObject("device"))
             // meta.host 与 meta.server 平级：hostName 给顶栏「你在连哪台电脑」用。
             val host = Wire.parseHost(meta.optJSONObject("host"))
@@ -1946,6 +2180,7 @@ class BridgeRepository(context: Context) {
     /** The token no longer works anywhere: forget the binding, go pair again. */
     private fun handleUnauthorized() {
         stream.stop()
+        failStreak = 0
         scope.launch {
             val base = _state.value.base
             val theme = _state.value.theme

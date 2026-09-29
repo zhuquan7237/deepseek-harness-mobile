@@ -29,6 +29,8 @@ data class StoredSession(
     val defaultProvider: String = "",
     val defaultModel: String = "",
     val defaultLabel: String = "",
+    /** 已知线路登记簿（JSON 字符串）：自动选线用，见 RouteBook。 */
+    val routes: String = "",
 )
 
 /** 「从上游同步」最近一次的结果：成功给时间，失败给原因（模型页展示用）。 */
@@ -56,6 +58,7 @@ class SettingsStore(context: Context) {
         val DEFAULT_MODEL = stringPreferencesKey("default_model")
         val DEFAULT_LABEL = stringPreferencesKey("default_label")
         val HOST_ALIAS = stringPreferencesKey("host_alias")
+        val ROUTES = stringPreferencesKey("route_book")
     }
 
     suspend fun load(): StoredSession {
@@ -79,6 +82,7 @@ class SettingsStore(context: Context) {
             defaultProvider = prefs[Keys.DEFAULT_PROVIDER].orEmpty(),
             defaultModel = prefs[Keys.DEFAULT_MODEL].orEmpty(),
             defaultLabel = prefs[Keys.DEFAULT_LABEL].orEmpty(),
+            routes = prefs[Keys.ROUTES].orEmpty(),
         )
     }
 
@@ -187,4 +191,14 @@ class SettingsStore(context: Context) {
 
     suspend fun loadHostAlias(): String =
         context.dshStore.data.first()[Keys.HOST_ALIAS].orEmpty()
+
+    /** 自动选线：切换线路时更新当前 base（不动 token）。 */
+    suspend fun saveBase(base: String) {
+        context.dshStore.edit { prefs -> prefs[Keys.BASE] = base }
+    }
+
+    /** 已知线路登记簿（JSON 字符串），见 RouteBook。 */
+    suspend fun saveRoutes(raw: String) {
+        context.dshStore.edit { prefs -> prefs[Keys.ROUTES] = raw }
+    }
 }
