@@ -68,8 +68,12 @@ import com.dsh.mobile.ui.theme.LocalDsh
 private const val DEFAULT_BASE = ""
 
 /**
- * Pairing: the ChatGPT form language — quiet title, filled fields, a full-width
- * pill for the primary action, an outlined pill for scanning.
+ * Pairing: the ChatGPT form language — quiet title, a full-width pill for the
+ * primary action, and the scanner as the one path everyone walks.
+ *
+ * 扫码是唯一显性路径：二维码自带电脑地址与配对码，扫完即连；手填地址+配对码
+ * 收进「手动配对」折叠区（默认收起）——普通用户不需要看到「服务器地址」这几个字
+ * （用户反馈红线："扫完码必须能直接连上电脑直接使用，不要有多余的动作"）。
  */
 @Composable
 fun PairingScreen(state: AppState, repo: BridgeRepository) {
@@ -81,6 +85,8 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
     // config lets the phone edit models and write API keys; on by default
     var withConfig by rememberSaveable { mutableStateOf(true) }
     var showUpdate by remember { mutableStateOf(false) }
+    // 手动配对折叠开关：默认收起，让扫码站在 C 位。
+    var showManual by rememberSaveable { mutableStateOf(false) }
 
     // The scanner is its own screen (ScanScreen) and pairs on this form's
     // behalf, so it needs to know what the form currently holds.
@@ -178,7 +184,60 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
         }
         Spacer(Modifier.height(12.dp))
 
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        // 旧的绑定失效时（被电脑端解除、或电脑端数据被重置），扫码即恢复——
+        // 不再把用户带进"填服务器地址"的老路。
+        if (state.base.isNotBlank() && state.token == null) {
+            Text(
+                "上次的连接已失效——扫一下电脑上的二维码即可恢复连接",
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.textSecondary,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(palette.surface)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            )
+        }
+
+        // 主路径：扫码。二维码里自带电脑地址与配对码，扫完自动连上。
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(54.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(if (state.pairing) palette.surfaceHi else palette.primaryBtn)
+                .clickable(enabled = !state.pairing) { launchScan() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.QrCodeScanner,
+                    contentDescription = null,
+                    tint = if (state.pairing) palette.textSecondary else palette.onPrimaryBtn,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "扫码配对",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (state.pairing) palette.textSecondary else palette.onPrimaryBtn,
+                )
+            }
+        }
+
+        // 手动配对：折叠，给"二维码扫不了"的少数场景留的口子。
+        Text(
+            if (showManual) "收起手动配对 ▴" else "手动配对（填地址和配对码）▾",
+            style = MaterialTheme.typography.labelMedium,
+            color = palette.textTertiary,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(enabled = !state.pairing) { showManual = !showManual }
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+        )
+
+        if (showManual) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             DshField(
                 label = "服务器地址",
                 value = base,
@@ -228,6 +287,22 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
                     )
                 }
             }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .border(1.dp, palette.surfaceHi, RoundedCornerShape(999.dp))
+                    .clickable(enabled = !state.pairing) { repo.pair(base, code, deviceName, withConfig) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "用配对码配对",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = palette.textPrimary,
+                )
+            }
+            }
         }
 
         if (state.repairing && state.token != null) {
@@ -245,41 +320,8 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
                 Pill("取消重新配对", onClick = { repo.cancelRepair() })
             }
         }
-        Spacer(Modifier.height(4.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(54.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(if (state.pairing) palette.surfaceHi else palette.primaryBtn)
-                .clickable(enabled = !state.pairing) { repo.pair(base, code, deviceName, withConfig) },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "用配对码配对",
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (state.pairing) palette.textSecondary else palette.onPrimaryBtn,
-            )
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(54.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .border(1.dp, palette.surfaceHi, RoundedCornerShape(999.dp))
-                .clickable(enabled = !state.pairing) { launchScan() },
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Outlined.QrCodeScanner,
-                contentDescription = null,
-                tint = palette.textPrimary,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text("扫码配对", style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
-        }
+        // （旧的「用配对码配对/扫码配对」按钮已重排：扫码升为顶部主按钮，
+        //  「用配对码配对」移入手动配对折叠区。）
 
         if (state.pairing) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -290,22 +332,17 @@ fun PairingScreen(state: AppState, repo: BridgeRepository) {
 
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
-                "第一次使用（三步）",
+                "第一次使用（两步）",
                 style = MaterialTheme.typography.labelMedium,
                 color = palette.textSecondary,
             )
             Text(
-                "1）电脑上安装并启动 DeepSeek Harness；",
+                "1）电脑上打开 DeepSeek Harness，点左下角「设置 → 手机配对」显示二维码；",
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.textSecondary,
             )
             Text(
-                "2）电脑左下角「设置 → 手机配对」，拿到服务器地址和配对码（5 分钟有效）；",
-                style = MaterialTheme.typography.labelSmall,
-                color = palette.textSecondary,
-            )
-            Text(
-                "3）把地址和配对码填到上面，点「用配对码配对」。",
+                "2）点上面的「扫码配对」，对准二维码扫一下，即可连上。",
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.textSecondary,
             )

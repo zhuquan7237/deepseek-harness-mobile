@@ -296,7 +296,9 @@ class BridgeRepository(context: Context) {
     ) {
         val base = normalizeBase(rawBase)
         if (base.isEmpty()) {
-            toast("请填写服务器地址")
+            // 用户红线：扫码之后不应再被要求手填地址。扫码的码里应自带地址；
+            // 真遇到只有配对码的码，也是引导"重扫电脑上的二维码"，不是引导手填。
+            toast("没读到电脑地址——请扫电脑端「设置→手机配对」里的二维码")
             return
         }
         val normalized = Wire.normalizeCode(code)
@@ -2186,7 +2188,7 @@ class BridgeRepository(context: Context) {
             val theme = _state.value.theme
             store.clearBinding()
             _state.update { AppState(ready = true, theme = theme, base = base, view = View.PAIRING) }
-            fail("auth", "令牌已失效，请重新配对")
+            fail("auth", "连接已失效——重新扫码即可恢复")
             EventTrail.add("revoked: token cleared")
         }
     }
