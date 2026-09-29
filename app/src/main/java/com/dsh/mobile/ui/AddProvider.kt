@@ -105,7 +105,7 @@ fun AddProviderScreen(
     var id by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var baseURL by remember { mutableStateOf("") }
-    var responses by remember { mutableStateOf(true) }
+    var proto by remember { mutableStateOf("openai-responses") }
     var keyRef by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var keyVisible by remember { mutableStateOf(false) }
@@ -174,7 +174,7 @@ fun AddProviderScreen(
                 id = id,
                 name = name.ifBlank { id },
                 baseURL = baseURL.trim(),
-                apiMode = if (responses) "openai-responses" else "openai-completions",
+                apiMode = proto,
                 keyRef = effectiveRef,
                 apiKey = apiKey.trim(),
                 models = chosen,
@@ -260,7 +260,7 @@ fun AddProviderScreen(
                         imeAction = ImeAction.Next,
                         onImeAction = { next() },
                     )
-                    ProtocolSegment(responses = responses, onPick = { responses = it })
+                    ProtocolSegment(mode = proto, onPick = { proto = it })
                 }
 
                 SectionBlock("密钥") {
@@ -528,7 +528,7 @@ private fun PickerRow(modelId: String, selected: Boolean, onToggle: () -> Unit) 
 // -------------------------------------------------------------------- 小组件
 
 @Composable
-private fun SectionBlock(title: String, content: @Composable ColumnScope.() -> Unit) {
+internal fun SectionBlock(title: String, content: @Composable ColumnScope.() -> Unit) {
     val palette = LocalDsh.current
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(title, style = MaterialTheme.typography.labelMedium, color = palette.textSecondary)
@@ -537,9 +537,13 @@ private fun SectionBlock(title: String, content: @Composable ColumnScope.() -> U
 }
 
 @Composable
-private fun ProtocolSegment(responses: Boolean, onPick: (Boolean) -> Unit) {
+internal fun ProtocolSegment(mode: String, onPick: (String) -> Unit) {
     val palette = LocalDsh.current
-    val options = listOf(true to "Responses", false to "Chat Completions")
+    val options = listOf(
+        "openai-responses" to "Responses",
+        "openai-completions" to "Chat Completions",
+        "anthropic-messages" to "Anthropic",
+    )
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Text("协议", style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
         Row(
@@ -551,7 +555,7 @@ private fun ProtocolSegment(responses: Boolean, onPick: (Boolean) -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             options.forEach { (value, label) ->
-                val selected = responses == value
+                val selected = mode == value
                 Box(
                     Modifier
                         .weight(1f)
@@ -570,8 +574,12 @@ private fun ProtocolSegment(responses: Boolean, onPick: (Boolean) -> Unit) {
             }
         }
         Text(
-            if (responses) "Responses —— OpenAI 新接口（GPT 系、较新的网关）"
-            else "Chat Completions —— 兼容旧网关的经典接口",
+            when (mode) {
+                "openai-responses" -> "Responses —— OpenAI 新接口（GPT 系、较新的网关）"
+                "openai-completions" -> "Chat Completions —— 兼容旧网关的经典接口"
+                "anthropic-messages" -> "Anthropic —— Claude 系原生接口"
+                else -> "这家提供商使用的接口格式"
+            },
             style = MaterialTheme.typography.labelSmall,
             color = palette.textTertiary,
         )
@@ -644,7 +652,7 @@ private fun IconToggle(icon: ImageVector, description: String, onClick: () -> Un
 }
 
 @Composable
-private fun FullWidthCta(text: String, onClick: () -> Unit, busy: Boolean = false) {
+internal fun FullWidthCta(text: String, onClick: () -> Unit, busy: Boolean = false) {
     val palette = LocalDsh.current
     Row(
         Modifier
@@ -669,7 +677,7 @@ private fun FullWidthCta(text: String, onClick: () -> Unit, busy: Boolean = fals
  * 更高的触区（46dp）、可选的尾部图标（比如密钥的显示/隐藏）、以及错误态。
  */
 @Composable
-private fun FormFieldEx(
+internal fun FormFieldEx(
     label: String,
     value: String,
     placeholder: String,

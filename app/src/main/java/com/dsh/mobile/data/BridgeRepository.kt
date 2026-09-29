@@ -2218,6 +2218,25 @@ class BridgeRepository(context: Context) {
     }
 
     /**
+     * 编辑提供商的共享属性（显示名 / 接口地址 / 协议 / 凭据变量名）。
+     * 整组写到它的每个模型行上（提供商级字段在文档里是行级冗余），桥接会把它
+     * 翻译成引擎的 `providers.<id>.{displayName|baseURL|api|apiKeyEnv}` 改动，
+     * 下一个模型请求生效、无需重启。
+     */
+    fun editProvider(
+        providerId: String,
+        name: String,
+        baseURL: String,
+        apiMode: String,
+        keyRef: String,
+        onSaved: (Boolean) -> Unit = {},
+    ) {
+        mutateModels(onSaved = onSaved) { items ->
+            applyProviderEdit(items, providerId, name, baseURL, apiMode, keyRef)
+        }
+    }
+
+    /**
      * 增量修改（开关、删除、批量操作都用它）：transform 作用于「当前最新」文档，
      * 连点或排队时天然合并，不会互相覆盖。
      */

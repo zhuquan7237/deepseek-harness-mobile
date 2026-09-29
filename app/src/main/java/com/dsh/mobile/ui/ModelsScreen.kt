@@ -71,6 +71,7 @@ import com.dsh.mobile.data.ModelItem
 import com.dsh.mobile.data.ModelProvider
 import com.dsh.mobile.data.ProviderSync
 import com.dsh.mobile.data.Wire
+import com.dsh.mobile.data.apiModeLabel
 import com.dsh.mobile.ui.theme.LocalDsh
 
 /**
@@ -88,6 +89,8 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
     BackHandler { repo.closeModels() }
 
     var addProvider by remember { mutableStateOf(false) }
+    var editOpen by remember { mutableStateOf(false) }
+    var editTarget by remember { mutableStateOf<ModelProvider?>(null) }
     var syncOpen by remember { mutableStateOf(false) }
     var syncTarget by remember { mutableStateOf<ModelProvider?>(null) }
     var addModelTo by remember { mutableStateOf<ModelProvider?>(null) }
@@ -208,6 +211,10 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                                     onPicked = { picked[provider.id] = it },
                                     sync = syncMap[provider.id],
                                     onAddModel = { addModelTo = provider },
+                                    onEditProvider = {
+                                        editTarget = provider
+                                        editOpen = true
+                                    },
                                     onSyncUpstream = {
                                         syncTarget = provider
                                         syncOpen = true
@@ -300,6 +307,36 @@ fun ModelsScreen(state: AppState, repo: BridgeRepository) {
                     }
                 },
             )
+        }
+
+        // 编辑提供商：推进来的整页（同款转场）。关闭时保留 editTarget 一帧给退出动画。
+        AnimatedVisibility(
+            visible = editOpen,
+            enter = slideInHorizontally(tween(Motion.SCREEN, easing = Motion.Push)) { it },
+            exit = slideOutHorizontally(tween(Motion.BASE, easing = Motion.Push)) { it },
+        ) {
+            editTarget?.let { provider ->
+                key(provider.id) {
+                    EditProviderScreen(
+                        provider = provider,
+                        saving = state.modelsSaving,
+                        onDismiss = { editOpen = false },
+                        onSave = { name, baseURL, apiMode, keyRef ->
+                            val hasRows = state.doc?.items?.any { it.provider == provider.id } == true
+                            if (!hasRows) {
+                                repo.toast("这家还没有模型，先在电脑端配置或添加一个模型")
+                            } else {
+                                repo.editProvider(provider.id, name, baseURL, apiMode, keyRef) { ok ->
+                                    if (ok) {
+                                        repo.toast("已更新「$name」的配置")
+                                        editOpen = false
+                                    }
+                                }
+                            }
+                        },
+                    )
+                }
+            }
         }
 
         // 从上游同步：推进来的整页（与全应用转场同向）。内容用 key 隔离状态；
@@ -510,6 +547,7 @@ private fun ProviderBlock(
     onSelecting: (Boolean) -> Unit,
     onPicked: (Set<String>) -> Unit,
     onAddModel: () -> Unit,
+    onEditProvider: () -> Unit,
     onSyncUpstream: () -> Unit,
     onEditKey: () -> Unit,
     onNetwork: () -> Unit,
@@ -554,6 +592,10 @@ private fun ProviderBlock(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            if (apiModeLabel(provider.apiMode).isNotBlank()) {
+                MiniTag(apiModeLabel(provider.apiMode), palette.textSecondary)
+                Spacer(Modifier.width(8.dp))
             }
             if (provider.network.isNotEmpty()) {
                 MiniTag(if (provider.network == "proxy") "代理" else "直连", palette.textSecondary)
@@ -687,6 +729,7 @@ private fun ProviderBlock(
                             "上次同步 ${Wire.timeText(sync.at)} · 拉取上游最新清单，勾选要加的模型"
                         else -> "拉取上游最新清单，勾选要加的模型"
                     }
+                    SheetAction("编辑提供商", caption = "改名称、接口地址、协议（Responses / Chat Completions）与凭据变量名") { onEditProvider() }
                     SheetAction("从上游同步模型", caption = syncCaption) { onSyncUpstream() }
                     SheetAction("添加模型", caption = "输入模型 ID，能力稍后自动同步") { onAddModel() }
                     val keyTitle = if (provider.keyConfigured) "更新 / 清除密钥" else "写入密钥"

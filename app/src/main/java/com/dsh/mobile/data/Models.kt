@@ -388,6 +388,36 @@ fun effortLabel(effort: String): String = when (effort.lowercase()) {
     else -> effort
 }
 
+/** 接口协议标签（提供商行与编辑页共用）：引擎的三个 api 值 → 简写。 */
+fun apiModeLabel(mode: String): String = when (mode) {
+    "openai-responses" -> "Responses"
+    "openai-completions" -> "Chat Completions"
+    "anthropic-messages" -> "Anthropic"
+    else -> mode
+}
+
+/**
+ * 把「编辑提供商」的改动应用到该提供商的所有模型行。
+ *
+ * 提供商级字段（显示名/接口地址/协议/凭据引用）在引擎里由一家共享、在本共享
+ * 文档里冗余在每个模型行上——两端 diff 都读行上的字段，所以必须整组一致地改；
+ * 只改一行会退化成「写入第一行的旧值」。
+ */
+fun applyProviderEdit(
+    items: List<ModelItem>,
+    providerId: String,
+    name: String,
+    baseURL: String,
+    apiMode: String,
+    keyRef: String,
+): List<ModelItem> = items.map { item ->
+    if (item.provider != providerId) {
+        item
+    } else {
+        item.copy(providerName = name, baseURL = baseURL, apiMode = apiMode, apiKeyRef = keyRef)
+    }
+}
+
 /** 模型搜索：名称 / 供应商 / 原始 id 任一命中即可（大小写不敏感）。 */
 fun filterModels(items: List<ModelItem>, query: String): List<ModelItem> {
     val q = query.trim().lowercase()
