@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+：配对令牌存在 DataStore（datastore/dsh_mobile.preferences_pb），
+     不随云备份/换机迁移带走——令牌只属于这台手机，新手机重新扫码配对即可。 -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="datastore/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="datastore/" />
+    </device-transfer>
+</data-extraction-rules>
