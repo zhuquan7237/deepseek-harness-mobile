@@ -10,6 +10,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import java.net.URI
 import java.net.URLEncoder
 import kotlin.math.min
 import kotlin.math.pow
@@ -125,12 +126,28 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
     companion object {
         private const val TAG = "dsh-ws"
 
-        /** `https://host` + token → `wss://host/mobile/events?token=…` */
+        /**
+         * Build the event-stream URL while preserving a relay mount path.
+         *
+         * Direct/LAN bases look like `http://host:17732`, but relay bases are
+         * mounted below `/m/<device-key>`. Dropping that path sends the socket
+         * to the relay root (`/mobile/events`) instead of the paired computer's
+         * route (`/m/<device-key>/mobile/events`), so the app can remain stuck
+         * in CONNECTING even though pairing and ordinary HTTP requests worked.
+         */
         fun wsUrl(base: String, token: String): String {
-            val root = base.trimEnd('/')
-            val scheme = if (root.startsWith("https")) "wss" else "ws"
-            val host = root.removePrefix("https://").removePrefix("http://")
-            return "$scheme://$host/mobile/events?token=" + URLEncoder.encode(token, "UTF-8")
+            val uri = try {
+                URI(base.trimEnd('/'))
+            } catch (_: Exception) {
+                return ""
+            }
+            val scheme = if (uri.scheme.equals("https", ignoreCase = true)) "wss" else "ws"
+            val authority = buildString {
+                append(uri.host ?: return "")
+                if (uri.port > 0) append(":").append(uri.port)
+            }
+            val path = uri.path.orEmpty().trimEnd('/')
+            return "$scheme://$authority$path/mobile/events?token=" + URLEncoder.encode(token, "UTF-8")
         }
     }
 }
