@@ -367,6 +367,8 @@ data class AppState(
     val logTotal: Int = 0,
     /** 非 null = 正在征求「发送 N 条错误日志」的同意（AppRoot 弹确认框）。 */
     val logAsk: Int? = null,
+    /** 只发送这批日志（用户在列表里多选的 id）；null = 全部待发送。 */
+    val logAskIds: List<String>? = null,
     val logSending: Boolean = false,
 ) {
     /** Derived so the old boolean call sites and the tri-state can never drift apart. */

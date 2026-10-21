@@ -198,19 +198,29 @@ fun LogsScreen(state: AppState, repo: BridgeRepository) {
         // 底栏：选择模式 → 删除操作；普通模式 → 发送
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).navigationBarsPadding()) {
             if (selecting) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // 多选发送：只发勾中的几条，不必整包全发（用户反馈）。
                     BarButton(
-                        text = "清空全部",
+                        text = if (selected.isEmpty()) "发送所选" else "发送所选（${selected.size}）",
                         danger = false,
-                        enabled = entries.isNotEmpty(),
-                        modifier = Modifier.weight(1f),
-                    ) { confirmClear = true }
-                    BarButton(
-                        text = if (selected.isEmpty()) "删除所选" else "删除所选（${selected.size}）",
-                        danger = true,
+                        accent = true,
                         enabled = selected.isNotEmpty(),
-                        modifier = Modifier.weight(1.6f),
-                    ) { confirmDelete = selected.toList() }
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { repo.requestSendLogs(selected) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        BarButton(
+                            text = "清空全部",
+                            danger = false,
+                            enabled = entries.isNotEmpty(),
+                            modifier = Modifier.weight(1f),
+                        ) { confirmClear = true }
+                        BarButton(
+                            text = if (selected.isEmpty()) "删除所选" else "删除所选（${selected.size}）",
+                            danger = true,
+                            enabled = selected.isNotEmpty(),
+                            modifier = Modifier.weight(1.6f),
+                        ) { confirmDelete = selected.toList() }
+                    }
                 }
             } else {
                 val pending = state.logPending
@@ -277,16 +287,17 @@ fun LogsScreen(state: AppState, repo: BridgeRepository) {
 
 /** 底栏按钮（选择模式下的小按钮对）。 */
 @Composable
-private fun BarButton(text: String, danger: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun BarButton(text: String, danger: Boolean, enabled: Boolean, accent: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val palette = LocalDsh.current
     val bg = when {
         !enabled -> palette.surface
         danger -> palette.danger
+        accent -> palette.accent
         else -> palette.surfaceHi
     }
     val fg = when {
         !enabled -> palette.textTertiary
-        danger -> palette.onAccent
+        danger || accent -> palette.onAccent
         else -> palette.textPrimary
     }
     Box(

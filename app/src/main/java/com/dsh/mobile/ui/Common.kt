@@ -131,11 +131,12 @@ fun StatusDot(conn: Conn, size: Dp = 6.dp) {
 
 /** `surface` pill with a status dot and one line of text. */
 @Composable
-fun StatusPill(text: String, conn: Conn, modifier: Modifier = Modifier) {
+fun StatusPill(text: String, conn: Conn, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
     val palette = LocalDsh.current
     Row(
         modifier
             .clip(RoundedCornerShape(999.dp))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .background(palette.surface)
             .padding(horizontal = 13.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,

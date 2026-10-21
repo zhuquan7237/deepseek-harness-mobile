@@ -94,6 +94,8 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
     var renameTarget by remember { mutableStateOf<SessionSummary?>(null) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
     var showUpdate by remember { mutableStateOf(false) }
+    // 连接不上时的自救入口：重试 / 解除本机绑定重新配对（用户反馈「找不到取消配对」）。
+    var connHelp by remember { mutableStateOf(false) }
 
     // 一进列表就拉一次：从会话页返回时列表常常是旧的（真机反馈"跑着的任务不在列表里/没标识"）
     LaunchedEffect(Unit) { repo.loadSessions() }
@@ -122,9 +124,10 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
                 text = when (state.conn) {
                     Conn.ONLINE -> "已连接"
                     Conn.CONNECTING -> "正在连接"
-                    Conn.OFFLINE -> "未连接 · 重连中"
+                    Conn.OFFLINE -> "未连接 · 点此处理"
                 },
                 conn = state.conn,
+                onClick = if (state.conn == Conn.OFFLINE) ({ connHelp = true }) else null,
             )
             Spacer(Modifier.weight(1f))
             CircleButton(Icons.Outlined.SwapHoriz, "文件传输") { repo.openTransfer() }
@@ -321,6 +324,42 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
             onConfirm = { title ->
                 repo.renameSession(target.sessionId, title)
                 renameTarget = null
+            },
+        )
+    }
+
+    if (connHelp) {
+        val palette = LocalDsh.current
+        AlertDialog(
+            onDismissRequest = { connHelp = false },
+            shape = RoundedCornerShape(24.dp),
+            containerColor = palette.surface,
+            title = { Text("连接不上电脑", color = palette.textPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "先确认电脑端开着、手机有网。一直连不上，就解除本机绑定，再扫电脑上的二维码重新配对。",
+                        color = palette.textSecondary,
+                    )
+                    TextButton(
+                        onClick = {
+                            connHelp = false
+                            repo.unpair()
+                        },
+                        contentPadding = PaddingValues(0.dp),
+                    ) {
+                        Text("解除本机绑定并重新配对", color = palette.danger)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    connHelp = false
+                    repo.refreshNow()
+                }) { Text("重试连接", color = palette.accent) }
+            },
+            dismissButton = {
+                TextButton(onClick = { connHelp = false }) { Text("关闭", color = palette.textSecondary) }
             },
         )
     }

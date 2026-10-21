@@ -161,6 +161,13 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
             GroupDivider()
             GroupHeader("设备与交互")
             SettingsValue("设备", state.device?.name?.ifBlank { "未命名" } ?: "—")
+            // 连接不上/想换电脑时的自救入口：放在设备组里，别只藏在页面最底部的危险区。
+            SettingsAction(
+                label = "重新配对",
+                value = "解除本机绑定，再扫电脑上的二维码",
+                action = "解除",
+                onClick = { confirmUnpair = true },
+            )
             // 悬浮球：状态 + 一句说明；开启前有后果确认
             Row(
                 Modifier

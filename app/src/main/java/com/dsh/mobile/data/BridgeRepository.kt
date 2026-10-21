@@ -2137,27 +2137,31 @@ class BridgeRepository(context: Context) {
         _state.update { it.copy(view = View.SETTINGS) }
     }
 
-    /** 用户点「发送日志」：先弹确认（发不发由用户定），确认后才真正上传。 */
-    fun requestSendLogs() {
-        val pending = ErrorLog.pending().size
-        if (pending <= 0) {
-            toast("没有待发送的日志")
+    /** 用户点「发送日志」：先弹确认（发不发由用户定），确认后才真正上传。
+     *  [ids] 非 null = 只发这些（错误日志页多选发送）；null = 全部待发送。 */
+    fun requestSendLogs(ids: Collection<String>? = null) {
+        val pendingAll = ErrorLog.pending()
+        val wanted = if (ids == null) pendingAll else pendingAll.filter { it.id in ids }
+        if (wanted.isEmpty()) {
+            toast("所选日志没有待发送的")
             return
         }
-        _state.update { it.copy(logAsk = pending) }
+        _state.update { it.copy(logAsk = wanted.size, logAskIds = if (ids == null) null else wanted.map { entry -> entry.id }) }
     }
 
     fun cancelSendLogs() {
-        _state.update { it.copy(logAsk = null) }
+        _state.update { it.copy(logAsk = null, logAskIds = null) }
     }
 
     fun confirmSendLogs() {
-        val pending = ErrorLog.pending()
+        val ids = _state.value.logAskIds
+        val pendingAll = ErrorLog.pending()
+        val pending = if (ids == null) pendingAll else pendingAll.filter { it.id in ids }
         if (pending.isEmpty()) {
-            _state.update { it.copy(logAsk = null) }
+            _state.update { it.copy(logAsk = null, logAskIds = null) }
             return
         }
-        _state.update { it.copy(logAsk = null, logSending = true) }
+        _state.update { it.copy(logAsk = null, logAskIds = null, logSending = true) }
         scope.launch {
             val receipt = LogUplink.send(appContext, pending)
             if (receipt != null) {
