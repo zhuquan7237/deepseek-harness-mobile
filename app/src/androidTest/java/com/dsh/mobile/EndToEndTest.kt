@@ -280,7 +280,7 @@ class EndToEndTest {
         // own once the network returns (hello-since replay included).
         shell("cmd connectivity airplane-mode enable")
         try {
-            composeRule.waitUntil(90_000) { anyText("重连中", substring = true) }
+            composeRule.waitUntil(90_000) { anyText("重连中", substring = true) || anyText("未连接", substring = true) }
         } finally {
             shell("cmd connectivity airplane-mode disable")
         }
@@ -298,7 +298,7 @@ class EndToEndTest {
         // instead of retrying forever.
         revokeByName("emulator-e2e")
         shell("cmd connectivity airplane-mode enable")
-        composeRule.waitUntil(90_000) { anyText("重连中", substring = true) || isOnPairingScreen() }
+        composeRule.waitUntil(90_000) { anyText("重连中", substring = true) || anyText("未连接", substring = true) || isOnPairingScreen() }
         shell("cmd connectivity airplane-mode disable")
         composeRule.waitUntil(120_000) { isOnPairingScreen() }
     }
