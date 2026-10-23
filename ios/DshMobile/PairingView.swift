@@ -28,8 +28,10 @@ struct PairingView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     brand
                         .padding(.top, 10)
+                    // 上下各一个弹性留白：整块内容落在屏幕中部，帮助卡贴底，
+                    // 避免所有内容堆在上半屏、中下部留一大块死白。
+                    Spacer(minLength: 24)
                     headline
-                        .padding(.top, 6)
                     scanButton
                     if let formError {
                         Text(formError)
@@ -39,7 +41,7 @@ struct PairingView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     manualSection
-                    Spacer(minLength: 28)
+                    Spacer(minLength: 24)
                     howto
                 }
                 .padding(.horizontal, 24)
@@ -100,7 +102,7 @@ struct PairingView: View {
                 .font(.system(size: 30, weight: .medium))
                 .tracking(0.4)
                 .foregroundStyle(Ink.textPrimary)
-            Text("用摄像头扫一下电脑上的二维码即可连接。\n你的会话、文件、模型都还在电脑上。")
+            Text("用摄像头扫一下电脑上的二维码就能连上。\n会话、文件、模型都还留在电脑上。")
                 .font(.system(size: 14))
                 .lineSpacing(4)
                 .foregroundStyle(Ink.textSecondary)
@@ -223,7 +225,7 @@ struct PairingView: View {
                 .foregroundStyle(Ink.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(14)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Ink.surface.opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -231,6 +233,7 @@ struct PairingView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Ink.divider.opacity(0.5), lineWidth: 0.6)
         )
+        .padding(.bottom, 8)
     }
 
     private func submitManual() {
