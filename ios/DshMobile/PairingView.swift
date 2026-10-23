@@ -25,7 +25,7 @@ struct PairingView: View {
     var body: some View {
         GeometryReader { geo in
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 18) {
                     brand
                         .padding(.top, 10)
                     // 上下各一个弹性留白：把「标题 + 扫码 + 手动 + 帮助卡」当成一整块
@@ -43,8 +43,8 @@ struct PairingView: View {
                     }
                     manualSection
                     howto
-                        .padding(.top, 6)
-                    Spacer(minLength: 20)
+                    // 下方留白封顶：整块内容略微上移，底部空气不无限增长。
+                    Spacer(minLength: 20).frame(maxHeight: 210)
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24)

@@ -24,6 +24,11 @@ on:
 permissions:
   contents: write
 
+# 同一分支/标签只保留最新一次 iOS 验证，避免连推时排队。
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   simulator:
     runs-on: macos-15
