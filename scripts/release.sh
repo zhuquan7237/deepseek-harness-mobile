@@ -203,7 +203,23 @@ done
 
 # ---------------------------------------------------------------- 7. GitHub Release
 printf '==> 发布 GitHub Release\n'
-gh release create "v$VERSION" "$APK" --title "v$VERSION" --notes "$NOTES"
+# 2026-10-23 实测：GitHub GraphQL 偶发 `Post …: EOF`，一次失败就会让 set -e 直接退出，
+# 出现「标签推上去了但没有 Release」。所以这里重试，并允许"其实已创建成功"的情况。
+RELEASE_OK=0
+for attempt in 1 2 3; do
+    if gh release create "v$VERSION" "$APK" --title "v$VERSION" --notes "$NOTES"; then
+        RELEASE_OK=1
+        break
+    fi
+    if gh release view "v$VERSION" >/dev/null 2>&1; then
+        printf '==> Release 已存在（上一次调用其实生效了），继续\n'
+        RELEASE_OK=1
+        break
+    fi
+    printf '==> Release 创建失败（第 %s/3 次），15 秒后重试…\n' "$attempt"
+    sleep 15
+done
+[ "$RELEASE_OK" = "1" ] || die "Release 创建失败：手动 gh release create v$VERSION $APK --title v$VERSION --notes <NOTES>"
 
 # ---------------------------------------------------------------- 7b. iOS 产物
 # iOS 只能在 macOS 上编，所以由 GitHub Actions（.github/workflows/ios.yml）在
