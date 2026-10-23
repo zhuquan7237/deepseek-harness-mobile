@@ -28,9 +28,10 @@ struct PairingView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     brand
                         .padding(.top, 10)
-                    // 上下各一个弹性留白：整块内容落在屏幕中部，帮助卡贴底，
-                    // 避免所有内容堆在上半屏、中下部留一大块死白。
-                    Spacer(minLength: 24)
+                    // 上下各一个弹性留白：把「标题 + 扫码 + 手动 + 帮助卡」当成一整块
+                    // 居中放在品牌行与底部之间。之前帮助卡单独贴底，会在中间留出一个
+                    // 明显空洞；整块居中后，空气只出现在块的上方和下方。
+                    Spacer(minLength: 20)
                     headline
                     scanButton
                     if let formError {
@@ -41,8 +42,9 @@ struct PairingView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     manualSection
-                    Spacer(minLength: 24)
                     howto
+                        .padding(.top, 6)
+                    Spacer(minLength: 20)
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24)
@@ -221,7 +223,7 @@ struct PairingView: View {
             .foregroundStyle(Ink.textSecondary)
             Text("电脑端：设置 → 移动端 → 显示二维码。\n配对码 5 分钟内有效；同一 Wi‑Fi 下也能直连。")
                 .font(.system(size: 12.5))
-                .lineSpacing(4)
+                .lineSpacing(5)
                 .foregroundStyle(Ink.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
