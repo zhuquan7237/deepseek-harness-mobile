@@ -1,25 +1,37 @@
 name: ios.yml
-# 说明：iOS 只能在没有 Xcode 的机器外构建。这份流水线把 GitHub 的 macOS runner
-# 当成"云 Mac"：真 xcodegen 生成工程 → 真 xcrun simctl 起模拟器 → 装包 → 截图，
-# 产物（截图 + .app）作为 artifact 回传，供本机核验。
+# iOS 只能在 macOS 上构建。这份流水线把 GitHub 的 macOS runner 当"云 Mac"：
+# xcodegen 生成工程 → xcodebuild 出 iphonesimulator 包 → xcrun simctl 起真模拟器 →
+# 安装/启动/截图/断言 → 产物回传；打 tag 或发布 Release 时把 .app 附到同版本下。
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "可选：把产物附到某个已存在的 Release tag 上"
+        description: "可选：把 iOS 产物附到这个已存在的 Release tag"
         required: false
         default: ""
   push:
     tags:
       - "ios-*"
-      - "v*"
+    branches:
+      - master
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+      - ".github/scripts/**"
+  release:
+    types: [published]
+
+permissions:
+  contents: write
 
 jobs:
   simulator:
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 45
     env:
       APP_ID: com.dsh.mobile.ios
+      MOCK_PORT: "8099"
+      MOCK_CODE: TEST-1234
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +39,7 @@ jobs:
         run: |
           xcodebuild -version
           xcrun simctl list runtimes
-          swift --version
+          swift --version 2>/dev/null || true
 
       - name: 安装 xcodegen
         run: brew install xcodegen
@@ -36,7 +48,6 @@ jobs:
         run: |
           cd ios
           xcodegen generate
-          ls -la
 
       - name: 构建模拟器包
         run: |
@@ -62,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           echo '--- 公网可达性 ---'
-          curl -sS -o /dev/null -w 'mobile page: %{http_code}  %{time_total}s\n' --max-time 30 https://m.zhuquan.xyz/mobile || true
+          curl -sS -o /dev/null -w 'mobile page: %{http_code}  %{time_total}s\n' --max-time 30 https://m.zhuquan.xyz/mobile/ || true
           UDID=$(xcrun simctl list devices available | awk -F'[()]' '/iPhone/ {print $2; exit}')
           if [ -z "$UDID" ]; then echo "没有可用的 iPhone 模拟器"; xcrun simctl list devices available; exit 1; fi
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
@@ -71,31 +82,101 @@ jobs:
           xcrun simctl status_bar "$UDID" override --time '9:41' --batteryState charged --batteryLevel 100
           xcrun simctl list devices | grep "$UDID"
 
-      - name: 装包并启动（自检页）
+      - name: 装包
+        id: install
         run: |
           set -euo pipefail
           UDID='${{ steps.sim.outputs.udid }}'
           APP=$(find ios/build -name 'DshMobile.app' -type d | head -1)
           echo "app=$APP"
+          xcrun simctl uninstall "$UDID" "$APP_ID" || true
           xcrun simctl install "$UDID" "$APP"
-          xcrun simctl launch "$UDID" "$APP_ID"
-          sleep 6
-          xcrun simctl io "$UDID" screenshot shot-1-selfcheck.png
+          echo "app=$APP" >> "$GITHUB_OUTPUT"
 
-      - name: 启动到网页外壳（WKWebView 实测）
+      # 1) 首启：原生配对页
+      - name: 首启截图（配对页）
         run: |
           set -euo pipefail
           UDID='${{ steps.sim.outputs.udid }}'
-          xcrun simctl launch --terminate-running-process "$UDID" "$APP_ID" -autoweb
-          sleep 25
-          xcrun simctl io "$UDID" screenshot shot-2-webview.png
+          xcrun simctl launch "$UDID" "$APP_ID"
+          sleep 5
+          xcrun simctl io "$UDID" screenshot shot-1-pairing.png
+
+      # 2) 自检页：设备/构建/WKWebView DOM 计数
+      - name: 自检页截图
+        run: |
+          set -euo pipefail
+          UDID='${{ steps.sim.outputs.udid }}'
+          xcrun simctl launch --terminate-running-process "$UDID" "$APP_ID" -selfcheck
+          sleep 12
+          xcrun simctl io "$UDID" screenshot shot-2-selfcheck.png
+
+      # 3) 真实网页端（公网）：能渲染 + 原生扫码按钮被注入
+      - name: 真实网页端截图
+        run: |
+          set -euo pipefail
+          UDID='${{ steps.sim.outputs.udid }}'
+          xcrun simctl launch --terminate-running-process "$UDID" "$APP_ID" -url https://m.zhuquan.xyz/mobile/
+          sleep 20
+          xcrun simctl io "$UDID" screenshot shot-3-live-shell.png
 
       - name: 收集日志
         if: always()
         run: |
           UDID='${{ steps.sim.outputs.udid }}'
-          xcrun simctl spawn "$UDID" log show --last 3m --predicate "process == 'DshMobile'" --style compact > app.log 2>&1 || true
-          tail -60 app.log || true
+          xcrun simctl spawn "$UDID" log show --last 5m --predicate "process == 'DshMobile'" --style compact > app.log 2>&1 || true
+          tail -40 app.log || true
+
+      # 4) 假电脑端：配对链路端到端（原生码注入 → 页面配对 → 外壳察觉已配对 → 落盘）
+      - name: 配对 E2E（假电脑端）
+        id: e2e
+        run: |
+          set -euo pipefail
+          UDID='${{ steps.sim.outputs.udid }}'
+          python3 .github/scripts/mock_bridge.py "$MOCK_PORT" > mock.log 2>&1 &
+          echo $! > mock.pid
+          sleep 2
+          curl -sS -o /dev/null -w 'mock: %{http_code}\n' "http://127.0.0.1:$MOCK_PORT/mobile/"
+
+          xcrun simctl launch --terminate-running-process "$UDID" "$APP_ID" \
+            -url "http://127.0.0.1:$MOCK_PORT/mobile/" -paircode "$MOCK_CODE"
+          sleep 16
+          xcrun simctl io "$UDID" screenshot shot-4-paired.png
+
+          DATA=$(xcrun simctl get_app_container "$UDID" "$APP_ID" data)
+          PLIST="$DATA/Library/Preferences/$APP_ID.plist"
+          echo "--- UserDefaults ---"
+          plutil -p "$PLIST" || true
+          if plutil -p "$PLIST" | grep -q "http://127.0.0.1:$MOCK_PORT/mobile/"; then
+            echo "PAIRING_OK=1" >> "$GITHUB_OUTPUT"
+            echo "✅ 配对成功且 baseURL 已落盘"
+          else
+            echo "PAIRING_OK=0" >> "$GITHUB_OUTPUT"
+            echo "❌ 没看到配对成功的落盘记录"
+            exit 1
+          fi
+
+      # 5) 冷启动记忆：不带参数也直接进外壳
+      - name: 冷启动记忆截图
+        run: |
+          set -euo pipefail
+          UDID='${{ steps.sim.outputs.udid }}'
+          xcrun simctl terminate "$UDID" "$APP_ID" || true
+          xcrun simctl launch "$UDID" "$APP_ID"
+          sleep 10
+          xcrun simctl io "$UDID" screenshot shot-5-relaunch.png
+
+      # 6) 断网/电脑端不在线：原生故障卡
+      - name: 故障态截图
+        run: |
+          set -euo pipefail
+          UDID='${{ steps.sim.outputs.udid }}'
+          kill "$(cat mock.pid)" 2>/dev/null || true
+          sleep 1
+          xcrun simctl launch --terminate-running-process "$UDID" "$APP_ID" \
+            -url "http://127.0.0.1:$MOCK_PORT/mobile/"
+          sleep 12
+          xcrun simctl io "$UDID" screenshot shot-6-offline.png
 
       - name: 上传产物
         if: always()
@@ -105,21 +186,31 @@ jobs:
           path: |
             shot-*.png
             app.log
+            mock.log
             ios/build.log
           if-no-files-found: warn
 
-      - name: 附到 Release（可选）
-        if: github.event_name == 'push' || inputs.tag != ''
+      - name: 附到 Release
+        if: always() && (github.event_name == 'release' || inputs.tag != '' || startsWith(github.ref, 'refs/tags/ios-'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           TAG='${{ inputs.tag }}'
+          if [ -z "$TAG" ] && [ '${{ github.event_name }}' = 'release' ]; then
+            TAG='${{ github.event.release.tag_name }}'
+          fi
           if [ -z "$TAG" ]; then TAG='${{ github.ref_name }}'; fi
+          if [ '${{ steps.e2e.outputs.PAIRING_OK }}' != '1' ] && [ '${{ github.event_name }}' = 'release' ]; then
+            echo "配对 E2E 未通过，拒绝往 Release 附包"; exit 1
+          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             cd ios/build/Build/Products/Debug-iphonesimulator
-            zip -qry "/tmp/dsh-mobile-ios-simulator-${TAG}.zip" DshMobile.app
-            gh release upload "$TAG" "/tmp/dsh-mobile-ios-simulator-${TAG}.zip" --clobber
+            NAME="dsh-mobile-ios-simulator-${TAG}.zip"
+            zip -qry "/tmp/$NAME" DshMobile.app
+            shasum -a 256 "/tmp/$NAME" > "/tmp/$NAME.sha256"
+            gh release upload "$TAG" "/tmp/$NAME" "/tmp/$NAME.sha256" --clobber
+            echo "已附到 $TAG：$NAME"
           else
             echo "Release $TAG 不存在，跳过"
           fi

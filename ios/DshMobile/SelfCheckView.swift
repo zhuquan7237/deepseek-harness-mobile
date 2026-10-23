@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import WebKit
 
 /// 自检页：证明"这台模拟器 + 这个包 + 这条网络"三件事都是真的。
 /// 每个值都来自运行时（Bundle / ProcessInfo / WKWebView 的 DOM 计数），
@@ -8,8 +9,7 @@ struct SelfCheckView: View {
     @StateObject private var probe = WebProbe()
 
     private var deviceName: String {
-        ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"]
-            ?? UIDevice.current.name
+        ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] ?? UIDevice.current.name
     }
 
     private var runtime: String {
@@ -45,12 +45,12 @@ struct SelfCheckView: View {
                         row("架构", archText)
                     }
                     section("网页端 · WKWebView") {
-                        row("目标", probe.target.isEmpty ? AppConfig.mobileURL.absoluteString : probe.target)
+                        row("目标", probe.target.isEmpty ? AppConfig.defaultBase.absoluteString : probe.target)
                         row("状态", probe.phase)
                         row("导航", "\(probe.navigations) 次")
                         row("DOM 节点", probe.domNodes < 0 ? "—" : "\(probe.domNodes)")
                         row("正文长度", probe.textLength < 0 ? "—" : "\(probe.textLength) 字")
-                        if !probe.detail.isEmpty && probe.phase != "已加载" {
+                        if probe.phase == "失败" && !probe.detail.isEmpty {
                             row("错误", probe.detail, tone: .danger)
                         }
                     }
@@ -78,8 +78,7 @@ struct SelfCheckView: View {
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(Ink.gold.opacity(0.45), lineWidth: 0.6)
+                        RoundedRectangle(cornerRadius: 4).stroke(Ink.gold.opacity(0.45), lineWidth: 0.6)
                     )
             }
             Text("模拟器自检 · 环境、构建与网页端渲染")
@@ -103,15 +102,13 @@ struct SelfCheckView: View {
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(1.2)
                 .foregroundStyle(Ink.textTertiary)
-            VStack(spacing: 0) {
-                content()
-            }
-            .background(Ink.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Ink.divider.opacity(0.7), lineWidth: 0.6)
-            )
+            VStack(spacing: 0) { content() }
+                .background(Ink.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Ink.divider.opacity(0.7), lineWidth: 0.6)
+                )
         }
     }
 
@@ -152,7 +149,7 @@ struct SelfCheckView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Ink.textTertiary.opacity(0.8))
             }
-            WebView(url: AppConfig.mobileURL, probe: probe)
+            ProbeWebView(url: AppConfig.defaultBase, probe: probe)
                 .frame(height: 300)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
@@ -166,7 +163,6 @@ struct SelfCheckView: View {
         Text("在 GitHub macOS runner 上由 xcrun simctl 实机启动；截图即验收。")
             .font(.system(size: 11))
             .foregroundStyle(Ink.textTertiary.opacity(0.85))
-            .padding(.top, 2)
     }
 
     private var screenText: String {
@@ -183,4 +179,62 @@ struct SelfCheckView: View {
         return "unknown"
         #endif
     }
+}
+
+// MARK: - 探针
+
+final class WebProbe: NSObject, ObservableObject, WKNavigationDelegate {
+    @Published var phase: String = "未开始"
+    @Published var target: String = ""
+    @Published var detail: String = ""
+    @Published var navigations: Int = 0
+    @Published var domNodes: Int = -1
+    @Published var textLength: Int = -1
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        navigations += 1
+        phase = "加载中"
+        target = webView.url?.absoluteString ?? target
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        phase = "已加载"
+        target = webView.url?.absoluteString ?? target
+        webView.evaluateJavaScript(
+            "JSON.stringify({n: document.querySelectorAll('*').length, t: (document.body ? document.body.innerText.length : 0)})"
+        ) { [weak self] value, _ in
+            guard let self, let json = value as? String, let data = json.data(using: .utf8),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            self.domNodes = dict["n"] as? Int ?? -1
+            self.textLength = dict["t"] as? Int ?? -1
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        phase = "失败"
+        detail = error.localizedDescription
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        phase = "失败"
+        detail = error.localizedDescription
+    }
+}
+
+struct ProbeWebView: UIViewRepresentable {
+    let url: URL
+    let probe: WebProbe
+
+    func makeUIView(context: Context) -> WKWebView {
+        let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        webView.navigationDelegate = probe
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.isOpaque = false
+        webView.backgroundColor = UIColor(Ink.bg)
+        webView.load(URLRequest(url: url))
+        return webView
+    }
+
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
