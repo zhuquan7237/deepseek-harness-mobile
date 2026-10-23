@@ -1,0 +1,125 @@
+name: ios.yml
+# 说明：iOS 只能在没有 Xcode 的机器外构建。这份流水线把 GitHub 的 macOS runner
+# 当成"云 Mac"：真 xcodegen 生成工程 → 真 xcrun simctl 起模拟器 → 装包 → 截图，
+# 产物（截图 + .app）作为 artifact 回传，供本机核验。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "可选：把产物附到某个已存在的 Release tag 上"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "ios-*"
+      - "v*"
+
+jobs:
+  simulator:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      APP_ID: com.dsh.mobile.ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 工具链版本
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes
+          swift --version
+
+      - name: 安装 xcodegen
+        run: brew install xcodegen
+
+      - name: 生成 Xcode 工程
+        run: |
+          cd ios
+          xcodegen generate
+          ls -la
+
+      - name: 构建模拟器包
+        run: |
+          set -o pipefail
+          cd ios
+          xcodebuild \
+            -project DshMobile.xcodeproj \
+            -scheme DshMobile \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee build.log | grep -E 'error:|warning: .*(deprecated|unused)|BUILD' || true
+          if ! grep -q 'BUILD SUCCEEDED' build.log; then
+            echo '--- 构建失败，最后 200 行 ---'
+            tail -200 build.log
+            exit 1
+          fi
+
+      - name: 起模拟器
+        id: sim
+        run: |
+          set -euo pipefail
+          echo '--- 公网可达性 ---'
+          curl -sS -o /dev/null -w 'mobile page: %{http_code}  %{time_total}s\n' --max-time 30 https://m.zhuquan.xyz/mobile || true
+          UDID=$(xcrun simctl list devices available | awk -F'[()]' '/iPhone/ {print $2; exit}')
+          if [ -z "$UDID" ]; then echo "没有可用的 iPhone 模拟器"; xcrun simctl list devices available; exit 1; fi
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl status_bar "$UDID" override --time '9:41' --batteryState charged --batteryLevel 100
+          xcrun simctl list devices | grep "$UDID"
+
+      - name: 装包并启动（自检页）
+        run: |
+          set -euo pipefail
+          UDID='${{ steps.sim.outputs.udid }}'
+          APP=$(find ios/build -name 'DshMobile.app' -type d | head -1)
+          echo "app=$APP"
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" "$APP_ID"
+          sleep 6
+          xcrun simctl io "$UDID" screenshot shot-1-selfcheck.png
+
+      - name: 启动到网页外壳（WKWebView 实测）
+        run: |
+          set -euo pipefail
+          UDID='${{ steps.sim.outputs.udid }}'
+          xcrun simctl launch --terminate-running-process "$UDID" "$APP_ID" -autoweb
+          sleep 25
+          xcrun simctl io "$UDID" screenshot shot-2-webview.png
+
+      - name: 收集日志
+        if: always()
+        run: |
+          UDID='${{ steps.sim.outputs.udid }}'
+          xcrun simctl spawn "$UDID" log show --last 3m --predicate "process == 'DshMobile'" --style compact > app.log 2>&1 || true
+          tail -60 app.log || true
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-${{ github.run_number }}
+          path: |
+            shot-*.png
+            app.log
+            ios/build.log
+          if-no-files-found: warn
+
+      - name: 附到 Release（可选）
+        if: github.event_name == 'push' || inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG='${{ inputs.tag }}'
+          if [ -z "$TAG" ]; then TAG='${{ github.ref_name }}'; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            cd ios/build/Build/Products/Debug-iphonesimulator
+            zip -qry "/tmp/dsh-mobile-ios-simulator-${TAG}.zip" DshMobile.app
+            gh release upload "$TAG" "/tmp/dsh-mobile-ios-simulator-${TAG}.zip" --clobber
+          else
+            echo "Release $TAG 不存在，跳过"
+          fi

@@ -10,3 +10,8 @@ local.properties
 .kotlin/
 *.log
 app/build/
+
+# iOS（xcodegen 生成的中间产物，不入库）
+ios/build/
+ios/DshMobile.xcodeproj/
+ios/DshMobile/Info.plist

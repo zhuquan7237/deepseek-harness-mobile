@@ -1,0 +1,51 @@
+name: DshMobile
+options:
+  bundleIdPrefix: com.dsh
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGNING_ALLOWED: NO
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+targets:
+  DshMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: DshMobile
+        excludes:
+          - "Info.plist"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dsh.mobile.ios
+        PRODUCT_NAME: DshMobile
+        MARKETING_VERSION: "0.5.4"
+        CURRENT_PROJECT_VERSION: "110"
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_FILE: DshMobile/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_EMIT_LOC_STRINGS: NO
+    info:
+      path: DshMobile/Info.plist
+      properties:
+        CFBundleDisplayName: DSH
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIUserInterfaceStyle: Dark
+        ITSAppUsesNonExemptEncryption: false
+        NSCameraUsageDescription: 扫描电脑端的配对二维码，配对后即可连接你的电脑。
+        NSLocalNetworkUsageDescription: 连接同一 Wi-Fi 下的电脑端 DeepSeek Harness。
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
