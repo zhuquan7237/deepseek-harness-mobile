@@ -109,26 +109,41 @@ final class ShellController: NSObject, ObservableObject {
     }
 
     private func checkPaired() {
-        // 注意：不能只看 DOM 里有没有 #pair-go —— 网页端可能只是把整个配对容器
-        // 隐藏起来（display:none），节点仍在文档里。用 offsetParent 判断"真的不可见"。
+        // 两个坑：
+        // ① 不能只看节点存在——网页端可能把配对容器隐藏起来（display:none），
+        //    节点仍在文档里，所以用 offsetParent 判断"真的可见"。
+        // ② didFinish 时 app.js 还在 await 初始化，配对表单可能尚未渲染；此时若
+        //    直接把"没有表单"当成已配对，会把默认域名错当成本机 baseURL 落盘。
+        //    所以再加一条"页面确实有内容"的条件，两条同时满足才算已配对。
         webView.evaluateJavaScript(
-            "(function(){var el=document.getElementById('pair-go');"
-            + "if(!el){return 'paired';}"
-            + "return el.offsetParent===null?'paired':'pairing';})();"
+            Self.pairedProbeScript
         ) { [weak self] value, _ in
             guard let self, let state = value as? String else { return }
             if state == "paired" {
                 self.finishPairing()
-            } else if Date() > self.pollDeadline {
+            } else if self.pendingCode != nil, Date() > self.pollDeadline {
                 self.stopPolling()
                 self.phase = .failed("配对码可能已过期或网络不通，请重新配对")
+            } else if self.pendingCode == nil, Date() > self.pollDeadline {
+                // 被动检查（已配对过的用户）：页面是它自己的事，别再猜了。
+                self.stopPolling()
             }
         }
     }
 
+    private static let pairedProbeScript = """
+    (function(){
+      var form = document.getElementById('pair-code') || document.getElementById('pair-go');
+      if (form && form.offsetParent !== null) { return 'pairing'; }
+      var text = document.body ? document.body.innerText.trim() : '';
+      if (text.length > 20) { return 'paired'; }
+      return 'unknown';
+    })();
+    """
+
     private func startPollingForPaired() {
         stopPolling()
-        pollDeadline = Date().addingTimeInterval(30)
+        pollDeadline = Date().addingTimeInterval(pendingCode == nil ? 20 : 30)
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: true) { [weak self] _ in
             self?.checkPaired()
         }
@@ -141,8 +156,10 @@ final class ShellController: NSObject, ObservableObject {
 
     private func finishPairing() {
         stopPolling()
+        let wasPairing = pendingCode != nil
         pendingCode = nil
-        if !paired {
+        // 只有"刚配对成功"才落盘；被动检查不改写已有配置（否则会把默认域名写成 baseURL）。
+        if wasPairing && !paired {
             paired = true
             phase = .ready
             onPaired?()

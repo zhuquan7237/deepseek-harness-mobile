@@ -22,6 +22,8 @@
 #   5. 写 app-update.json（手机端自更新的清单文件）
 #   6. commit "release vVERSION"、打标签 vVERSION、推送 master 与标签
 #   7. gh release create 发布 GitHub Release 并附带 APK
+#   8. 等 GitHub Actions 的 macOS runner 把 iOS 模拟器包附到同一个 Release
+#      （iOS 只能在 macOS 上编，见 .github/workflows/ios.yml）
 #
 set -euo pipefail
 
@@ -203,6 +205,26 @@ done
 printf '==> 发布 GitHub Release\n'
 gh release create "v$VERSION" "$APK" --title "v$VERSION" --notes "$NOTES"
 
+# ---------------------------------------------------------------- 7b. iOS 产物
+# iOS 只能在 macOS 上编，所以由 GitHub Actions（.github/workflows/ios.yml）在
+# release: published 事件里用 macOS runner 出模拟器包，版本号与 Android 同源，
+# 产物附到同一个 Release。这里等它落地，避免"发了版但 iOS 没跟上"。
+printf '==> 等待 iOS 产物（GitHub Actions macOS runner，约 6-8 分钟）\n'
+IOS_ASSET="dsh-mobile-ios-simulator-v$VERSION.zip"
+IOS_OK=0
+for _ in $(seq 1 40); do
+    if gh release view "v$VERSION" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$IOS_ASSET"; then
+        IOS_OK=1
+        break
+    fi
+    sleep 20
+done
+if [ "$IOS_OK" = "1" ]; then
+    printf '==> iOS 产物已附上：%s\n' "$IOS_ASSET"
+else
+    printf '!! iOS 产物 13 分钟内没出现（不影响 Android 发布）。查看：\n   https://github.com/%s/actions/workflows/ios.yml\n' "$REPO_SLUG"
+fi
+
 # ---------------------------------------------------------------- 8. 汇总
 cat <<EOF
 
@@ -213,5 +235,6 @@ cat <<EOF
   sha256      : $SHA256
   公网下载    : $APK_URL
   GitHub 发布 : https://github.com/$REPO_SLUG/releases/tag/v$VERSION
+  iOS 模拟器包: $IOS_ASSET（同一 Release；$IOS_OK=1 表示已到位）
   更新清单    : $PUBLISH_DIR/app-update.json
 EOF
