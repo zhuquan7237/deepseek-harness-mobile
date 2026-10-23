@@ -194,6 +194,14 @@ jobs:
           sleep 12
           xcrun simctl io "$UDID" screenshot shot-6-offline.png
 
+      - name: 桌面图标截图
+        run: |
+          set -euo pipefail
+          UDID='${{ steps.sim.outputs.udid }}'
+          xcrun simctl terminate "$UDID" "$APP_ID" || true
+          sleep 3
+          xcrun simctl io "$UDID" screenshot shot-7-home.png
+
       - name: 上传产物
         if: always()
         uses: actions/upload-artifact@v4

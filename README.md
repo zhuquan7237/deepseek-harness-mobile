@@ -28,6 +28,13 @@ https://m.zhuquan.xyz/mobile/dsh-mobile.apk
 
 装之前请在手机上允许「安装未知来源应用」。系统要求 Android 8.0（API 26）及以上。
 
+## iOS
+
+iOS 版是**原生外壳 + 网页端**（SwiftUI + WKWebView），与 Android 同版本号、同一次发布：
+GitHub Release 里除了 APK，还附 `dsh-mobile-ios-simulator-v<版本>.zip`（含 `.app`）。
+iOS 没有 Mac 也能编：由 GitHub Actions 的 macOS runner 构建并在真 iOS 模拟器里跑完配对
+E2E 再上传。流水线、验收截图与已知限制见 [docs/ios.md](docs/ios.md)。
+
 ## 配对流程
 
 1. 电脑端打开 DeepSeek Harness 的**设置 → 移动端（配对地址）**，点「生成配对码」，得到一个 5 分钟内有效的配对码（也可以直接复制配对链接）。
