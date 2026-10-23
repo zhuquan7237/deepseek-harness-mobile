@@ -254,7 +254,29 @@ extension ShellController: WKNavigationDelegate {
         let ns = error as NSError
         // 取消（-999）是正常打断，不当故障
         if ns.code == NSURLErrorCancelled { return }
-        phase = .failed(ns.localizedDescription)
+        phase = .failed(Self.describe(ns))
+    }
+
+    /// 系统错误文案是英文的（"Could not connect to the server."），直接塞进中文卡片
+    /// 很割裂；这里按语义换成人话，未覆盖的只留错误码。
+    private static func describe(_ error: NSError) -> String {
+        switch error.code {
+        case NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed:
+            return "电脑端没有响应——服务没启动，或地址已经变了"
+        case NSURLErrorTimedOut:
+            return "连接超时，电脑端可能刚睡醒或网络不稳定"
+        case NSURLErrorNotConnectedToInternet:
+            return "这台设备现在没有网络"
+        case NSURLErrorNetworkConnectionLost:
+            return "网络中断了，连接被掐断"
+        case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted,
+             NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateNotYetValid:
+            return "安全连接建立失败——域名或证书有问题"
+        case NSURLErrorBadURL, NSURLErrorUnsupportedURL:
+            return "地址格式不对"
+        default:
+            return "连接失败（网络错误 \(error.code)）"
+        }
     }
 }
 
@@ -352,9 +374,9 @@ struct ShellView: View {
                     .font(.system(size: 13))
                     .lineSpacing(3)
                     .foregroundStyle(Ink.textSecondary)
-                Text("确认电脑上的 DeepSeek Harness 在运行；换了网络就重新扫一次二维码。")
+                Text("确认电脑上的 DeepSeek Harness 正在运行。\n换过网络或重启过电脑，重新扫一次二维码。")
                     .font(.system(size: 12.5))
-                    .lineSpacing(3)
+                    .lineSpacing(4)
                     .foregroundStyle(Ink.textTertiary)
                 HStack(spacing: 10) {
                     Button("重试") { shell.reload() }
