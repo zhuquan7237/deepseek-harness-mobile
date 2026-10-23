@@ -35,6 +35,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 读取版本号（与 Android 同源）
+        id: ver
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -oE 'versionName = "[^"]+"' app/build.gradle.kts | head -1 | sed -E 's/.*"(.*)"/\1/')
+          CODE=$(grep -oE 'versionCode = [0-9]+' app/build.gradle.kts | head -1 | awk '{print $3}')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Android 同源版本：$VERSION ($CODE)"
+
       - name: 工具链版本
         run: |
           xcodebuild -version
@@ -61,6 +71,8 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION='${{ steps.ver.outputs.version }}' \
+            CURRENT_PROJECT_VERSION='${{ steps.ver.outputs.code }}' \
             build 2>&1 | tee build.log | grep -E 'error:|warning: .*(deprecated|unused)|BUILD' || true
           if ! grep -q 'BUILD SUCCEEDED' build.log; then
             echo '--- 构建失败，最后 200 行 ---'
@@ -146,8 +158,12 @@ jobs:
           DATA=$(xcrun simctl get_app_container "$UDID" "$APP_ID" data)
           PLIST="$DATA/Library/Preferences/$APP_ID.plist"
           echo "--- UserDefaults ---"
+          for _ in $(seq 1 20); do
+            [ -f "$PLIST" ] && break
+            sleep 1
+          done
           plutil -p "$PLIST" || true
-          if plutil -p "$PLIST" | grep -q "http://127.0.0.1:$MOCK_PORT/mobile/"; then
+          if plutil -p "$PLIST" 2>/dev/null | grep -q "http://127.0.0.1:$MOCK_PORT/mobile/"; then
             echo "PAIRING_OK=1" >> "$GITHUB_OUTPUT"
             echo "✅ 配对成功且 baseURL 已落盘"
           else
@@ -210,7 +226,7 @@ jobs:
             zip -qry "/tmp/$NAME" DshMobile.app
             shasum -a 256 "/tmp/$NAME" > "/tmp/$NAME.sha256"
             gh release upload "$TAG" "/tmp/$NAME" "/tmp/$NAME.sha256" --clobber
-            echo "已附到 $TAG：$NAME"
+            echo "已附到 $TAG：$NAME（iOS ${{ steps.ver.outputs.version }} / ${{ steps.ver.outputs.code }}）"
           else
             echo "Release $TAG 不存在，跳过"
           fi

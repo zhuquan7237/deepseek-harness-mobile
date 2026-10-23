@@ -76,7 +76,8 @@ PAGE = """<!doctype html>
       body: JSON.stringify({code: code, deviceName: 'iPhone', platform: 'ios'})
     }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function () {
-        document.getElementById('pairing').style.display = 'none';
+        var box = document.getElementById('pairing');
+        if (box) { box.remove(); }
         document.getElementById('sessions').style.display = 'block';
       })
       .catch(function () { alert('配对码不对'); });

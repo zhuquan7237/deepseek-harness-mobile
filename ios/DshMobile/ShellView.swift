@@ -109,8 +109,12 @@ final class ShellController: NSObject, ObservableObject {
     }
 
     private func checkPaired() {
+        // 注意：不能只看 DOM 里有没有 #pair-go —— 网页端可能只是把整个配对容器
+        // 隐藏起来（display:none），节点仍在文档里。用 offsetParent 判断"真的不可见"。
         webView.evaluateJavaScript(
-            "(function(){return document.getElementById('pair-go') ? 'pairing' : 'paired';})();"
+            "(function(){var el=document.getElementById('pair-go');"
+            + "if(!el){return 'paired';}"
+            + "return el.offsetParent===null?'paired':'pairing';})();"
         ) { [weak self] value, _ in
             guard let self, let state = value as? String else { return }
             if state == "paired" {
@@ -158,8 +162,9 @@ final class ShellController: NSObject, ObservableObject {
     (function(){
       function ensure(){
         var form = document.getElementById('pair-go');
+        var visible = form && form.offsetParent !== null;
         var btn = document.getElementById('dsh-scan');
-        if (!form) { if (btn) { btn.remove(); } return; }
+        if (!visible) { if (btn) { btn.remove(); } return; }
         if (btn) { return; }
         btn = document.createElement('button');
         btn.id = 'dsh-scan';

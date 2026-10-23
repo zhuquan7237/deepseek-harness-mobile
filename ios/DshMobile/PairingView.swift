@@ -23,25 +23,30 @@ struct PairingView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                Spacer(minLength: 26)
-                brand
-                headline
-                scanButton
-                if let formError {
-                    Text(formError)
-                        .font(.system(size: 12.5))
-                        .lineSpacing(2)
-                        .foregroundStyle(Ink.danger)
-                        .fixedSize(horizontal: false, vertical: true)
+        GeometryReader { geo in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    brand
+                        .padding(.top, 10)
+                    headline
+                        .padding(.top, 6)
+                    scanButton
+                    if let formError {
+                        Text(formError)
+                            .font(.system(size: 12.5))
+                            .lineSpacing(2)
+                            .foregroundStyle(Ink.danger)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    manualSection
+                    Spacer(minLength: 28)
+                    howto
                 }
-                manualSection
-                Spacer(minLength: 12)
-                howto
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+                // 内容不满一屏时也撑到屏底：帮助文案落到底部，避免中间出现一大块死白。
+                .frame(minHeight: geo.size.height, alignment: .top)
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 32)
         }
         .background(Ink.bg.ignoresSafeArea())
         .sheet(isPresented: $showScanner) {
@@ -127,12 +132,20 @@ struct PairingView: View {
                 withAnimation(.easeInOut(duration: 0.2)) { manualOpen.toggle() }
             } label: {
                 HStack(spacing: 6) {
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 12, weight: .medium))
                     Text("手动配对")
                         .font(.system(size: 13.5, weight: .medium))
                     Image(systemName: manualOpen ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 9, weight: .semibold))
                 }
-                .foregroundStyle(Ink.textTertiary)
+                .foregroundStyle(Ink.textSecondary)
+                .padding(.horizontal, 12)
+                .frame(height: 38)
+                .background(Ink.surface)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(Ink.divider.opacity(0.7), lineWidth: 0.7))
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
 
@@ -195,16 +208,29 @@ struct PairingView: View {
     }
 
     private var howto: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("怎么拿到二维码")
-                .font(.system(size: 11.5, weight: .semibold))
-                .tracking(1.1)
-                .foregroundStyle(Ink.textTertiary)
-            Text("电脑端打开 DeepSeek Harness → 设置 → 移动端，点「显示二维码」。配对码 5 分钟内有效。")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11.5, weight: .medium))
+                Text("怎么拿到二维码")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .tracking(0.8)
+            }
+            .foregroundStyle(Ink.textSecondary)
+            Text("电脑端：设置 → 移动端 → 显示二维码。\n配对码 5 分钟内有效；同一 Wi‑Fi 下也能直连。")
                 .font(.system(size: 12.5))
-                .lineSpacing(3)
-                .foregroundStyle(Ink.textTertiary.opacity(0.9))
+                .lineSpacing(4)
+                .foregroundStyle(Ink.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Ink.surface.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Ink.divider.opacity(0.5), lineWidth: 0.6)
+        )
     }
 
     private func submitManual() {
