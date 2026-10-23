@@ -17,4 +17,4 @@ ios/DshMobile.xcodeproj/
 ios/DshMobile/Info.plist
 
 # iOS 模拟器产物
-ios-art/
+ios-art*/
