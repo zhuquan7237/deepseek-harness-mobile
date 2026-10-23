@@ -239,7 +239,7 @@ jobs:
             zip -qry "/tmp/$NAME" DshMobile.app
             shasum -a 256 "/tmp/$NAME" > "/tmp/$NAME.sha256"
             gh release upload "$TAG" "/tmp/$NAME" "/tmp/$NAME.sha256" --clobber
-            echo "已附到 $TAG：$NAME（iOS ${{ steps.ver.outputs.version }} / ${{ steps.ver.outputs.code }}）"
+            echo "已附到 ${TAG}：${NAME}（iOS ${{ steps.ver.outputs.version }} / ${{ steps.ver.outputs.code }}）"
           else
             echo "Release $TAG 不存在，跳过"
           fi
