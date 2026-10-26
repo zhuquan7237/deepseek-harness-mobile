@@ -237,6 +237,21 @@ for _ in $(seq 1 40); do
 done
 if [ "$IOS_OK" = "1" ]; then
     printf '==> iOS 产物已附上：%s\n' "$IOS_ASSET"
+    # AltStore/SideStore 的源清单也放到站点与镜像上，用户加一次源就能一键装/更新。
+    IOS_SRC_TMP="$(mktemp -d)"
+    if gh release download "v$VERSION" -p "ios-source.json" -D "$IOS_SRC_TMP" 2>/dev/null; then
+        cp -f "$IOS_SRC_TMP/ios-source.json" "$PUBLISH_DIR/ios-source.json"
+        printf '==> 已写入 %s/ios-source.json（源地址 https://m.zhuquan.xyz/mobile/ios-source.json）\n' "$PUBLISH_DIR"
+        [ -d "$REPO_APP_DIR" ] && cp -f "$PUBLISH_DIR/ios-source.json" "$REPO_APP_DIR/ios-source.json"
+        if [ -f "$MIRROR_KEY" ]; then
+            scp -i "$MIRROR_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 \
+                "$PUBLISH_DIR/ios-source.json" "$MIRROR_HOST:/opt/dsh-relay/dl/ios-source.json" 2>/dev/null \
+                && printf '==> iOS 源已同步到镜像 /dl/\n' \
+                || printf '!! iOS 源镜像同步失败（不阻断发布）\n'
+        fi
+    else
+        printf '!! 没能取到 ios-source.json（不阻断发布）\n'
+    fi
 else
     printf '!! iOS 产物 13 分钟内没出现（不影响 Android 发布）。查看：\n   https://github.com/%s/actions/workflows/ios.yml\n' "$REPO_SLUG"
 fi

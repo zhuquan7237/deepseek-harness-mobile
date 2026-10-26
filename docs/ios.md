@@ -74,23 +74,72 @@ CI 里读出来注入 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`，所以 i
 Android 永远同版本。
 
 `scripts/release.sh` 发布 Android 后，GitHub 的 `release: published` 事件会触发
-iOS 流水线，把 `dsh-mobile-ios-simulator-v<版本>.zip`（含 `simctl` 可直接安装的
-`.app`）与 sha256 附到同一个 Release；脚本会等它落地再打印汇总。
+iOS 流水线，把下面这些附到同一个 Release，脚本会等它们落地再打印汇总：
+
+| 资产 | 用途 |
+| --- | --- |
+| `dsh-mobile-ios-simulator-v<版本>.zip` | 模拟器包（`simctl` 直接装，用于验收） |
+| `dsh-mobile-ios-unsigned-<版本>.ipa` | **未签名真机包**（arm64），供 AltStore / SideStore / Sideloadly 用你自己的 Apple ID 重签 |
+| `ios-source.json` | AltStore / SideStore 软件源清单（发布到 `https://m.zhuquan.xyz/mobile/ios-source.json`，镜像 `https://relay.zhuquan.xyz/dl/ios-source.json`） |
 
 安装到模拟器（需要一台 Mac）：
 
 ```bash
-unzip dsh-mobile-ios-simulator-v0.5.4.zip
+unzip dsh-mobile-ios-simulator-v0.5.5.zip
 xcrun simctl boot "iPhone 16 Pro"
 xcrun simctl install booted DshMobile.app
 xcrun simctl launch booted com.dsh.mobile.ios
 ```
 
+## 真机侧载与「7 天心跳」续签
+
+### 三条硬限制（Apple 的策略，不是工具的锅）
+
+- 免费个人团队证书 **7 天**过期；同时最多 **3 个**自签 App；每 7 天最多 **10 个** App ID。
+- 证书是**用每个用户自己的 Apple ID** 签发的，只能签该账号名下的设备 →
+  **开发者无法替别人的手机续签**：免费账号下不存在"我这边统一更新"。
+- iOS **不允许 App 自我更新**（没有自替换 API），所以"App 自己更新自己"的方案不成立；
+  必须由设备上的某个东西定期**重新签名**。
+
+### 路线一：SideStore + 快捷指令自动化（推荐，用户几乎零动作）
+
+一次性（需要一台电脑）：
+
+1. 电脑装 AltServer（Windows 要先装**非商店版** iTunes + iCloud），用它生成**配对文件**；
+2. 用 AltServer sideload `SideStore.ipa` 到手机；
+3. App Store 装 LocalDevVPN（原 StosVPN / WireGuard），导入 `SideStore.conf`；
+4. SideStore 里加源 `https://m.zhuquan.xyz/mobile/ios-source.json` → 安装 DSH Mobile。
+
+之后的"心跳"（用户不用再管 7 天）：
+
+- iOS「快捷指令 → 自动化 → 充电器连接时」：**打开 VPN → SideStore Refresh All → 关闭 VPN**。
+  这样每天充电时就自动续签一次。
+- 注意：刷新需要 **Wi-Fi**（loopback VPN 在蜂窝网络下不可用）；配对文件失效后要重做一次。
+
+### 路线二：AltStore + AltServer 常驻电脑
+
+- 电脑与手机同一 Wi-Fi，AltServer 常驻（登录自启、防火墙放行），手机 AltStore 里
+  「Refresh All」；仍是约 7 天一次，而且后台刷新不可靠，常要手动点一下。
+
+### 路线三：TestFlight（$99/年，唯一真正零动作）
+
+- 构建 **90 天**有效，用户在 TestFlight 打开「自动更新」后完全不用管；
+- 外部测试者首次安装要过 Beta App Review；需要付费开发者账号。
+
+### 我们负责什么 / 用户负责什么
+
+| | 我们 | 用户 |
+| --- | --- | --- |
+| 出包 | CI 出未签名 ipa + 源清单，随版本发布 | — |
+| 安装 | — | 一次性：SideStore + 配对文件（需一台电脑） |
+| 续签 | — | 零动作（快捷指令自动化）或 7 天点一次刷新 |
+| 想彻底零动作 | — | $99/年走 TestFlight |
+
 ## 已知限制
 
-- **真机分发**：没有 Apple 开发者账号时，签名只在模拟器有效。真机长期可用要么
-  $99/年 走 TestFlight，要么免费 Apple ID 侧载（7 天重签一次）。这是取舍，不做默认。
 - **模拟器没有摄像头**：扫码路径在模拟器里会提示「没有可用摄像头」，走手填路径；
   真机不受影响。
 - **换网络/换地址**：网页端的 token 存在 origin 的 IndexedDB 里，换域名就要重新
   配对（外壳会自动判断二维码与当前页面是否同源）。
+- **未签名 ipa 没在真机跑过**：CI 只能验证它是 arm64 设备切片、无签名、Info.plist 版本正确；
+  真机能否启动取决于用户重签是否成功。
