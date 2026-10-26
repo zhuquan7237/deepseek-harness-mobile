@@ -207,6 +207,80 @@ jobs:
           sleep 3
           xcrun simctl io "$UDID" screenshot shot-7-home.png
 
+      - name: 构建未签名真机 ipa（供 AltStore / SideStore / Sideloadly 重签）
+        run: |
+          set -o pipefail
+          cd ios
+          xcodebuild \
+            -project DshMobile.xcodeproj \
+            -scheme DshMobile \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build-device \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION='${{ steps.ver.outputs.version }}' \
+            CURRENT_PROJECT_VERSION='${{ steps.ver.outputs.code }}' \
+            build 2>&1 | tee build-device.log | tail -25
+          APP=$(find build-device -name 'DshMobile.app' -type d | head -1)
+          if [ -z "$APP" ]; then echo '真机包没构建出来'; tail -80 build-device.log; exit 1; fi
+          echo "--- 架构（必须是 arm64 设备切片）---"
+          lipo -archs "$APP/DshMobile"
+          echo "--- 签名状态（应为 unsigned）---"
+          codesign -dv "$APP" 2>&1 | head -3 || true
+          rm -rf /tmp/ipa && mkdir -p /tmp/ipa/Payload
+          cp -R "$APP" /tmp/ipa/Payload/
+          (cd /tmp/ipa && zip -qry "$GITHUB_WORKSPACE/dsh-mobile-ios-unsigned-${{ steps.ver.outputs.version }}.ipa" Payload)
+          ls -l "$GITHUB_WORKSPACE"/*.ipa
+
+      - name: 生成 AltStore / SideStore 软件源
+        run: |
+          set -euo pipefail
+          VER='${{ steps.ver.outputs.version }}'
+          IPA="dsh-mobile-ios-unsigned-$VER.ipa"
+          SIZE=$(wc -c < "$IPA" | tr -d '[:space:]')
+          TAG='${{ github.ref_name }}'
+          if [ '${{ github.event_name }}' = 'release' ]; then TAG='${{ github.event.release.tag_name }}'; fi
+          if [ -n '${{ inputs.tag }}' ]; then TAG='${{ inputs.tag }}'; fi
+          [ -n "$TAG" ] || TAG="v$VER"
+          BASE="https://github.com/zhuquan7237/deepseek-harness-mobile/releases/download/$TAG"
+          python3 - "$VER" "$SIZE" "$BASE" <<'PY'
+          import datetime, json, sys
+          ver, size, base = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+          doc = {
+            "name": "DeepSeek Harness",
+            "identifier": "xyz.zhuquan.dsh.source",
+            "subtitle": "电脑端 Harness 的随身控制器（自签版）",
+            "description": "扫码配对后看会话、发提示词、切模型。用免费 Apple ID 自签安装："
+                           "证书 7 天过期，靠 SideStore 自动刷新或 AltStore 手动刷新续期。",
+            "iconURL": "https://m.zhuquan.xyz/mobile/icon-512.png",
+            "apps": [{
+              "name": "DSH Mobile",
+              "bundleIdentifier": "com.dsh.mobile.ios",
+              "developerName": "zhuquan7237",
+              "subtitle": "DeepSeek Harness 手机端",
+              "localizedDescription": "电脑端 Harness 的随身控制器：扫码配对、看会话、发提示词、切模型。",
+              "iconURL": "https://m.zhuquan.xyz/mobile/icon-512.png",
+              "tintColor": "D9B879",
+              "category": "utilities",
+              "version": ver,
+              "versionDate": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
+              "downloadURL": f"{base}/dsh-mobile-ios-unsigned-{ver}.ipa",
+              "size": size,
+              "versions": [{
+                "version": ver,
+                "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "downloadURL": f"{base}/dsh-mobile-ios-unsigned-{ver}.ipa",
+                "size": size,
+              }],
+            }],
+          }
+          doc["iconURL"] = "https://m.zhuquan.xyz/mobile/icon-512.png"
+          open("ios-source.json", "w", encoding="utf-8").write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+          print(json.dumps(doc, ensure_ascii=False)[:400])
+          PY
+          cat ios-source.json
+
       - name: 上传产物
         if: always()
         uses: actions/upload-artifact@v4
@@ -214,9 +288,12 @@ jobs:
           name: ios-simulator-${{ github.run_number }}
           path: |
             shot-*.png
+            *.ipa
+            ios-source.json
             app.log
             mock.log
             ios/build.log
+            ios/build-device.log
           if-no-files-found: warn
 
       - name: 附到 Release
@@ -239,7 +316,11 @@ jobs:
             zip -qry "/tmp/$NAME" DshMobile.app
             shasum -a 256 "/tmp/$NAME" > "/tmp/$NAME.sha256"
             gh release upload "$TAG" "/tmp/$NAME" "/tmp/$NAME.sha256" --clobber
-            echo "已附到 ${TAG}：${NAME}（iOS ${{ steps.ver.outputs.version }} / ${{ steps.ver.outputs.code }}）"
+            cd "$GITHUB_WORKSPACE"
+            IPA=$(ls dsh-mobile-ios-unsigned-*.ipa | head -1)
+            shasum -a 256 "$IPA" > "$IPA.sha256"
+            gh release upload "$TAG" "$IPA" "$IPA.sha256" ios-source.json --clobber
+            echo "已附到 ${TAG}：${NAME} + ${IPA} + ios-source.json（iOS ${{ steps.ver.outputs.version }} / ${{ steps.ver.outputs.code }}）"
           else
             echo "Release $TAG 不存在，跳过"
           fi
