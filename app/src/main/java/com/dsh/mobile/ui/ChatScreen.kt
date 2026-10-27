@@ -343,7 +343,9 @@ private fun ChatBody(state: AppState, repo: BridgeRepository, onBack: () -> Unit
     // 链接点击去向（0.4.6）：http(s) 交给浏览器；电脑上的文件路径 → 直接开预览。
     // 消息里的 [pelican-riding-bike.svg](D:\...) 这类链接、交付物卡片点击共用它。
     val openLink: (String) -> Unit = { link ->
-        val url = link.trim().removePrefix("file://")
+        // Markdown 允许把目标写成 <...>（路径含空格时常用）：`[文件](<D:/x.svg>)`。
+        // 链接正则会把尖括号一起带进来，这里先剥掉，否则会被当成「不在会话目录」。
+        val url = link.trim().removePrefix("file://").removeSurrounding("<", ">").trim()
         when {
             url.startsWith("http://", true) || url.startsWith("https://", true) ->
                 runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
@@ -3135,7 +3137,7 @@ private data class TaskPhase(val text: String, val warn: Boolean)
  * 「真在跑还是卡死」的答案，按信息新鲜度排序（0.4.8 重做：阈值从 150 秒收紧到
  * 20 秒软提示 / 60 秒警示，并覆盖「发出去了但上游一直没动静」的等待窗）：
  * ① 上游断线自动重试 → 「连接中断 · 第 2/5 次重试（上次尝试 4 分 28 秒）」（引擎 llm/retry）；
- * ② 还没有收到任何进度、已等待 ≥30 秒 → 「上游还没有开始响应」；
+ * ② 还没有收到任何模型侧产物（流式/消息/工具调用）、已等待 ≥30 秒 → 「上游还没有开始响应」；
  * ③ 有过进度（或任何事件）但安静 ≥60 秒 → 警示色；≥20 秒 → 软提示（模型或工具较慢）；
  * ④ 有计数 → 「模型正在输出/思考…」——计数不再随 12 秒过期消失，字数常驻度量行。
  * 新鲜度一律用**本地到达时间**（桥接帧的 at 是电脑时钟，跨设备比会漂）。
@@ -3151,13 +3153,13 @@ private fun taskPhaseOf(state: AppState, now: Long): TaskPhase? {
             val extra = if (state.taskAttemptMs >= 5000) "（上次尝试 ${spanText(state.taskAttemptMs)}）" else ""
             TaskPhase("${state.taskRetry}$extra", true)
         }
-        progressAt == 0L && waitedFor >= 30_000L ->
+        !state.taskResponded && waitedFor >= 30_000L ->
             TaskPhase("上游还没有开始响应 · 已等待 ${spanText(waitedFor)}", waitedFor >= 120_000L)
         quietFor >= 60_000L -> TaskPhase("已 ${spanText(quietFor)}没有新输出", true)
         quietFor >= 20_000L -> TaskPhase("已 ${spanText(quietFor)}没有新输出（模型或工具较慢）", false)
         state.taskChars > 0 -> TaskPhase("模型正在输出…", false)
-        state.taskReasonChars > 0 -> TaskPhase("模型正在思考…", false)
-        progressAt == 0L -> TaskPhase("已发送 · 等待模型响应", false)
+        state.taskReasonChars > 0 || state.thinking -> TaskPhase("模型正在思考…", false)
+        !state.taskResponded -> TaskPhase("已发送 · 等待模型响应", false)
         else -> TaskPhase("模型正在思考…", false)
     }
 }

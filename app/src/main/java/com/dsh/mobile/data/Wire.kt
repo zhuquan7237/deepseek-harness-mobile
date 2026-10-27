@@ -232,7 +232,9 @@ object Wire {
      */
     fun relativeInCwd(path: String, cwd: String): String? {
         if (path.isBlank() || cwd.isBlank()) return null
-        val p = path.removePrefix("file://").replace('\\', '/').trimEnd('/')
+        // Markdown `<...>` 包裹的目标会把尖括号带进来，先剥掉再比较。
+        val p = path.removePrefix("file://").trim().removeSurrounding("<", ">")
+            .replace('\\', '/').trimEnd('/')
         val c = cwd.replace('\\', '/').trimEnd('/')
         if (c.isEmpty() || !p.startsWith("$c/", ignoreCase = true)) return null
         val rel = p.substring(c.length + 1)
@@ -376,8 +378,12 @@ object Wire {
                     val images = rowImagesOf(data)
                     // The engine injects runtime context and skill reminders as
                     // user-role messages; a phone should not render them as if
-                    // the human typed them.
-                    if (text.isNotBlank() || images.isNotEmpty()) {
+                    // the human typed them. `source.kind` is the authoritative
+                    // marker — time-context snapshots have no distinguishing
+                    // prefix in the text itself.
+                    val sourceKind = data.optJSONObject("source")?.optString("kind").orEmpty()
+                    val injected = sourceKind.isNotEmpty() && sourceKind != "user"
+                    if (!injected && (text.isNotBlank() || images.isNotEmpty())) {
                         val notice = modelChangedNotice(text)
                         when {
                             notice != null -> rows.add(ChatRow(Role.NOTICE, notice))
@@ -786,6 +792,7 @@ object Wire {
     /** Engine-injected context that rides in on the user role. */
 fun isInjectedContext(text: String): Boolean =
         text.startsWith("Current runtime context.") ||
+            text.startsWith("Time sampled while preparing turn") ||
             text.startsWith("<system-reminder>") ||
             text.startsWith("<available_skills>")
 

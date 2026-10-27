@@ -164,6 +164,19 @@ class WireTest {
                 JSONObject().put(
                     "event",
                     JSONObject().put("type", "user/message")
+                        .put(
+                            "data",
+                            JSONObject()
+                                .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "Time sampled while preparing turn 1, step 1: 2026-10-27T15:11:34+08:00[Asia/Shanghai]\nBrowser time zone for this request: Asia/Shanghai.")))
+                                .put("source", JSONObject().put("kind", "time-context"))
+                                .put("role", "user"),
+                        ),
+                ),
+            )
+            .put(
+                JSONObject().put(
+                    "event",
+                    JSONObject().put("type", "user/message")
                         .put("data", JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "真正的用户消息")))),
                 ),
             )
@@ -173,6 +186,19 @@ class WireTest {
     }
 
     // ---------------------------------------------------------- session files
+
+    @Test
+    fun relativeInCwdStripsMarkdownAngleBrackets() {
+        assertEquals(
+            "pelican-bicycle.svg",
+            Wire.relativeInCwd("<D:/DeepSeek/pelican-bicycle.svg>", "D:\\DeepSeek"),
+        )
+        assertEquals(
+            "outputs/a b.svg",
+            Wire.relativeInCwd("<D:/DeepSeek/outputs/a b.svg>", "D:/DeepSeek"),
+        )
+        assertEquals(null, Wire.relativeInCwd("<D:/Other/x.svg>", "D:/DeepSeek"))
+    }
 
     @Test
     fun parsesSessionFiles() {

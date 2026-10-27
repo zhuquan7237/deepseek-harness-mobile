@@ -1339,6 +1339,7 @@ class BridgeRepository(context: Context) {
                 history = it.history + optimistic, running = true, sending = true, lastSendFailed = false,
                 runSince = sendNow, turnActivityAt = sendNow,
                 taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L,
+                taskResponded = false,
             )
         }
         return try {
@@ -1922,6 +1923,7 @@ class BridgeRepository(context: Context) {
                         runSince = startedAt, turnActivityAt = startedAt, stopping = false, stopRequestedAt = 0L,
                         stopAcked = false, stopSendFailed = false, streamedLive = false,
                         taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L,
+                        taskResponded = false,
                     )
                 }
             }
@@ -1958,10 +1960,13 @@ class BridgeRepository(context: Context) {
                     // live 不在这里清：已落库的由历史重载原子撤；失败/停止回合留下的
                     // 半截文字继续显示（用户看得到已生成的部分），下一个 turn/start 统一清场。
                     it.copy(running = false, thinking = false, thinkingSince = 0L, runSince = 0L, stopping = false, stopRequestedAt = 0L, stopAcked = false, stopSendFailed = false,
-                        taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L, turnActivityAt = 0L)
+                        taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L, turnActivityAt = 0L,
+                        taskResponded = false)
                 }
             }
             "assistant/chunk" -> {
+                // 有流式增量 = 上游确实开始吐了（哪怕这一轮桥接没发计数脉冲）。
+                _state.update { it.copy(taskResponded = true, turnActivityAt = System.currentTimeMillis()) }
                 // 0.4.6：有内容在流 = 之前那次重试已经出结果（成功开始输出），横幅立刻撤；
                 // 若这次尝试最终仍失败，新的 llm/retry 会把它重新设回来。
                 if (_state.value.taskRetry.isNotEmpty()) {
@@ -1981,6 +1986,9 @@ class BridgeRepository(context: Context) {
                 }
             }
             "assistant/message" -> {
+                // 消息落库本身就是上游已响应的铁证（工具轮之间尤其常见：
+                // 没有流式帧，只有最终 message+tool call）。
+                _state.update { it.copy(taskResponded = true, turnActivityAt = System.currentTimeMillis()) }
                 // 先把缓冲里不足一个节流窗口的流式尾巴落地（finish 冲刷），再安排重载。
                 flushLiveBuffer()
                 // 0.4.6：消息落地 = 之前那次重试已经过去（成功产出）；横幅立刻撤。
@@ -2018,11 +2026,18 @@ class BridgeRepository(context: Context) {
                 Wire.progressCounts(data)?.let { counts ->
                     val local = System.currentTimeMillis()
                     _state.update {
-                        it.copy(taskChars = counts.first, taskReasonChars = counts.second, taskProgressAt = local)
+                        it.copy(taskChars = counts.first, taskReasonChars = counts.second, taskProgressAt = local,
+                            taskResponded = true, turnActivityAt = local)
                     }
                 }
             }
-            "tool/call", "tool/result", "user/message",
+            "tool/call", "tool/result" -> {
+                // 工具调用/结果也是上游产物：模型已经在跑工具链，
+                // 不能再让界面说「上游还没有开始响应」。
+                _state.update { it.copy(taskResponded = true, turnActivityAt = System.currentTimeMillis()) }
+                scheduleHistoryReload()
+            }
+            "user/message",
             "agent/inbox/spliced",
             // 0.4.6：电脑摆出交付物 → 重载历史，聊天里立刻出现交付物卡
             "deliverables/presented" -> scheduleHistoryReload()
