@@ -242,6 +242,17 @@ object Wire {
         return rel
     }
 
+    /** 事件流可能断（重连/切网）时，历史轮询里的「本轮已有模型产物」判定。
+     *  只看最后一条用户消息之后的角色，避免把上一轮的回复算进来。 */
+    fun hasModelOutputSinceLastUser(rows: List<ChatRow>): Boolean {
+        val lastUser = rows.indexOfLast { it.who == Role.USER }
+        if (lastUser < 0) return false
+        return rows.drop(lastUser + 1).any {
+            it.who == Role.ASSISTANT || it.who == Role.TOOL || it.who == Role.REASONING ||
+                it.who == Role.ERROR || it.who == Role.TRUNCATED || it.who == Role.EMPTY_REPLY
+        }
+    }
+
     /** deliverables/presented 事件 → 交付文件列表（空路径与重复路径略过）。 */
     fun deliveredFilesOf(data: JSONObject): List<DeliveredFile> {
         val arr = data.optJSONArray("files") ?: return emptyList()

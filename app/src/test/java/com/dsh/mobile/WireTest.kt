@@ -201,6 +201,27 @@ class WireTest {
     }
 
     @Test
+    fun modelOutputAfterLastUserCountsAsResponse() {
+        assertFalse(Wire.hasModelOutputSinceLastUser(listOf(ChatRow(Role.USER, "hi"))))
+        assertTrue(
+            Wire.hasModelOutputSinceLastUser(
+                listOf(ChatRow(Role.USER, "hi"), ChatRow(Role.TOOL, "call…")),
+            ),
+        )
+        assertTrue(
+            Wire.hasModelOutputSinceLastUser(
+                listOf(ChatRow(Role.USER, "hi"), ChatRow(Role.ASSISTANT, "答案")),
+            ),
+        )
+        // 上一轮的回复不算：最后一条用户消息之后没有产物
+        assertFalse(
+            Wire.hasModelOutputSinceLastUser(
+                listOf(ChatRow(Role.ASSISTANT, "上一轮"), ChatRow(Role.USER, "新问题")),
+            ),
+        )
+    }
+
+    @Test
     fun parsesSessionFiles() {
         val items = JSONArray()
             .put(

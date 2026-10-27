@@ -1142,6 +1142,10 @@ class BridgeRepository(context: Context) {
             // 不是零成本，放在主线程解析就是「点进去顿一下」的来源。
             val parsed = withContext(Dispatchers.Default) { Wire.parseHistory(json, sid) }
             val selection = Wire.parseModelSelection(json)
+            // 事件流可能断（重连/切网）：这时界面靠 10 秒一次的历史轮询更新。
+            // 只要历史里「最后一条用户消息之后」已有模型产物，就说明上游早就响应了，
+            // 不能因为没收到实时帧而一直说「上游还没有开始响应」。
+            val respondedFromHistory = Wire.hasModelOutputSinceLastUser(parsed.rows)
             // 历史里已经落地的 "turn:step" 集合：流式临时气泡要在这一次状态更新里
             // 原子撤掉（历史行出现与临时的消失同一帧），不给"文字先没了历史还没到"留空窗。
             val settled = parsed.rows.mapNotNull { it.turnKey.ifEmpty { null } }.toSet()
@@ -1188,6 +1192,8 @@ class BridgeRepository(context: Context) {
                         taskChars = if (parsed.running) current.taskChars else -1,
                         taskReasonChars = if (parsed.running) current.taskReasonChars else -1,
                         taskProgressAt = if (parsed.running) current.taskProgressAt else 0L,
+                        // 事件流断线时用历史产物兜底：本轮已有模型输出就算已响应。
+                        taskResponded = current.taskResponded || (parsed.running && respondedFromHistory),
                         // 安静锚点：重进运行中的会话时用历史里的回合开始时间兜底（0.4.8）
                         turnActivityAt = when {
                             !parsed.running -> 0L
