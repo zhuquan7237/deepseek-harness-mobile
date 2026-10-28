@@ -81,8 +81,19 @@ fi
 [ -d "$ANDROID_HOME" ] || die "ANDROID_HOME 不存在：$ANDROID_HOME"
 [ -x "$JAVA_HOME/bin/java.exe" ] || die "JAVA_HOME 下没有 java：$JAVA_HOME"
 
-PY_BIN="$(command -v python || command -v python3 || true)"
-[ -n "$PY_BIN" ] || die "PATH 里找不到 python"
+# WindowsApps 的 python.exe 是商店占位符：`command -v python` 能找到它，
+# 但 `python -`（stdin 读脚本）会静默失败退出 49——发布脚本两处 heredoc 都走这条
+# 路径，于是 set -e 下无声死掉、一个字都不打印（2026-10-29 实锤）。逐个候选
+# 实测 stdin 调用，跑不通的（占位符）跳过。
+PY_BIN=""
+for candidate in python3 python py; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if printf 'pass\n' | "$candidate" - >/dev/null 2>&1; then
+        PY_BIN="$candidate"
+        break
+    fi
+done
+[ -n "$PY_BIN" ] || die "找不到可用的 python（python3 / python / py 都试过了；商店占位符跑不了 stdin 脚本）"
 command -v sha256sum >/dev/null || die "PATH 里找不到 sha256sum"
 command -v gh >/dev/null || die "PATH 里找不到 gh（GitHub CLI）"
 
