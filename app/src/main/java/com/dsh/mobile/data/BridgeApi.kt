@@ -110,7 +110,7 @@ class BridgeApi(private val client: OkHttpClient) {
         call("POST", "/mobile/sessions", token, JSONObject()).optString("sessionId")
 
     suspend fun history(token: String, sessionId: String, maxMessages: Int = 100): JSONObject =
-        call("GET", "/mobile/sessions/${enc(sessionId)}/history?maxMessages=$maxMessages", token)
+        call("GET", "/mobile/sessions/${pathEnc(sessionId)}/history?maxMessages=$maxMessages", token)
 
     /**
      * 带图发送。走通用 `/mobile/rpc` 直接调引擎的 `session.prompt`：
@@ -155,7 +155,7 @@ class BridgeApi(private val client: OkHttpClient) {
         requestId: String = java.util.UUID.randomUUID().toString(),
     ): JSONObject =
         call(
-            "POST", "/mobile/sessions/${enc(sessionId)}/prompt", token,
+            "POST", "/mobile/sessions/${pathEnc(sessionId)}/prompt", token,
             JSONObject()
                 .put("text", text).put("mode", mode)
                 .put("requestId", requestId)
@@ -163,7 +163,7 @@ class BridgeApi(private val client: OkHttpClient) {
         )
 
     suspend fun cancel(token: String, sessionId: String): JSONObject =
-        call("POST", "/mobile/sessions/${enc(sessionId)}/cancel", token, JSONObject())
+        call("POST", "/mobile/sessions/${pathEnc(sessionId)}/cancel", token, JSONObject())
 
     suspend fun selectModel(
         token: String,
@@ -174,11 +174,11 @@ class BridgeApi(private val client: OkHttpClient) {
     ): JSONObject {
         val selection = JSONObject().put("provider", provider).put("model", model)
         if (!effort.isNullOrBlank()) selection.put("reasoningEffort", effort)
-        return call("POST", "/mobile/sessions/${enc(sessionId)}/model", token, JSONObject().put("selection", selection))
+        return call("POST", "/mobile/sessions/${pathEnc(sessionId)}/model", token, JSONObject().put("selection", selection))
     }
 
     suspend fun rename(token: String, sessionId: String, title: String): JSONObject =
-        call("POST", "/mobile/sessions/${enc(sessionId)}/rename", token, JSONObject().put("title", title))
+        call("POST", "/mobile/sessions/${pathEnc(sessionId)}/rename", token, JSONObject().put("title", title))
 
     // ------------------------------------------------------------------ 隔空传输
     // 手机 ⇄ 电脑文件互传：记录由桥接持有，双向共用一份列表。
@@ -215,7 +215,7 @@ class BridgeApi(private val client: OkHttpClient) {
             .readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
             .build()
         val request = Request.Builder()
-            .url(root + "/mobile/transfer/get/" + enc(id))
+            .url(root + "/mobile/transfer/get/" + pathEnc(id))
             .header("Authorization", "Bearer $token")
             .build()
         slow.newCall(request).execute().use { response ->
@@ -226,7 +226,7 @@ class BridgeApi(private val client: OkHttpClient) {
 
     /** 删除一条记录（索引 + 实体文件）。 */
     suspend fun transferDelete(token: String, id: String): JSONObject =
-        call("POST", "/mobile/transfer/delete/" + enc(id), token, JSONObject())
+        call("POST", "/mobile/transfer/delete/" + pathEnc(id), token, JSONObject())
 
     /** Write the whole model document; the bridge turns it into engine ops. */
     suspend fun putModels(token: String, body: JSONObject): JSONObject =
@@ -327,25 +327,25 @@ class BridgeApi(private val client: OkHttpClient) {
 
     /** 会话工作目录里最近生成的文件。 */
     suspend fun sessionFiles(token: String, sessionId: String): JSONObject =
-        call("GET", "/mobile/sessions/${enc(sessionId)}/files", token)
+        call("GET", "/mobile/sessions/${pathEnc(sessionId)}/files", token)
 
     /** 文件访问票据：WebView 的子资源请求带不了 Authorization 头，用票据 + cookie。 */
     suspend fun fileTicket(token: String, sessionId: String): JSONObject =
-        call("POST", "/mobile/sessions/${enc(sessionId)}/fsticket", token, JSONObject())
+        call("POST", "/mobile/sessions/${pathEnc(sessionId)}/fsticket", token, JSONObject())
 
     /** 文件在桥接上的预览 URL（带票据）。 */
     fun fileUrl(base: String, sessionId: String, path: String, ticket: String): String {
-        val encoded = path.split('/').joinToString("/") { enc(it) }
-        return base.trimEnd('/') + "/mobile/fs/" + enc(sessionId) + "/" + encoded + "?t=" + enc(ticket)
+        val encoded = path.split('/').joinToString("/") { pathEnc(it) }
+        return base.trimEnd('/') + "/mobile/fs/" + pathEnc(sessionId) + "/" + encoded + "?t=" + enc(ticket)
     }
 
     /** 下载文件字节（走设备令牌，不依赖票据）。 */
     suspend fun download(token: String, sessionId: String, path: String): ByteArray = withContext(Dispatchers.IO) {
         val root = base.trimEnd('/')
         if (root.isEmpty()) throw BridgeException("E_NO_SERVER", "还没有设置服务器地址")
-        val encoded = path.split('/').joinToString("/") { enc(it) }
+        val encoded = path.split('/').joinToString("/") { pathEnc(it) }
         val request = Request.Builder()
-            .url(root + "/mobile/fs/" + enc(sessionId) + "/" + encoded)
+            .url(root + "/mobile/fs/" + pathEnc(sessionId) + "/" + encoded)
             .header("Authorization", "Bearer $token")
             .build()
         client.newCall(request).execute().use { response ->
@@ -359,7 +359,7 @@ class BridgeApi(private val client: OkHttpClient) {
         val root = base.trimEnd('/')
         if (root.isEmpty()) throw BridgeException("E_NO_SERVER", "还没有设置服务器地址")
         val request = Request.Builder()
-            .url(root + "/mobile/attachments/" + enc(attachmentId))
+            .url(root + "/mobile/attachments/" + pathEnc(attachmentId))
             .header("Authorization", "Bearer $token")
             .build()
         client.newCall(request).execute().use { response ->
@@ -370,3 +370,10 @@ class BridgeApi(private val client: OkHttpClient) {
 
     private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
 }
+
+/**
+ * 路径段编码。URLEncoder 是表单编码：空格变 "+"，而桌面端用 decodeURIComponent
+ * 解码路径段（"+" 原样保留），文件名里的空格就变成 "+"，预览/下载一律 404。
+ * 这里把 "+" 还原成 %20；查询参数仍用表单编码（服务端 searchParams 会把 "+" 当空格）。
+ */
+internal fun pathEnc(value: String): String = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
