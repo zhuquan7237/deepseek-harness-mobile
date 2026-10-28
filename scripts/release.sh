@@ -34,7 +34,7 @@ APK="app/build/outputs/apk/release/app-release.apk"
 PUBLISH_DIR="C:/Users/zhuquan/AppData/Roaming/DeepSeek/plugins/mobile-bridge/app"
 # 同一份清单/APK 也回写进桌面端仓库的内置插件目录：否则桌面端下次重打包会带着旧清单
 # 覆盖运行期副本（"发了版但手机收不到更新"的根因，2026-09-23 实锤）
-REPO_APP_DIR="D:/zcode测试/deepseek-harness-desktop/deepseek-harness-site/desktop/resources/plugins/mobile-bridge/app"
+REPO_APP_DIR="${DSH_SITE_REPO:-D:/zcode测试/deepseek-harness-desktop/deepseek-harness-site/desktop/resources/plugins/mobile-bridge/app}"
 APK_NAME="dsh-mobile.apk"
 APK_URL="https://m.zhuquan.xyz/mobile/dsh-mobile.apk"
 REPO_SLUG="zhuquan7237/deepseek-harness-mobile"
