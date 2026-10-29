@@ -250,7 +250,12 @@ if [ "$IOS_OK" = "1" ]; then
     printf '==> iOS 产物已附上：%s\n' "$IOS_ASSET"
     # AltStore/SideStore 的源清单也放到站点与镜像上，用户加一次源就能一键装/更新。
     IOS_SRC_TMP="$(mktemp -d)"
-    if gh release download "v$VERSION" -p "ios-source.json" -D "$IOS_SRC_TMP" 2>/dev/null; then
+    # gh 是原生 Windows 程序，MSYS 的 /tmp/xxx 它不认（会静默写到别处，cp 再报
+    # "No such file or directory"，set -e 直接把脚本带崩、汇总都不打印——0.5.9 实锤）。
+    # 传给它之前先转成 Windows 路径，并用 [ -f ] 兜住失败。
+    IOS_SRC_TMP_WIN="$(cygpath -w "$IOS_SRC_TMP" 2>/dev/null || printf '%s' "$IOS_SRC_TMP")"
+    if gh release download "v$VERSION" -p "ios-source.json" -D "$IOS_SRC_TMP_WIN" 2>/dev/null \
+            && [ -f "$IOS_SRC_TMP/ios-source.json" ]; then
         cp -f "$IOS_SRC_TMP/ios-source.json" "$PUBLISH_DIR/ios-source.json"
         printf '==> 已写入 %s/ios-source.json（源地址 https://m.zhuquan.xyz/mobile/ios-source.json）\n' "$PUBLISH_DIR"
         [ -d "$REPO_APP_DIR" ] && cp -f "$PUBLISH_DIR/ios-source.json" "$REPO_APP_DIR/ios-source.json"
