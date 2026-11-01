@@ -102,6 +102,14 @@ class SettingsStore(context: Context) {
         context.dshStore.edit { prefs -> prefs[Keys.EPOCH] = epoch }
     }
 
+    /** Cursor and epoch are one logical value; never persist a mixed pair. */
+    suspend fun saveCursor(epoch: String, seq: Long) {
+        context.dshStore.edit { prefs ->
+            prefs[Keys.EPOCH] = epoch
+            prefs[Keys.SEQ] = seq
+        }
+    }
+
     /** 缓存模型文档，下次打开设置页/模型页直接就有内容。 */
     suspend fun saveModels(json: String) {
         context.dshStore.edit { prefs -> prefs[Keys.MODELS] = json }

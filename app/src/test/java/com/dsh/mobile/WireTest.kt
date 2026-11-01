@@ -1060,6 +1060,12 @@ class WireTest {
     }
 
     @Test
+    fun reasoningDeltaIsNotDisplayedAsAnswer() {
+        val delta = JSONObject().put("chunk", JSONObject().put("type", "reasoning-delta").put("text", "内部思考"))
+        assertTrue(Wire.chunkIsReasoning(delta))
+    }
+
+    @Test
     fun progressPulseCarriesCountsNotContent() {
         val data = JSONObject("""{"turn":2,"step":1,"textChars":12,"reasoningChars":3400,"at":1790443738769}""")
         val c = Wire.progressCounts(data)

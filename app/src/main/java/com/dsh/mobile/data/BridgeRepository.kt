@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -14,6 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -97,41 +100,152 @@ class BridgeRepository(context: Context) {
 
     private var toastCounter = 0
     private var lastSeqWrite = 0L
+    private val cursorWriteLock = Mutex()
 
     private val TAG = "dsh-repo"
 
     private var reloadJob: Job? = null
 
-    /**
-     * 流式增量节流：chunk 先写进缓冲，每 [liveFlushMs] 才合并进 state 一次。
-     * 每个 chunk 都直接更新 state 会让消息列表每秒重绘几十次（真机表现为"闪"）；
-     * 200ms 批一次肉眼无感，重绘/重排频率降一个量级。结束/重载前必须 flush，不丢尾巴。
-     */
+    // Main-dispatcher generations: a late history snapshot must not undo a
+    // newer request, a new session, or live task state received in flight.
+    private var historyRequestGeneration = 0L
+    private var taskEventGeneration = 0L
+    private var sessionVisitGeneration = 0L
+    private var stopRequestGeneration = 0L
+    private data class SessionVisit(val sid: String, val token: String, val base: String,
+        val stateBase: String, val generation: Long)
+    private fun captureVisit(state: AppState): SessionVisit? {
+        val sid = state.sessionId ?: return null
+        val token = state.token ?: return null
+        return SessionVisit(sid, token, api.base, state.base, sessionVisitGeneration)
+    }
+    private fun isCurrent(visit: SessionVisit): Boolean {
+        val current = _state.value
+        return current.sessionId == visit.sid && current.token == visit.token && current.base == visit.stateBase &&
+            api.base == visit.base && sessionVisitGeneration == visit.generation
+    }
+    private fun isOwnerCurrent(visit: SessionVisit): Boolean {
+        val current = _state.value
+        return current.sessionId == visit.sid && current.token == visit.token &&
+            current.base == visit.stateBase && api.base == visit.base
+    }
+    private var explicitWaitingSession: String? = null
+    private class HistoryFlight(val sid: String, val token: String, val base: String, val generation: Long) {
+        val done = CompletableDeferred<Unit>()
+        var pending = false
+        var pendingQuiet = true
+    }
+    private var historyFlight: HistoryFlight? = null
+    // Early progress is not proof of a running turn: replay it only after a
+    // history snapshot confirms running and no newer task event supersedes it.
+    private data class OpeningProgress(val generation: Long, val frame: JSONObject, val arrivedAt: Long)
+    private var openingProgress: OpeningProgress? = null
+    private var replayArrivalAt = 0L
+    private var openingSession: String? = null
+
+    /** 将增量先留在仓库里，不逐字重绘；消息完成或回合结束时一次性呈现。 */
     private val liveBuffer = LinkedHashMap<String, String>()
-    private var liveFlushJob: Job? = null
+    private data class LiveOwner(val sid: String, val token: String, val base: String)
+    private data class SavedLive(val pending: Map<String, String>, val visible: List<LiveBubble>)
+    private val savedLive = mutableMapOf<LiveOwner, SavedLive>()
 
-    /** 缓冲刷新间隔（节流窗口）。调大更稳、调小更"逐字"。 */
-    private val liveFlushMs = 200L
+    // Keep locally submitted rows until history has gained their occurrence.
+    // A visit change or an ACK only changes visibility, not their ownership.
+    private var optimisticGeneration = 0L
+    private class OptimisticRow(val original: ChatRow, var row: ChatRow, val key: UserMessageKey,
+        var precedingMatches: Int, val generation: Long, val startedAt: Long = System.currentTimeMillis(),
+        var terminal: Boolean = false, var stopRequested: Boolean = false, var liveActivity: Boolean = false,
+        var historyPersisted: Boolean = false)
+    private data class UserMessageKey(val text: String, val images: List<String>)
+    private val optimisticRows = mutableMapOf<LiveOwner, MutableList<OptimisticRow>>()
+    // Persisting the user row is not the same fact as completing its turn.
+    private val outstandingTurns = mutableMapOf<LiveOwner, MutableList<OptimisticRow>>()
+    private val historyHighWater = mutableMapOf<LiveOwner, MutableMap<UserMessageKey, Int>>()
 
-    private fun queueLiveChunk(key: String, text: String) {
-        liveBuffer[key] = (liveBuffer[key] ?: "") + text
-        if (liveFlushJob?.isActive != true) {
-            liveFlushJob = scope.launch {
-                delay(liveFlushMs)
-                flushLiveBuffer()
-            }
+    private fun userMessageKey(row: ChatRow): UserMessageKey = UserMessageKey(row.text, row.images.map { image ->
+        if (image.localBase64.isNotEmpty()) {
+            runCatching {
+                val bytes = android.util.Base64.decode(image.localBase64, android.util.Base64.NO_WRAP)
+                "sha256:" + java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+                    .joinToString("") { "%02x".format(it.toInt() and 255) }
+            }.getOrElse { "invalid-local-image" }
+        } else {
+            image.attachmentId.ifEmpty { "missing-history-image-id" }
+        }
+    })
+
+    private fun trackOptimistic(visit: SessionVisit, row: ChatRow, key: UserMessageKey = userMessageKey(row)): OptimisticRow {
+        val owner = LiveOwner(visit.sid, visit.token, visit.base)
+        val existing = optimisticRows[owner].orEmpty()
+        val known = historyHighWater[owner]?.get(key) ?: 0
+        val stillLocal = existing.count { it.key == key }
+        val visible = _state.value.history.count { candidate ->
+            candidate.who == Role.USER && candidate.text == row.text && candidate.images.size == row.images.size &&
+                (existing.firstOrNull { it.row === candidate || it.original === candidate }?.key ?: userMessageKey(candidate)) == key
+        }
+        val tracked = OptimisticRow(row, row, key, maxOf(visible, known + stillLocal), ++optimisticGeneration)
+        optimisticRows.getOrPut(owner) { mutableListOf() }.add(tracked)
+        outstandingTurns.getOrPut(owner) { mutableListOf() }.add(tracked)
+        return tracked
+    }
+
+    private fun acknowledgeOptimistic(tracked: OptimisticRow) {
+        tracked.row = tracked.row.copy(pendingAck = false)
+    }
+
+    private fun finishTurn(owner: LiveOwner, tracked: OptimisticRow) {
+        tracked.terminal = true
+        outstandingTurns[owner]?.let { turns ->
+            turns.remove(tracked)
+            if (turns.isEmpty()) outstandingTurns.remove(owner)
         }
     }
 
-    /**
-     * 把缓冲里的增量一次性并入 state（一次重组、一次滚动），并挂上"已流式"标记。
-     * 这是全 App 唯一写 live 气泡的地方（节流漏斗）。
-     */
+    private fun projectAcknowledgement(visit: SessionVisit, tracked: OptimisticRow, sendGeneration: Long) {
+        val previous = tracked.row
+        acknowledgeOptimistic(tracked)
+        if (!isOwnerCurrent(visit)) return
+        val owner = LiveOwner(visit.sid, visit.token, visit.base)
+        val latest = outstandingTurns[owner]?.lastOrNull()
+        _state.update { current ->
+            val index = current.history.indexOfFirst { it === previous || it === tracked.original }
+            val history = if (index < 0) current.history else current.history.toMutableList().also { it[index] = tracked.row }
+            // The operation, not the visit, owns its accepted work. Do not revive
+            // it after an authoritative terminal or over a later local operation.
+            val resume = !tracked.terminal && latest === tracked
+            val now = System.currentTimeMillis()
+            current.copy(
+                history = history, sending = false,
+                running = current.running || resume,
+                runSince = if (resume && current.runSince == 0L) tracked.startedAt else current.runSince,
+                turnActivityAt = if (resume && current.turnActivityAt == 0L) tracked.startedAt else current.turnActivityAt,
+                taskWaitingSince = if (resume && current.taskWaitingSince == 0L) tracked.startedAt else current.taskWaitingSince,
+                thinking = if ((current.running || resume) && (taskEventGeneration == sendGeneration || !isCurrent(visit))) true else current.thinking,
+                thinkingSince = if ((current.running || resume) && current.thinkingSince == 0L) now else current.thinkingSince,
+            )
+        }
+    }
+
+    private fun forgetOptimistic(visit: SessionVisit, tracked: OptimisticRow) {
+        val owner = LiveOwner(visit.sid, visit.token, visit.base)
+        optimisticRows[owner]?.let { rows ->
+            rows.remove(tracked)
+            if (rows.isEmpty()) optimisticRows.remove(owner)
+        }
+    }
+    private var fallbackTurn = 0L
+    private var fallbackStep = 0L
+    private var lastChunkUpdateAt = 0L
+
+    private fun queueLiveChunk(key: String, text: String) {
+        liveBuffer[key] = (liveBuffer[key] ?: "") + text
+    }
+
+    /** Only reveal buffered output at a message or terminal turn boundary. */
     private fun flushLiveBuffer() {
         if (liveBuffer.isEmpty()) return
         val pending = ArrayList(liveBuffer.entries)
         liveBuffer.clear()
-        // 便于验证节流频率：正常约每 200ms 一条（可用来确认闪烁修复是否生效）
         Log.i(TAG, "live flush: +${pending.sumOf { it.value.length }} chars / ${pending.size} bubble(s)")
         _state.update { current ->
             val live = current.live.toMutableList()
@@ -150,7 +264,7 @@ class BridgeRepository(context: Context) {
     private var searchJob: Job? = null
 
     /** The bridge's counter lifetime; when it changes the desktop restarted. */
-    private var bridgeEpoch = ""
+    @Volatile private var bridgeEpoch = ""
 
     /** One history reload at a time — a turn fires a dozen trigger events. */
     private var reloadRunning = false
@@ -186,6 +300,7 @@ class BridgeRepository(context: Context) {
             }
         }
         stream.lastSeq = { lastSeq }
+        stream.lastEpoch = { bridgeEpoch }
 
         scope.launch { boot() }
 
@@ -259,11 +374,12 @@ class BridgeRepository(context: Context) {
         }
         lastSeq = stored.seq
         bridgeEpoch = stored.epoch
-        val ok = refreshMeta(quiet = false)
-        if (!ok && _state.value.token == null) return // meta said the token is gone
+        // Restore the event stream immediately; metadata can be slow over a
+        // relay and is not a prerequisite to the authenticated WS handshake.
         connect()
         loadSessions()
         loadQuestions(quiet = true)
+        scope.launch { refreshMeta(quiet = false) }
     }
 
     private fun onReconnected() {
@@ -275,7 +391,7 @@ class BridgeRepository(context: Context) {
                 refreshMeta(quiet = true)
                 loadSessions()
                 loadQuestions(quiet = true)
-                _state.value.sessionId?.let { loadHistory(it, quiet = true) }
+                _state.value.sessionId?.let { fetchHistory(it, quiet = true) }
                 // 列表/提问各自异步落地，给它们一小段窗口（都是轻接口）
                 kotlinx.coroutines.delay(700)
             } finally {
@@ -388,9 +504,9 @@ class BridgeRepository(context: Context) {
                     )
                 }
                 toast("配对成功")
-                refreshMeta(quiet = true)
                 connect()
                 loadSessions()
+                scope.launch { refreshMeta(quiet = true) }
             } catch (error: Exception) {
                 _state.update { it.copy(pairing = false) }
                 val message = if (error is BridgeException) {
@@ -462,6 +578,8 @@ class BridgeRepository(context: Context) {
     /** Forget the binding locally (the desktop keeps its record until revoked). */
     fun unpair() {
         stream.stop()
+        liveBuffer.clear()
+        savedLive.clear()
         probeJob?.cancel()
         failStreak = 0
         scope.launch { store.clearBinding() }
@@ -685,10 +803,15 @@ class BridgeRepository(context: Context) {
     }
 
     private suspend fun refreshMeta(quiet: Boolean): Boolean {
-        val token = _state.value.token ?: return false
+        val requestState = _state.value
+        val token = requestState.token ?: return false
+        val requestBase = requestState.base
+        fun stillCurrent(): Boolean = _state.value.token == token && _state.value.base == requestBase
         return try {
             val t0 = SystemClock.elapsedRealtime()
             val meta = api.meta(token)
+            // A prior route/account may complete after unpairing or switching.
+            if (!stillCurrent()) return false
             val costMs = SystemClock.elapsedRealtime() - t0
             _state.value.base.takeIf { it.isNotBlank() }?.let { current ->
                 routeBook.record(current, costMs, true, System.currentTimeMillis())
@@ -712,16 +835,18 @@ class BridgeRepository(context: Context) {
             }
             true
         } catch (error: BridgeException) {
+            if (!stillCurrent()) return false
             if (error.code == "E_UNAUTHORIZED") {
                 handleUnauthorized()
             } else {
-                // A failed background refresh is a connection state, not an event
-                // worth interrupting for: the header already says 未连接/重连中.
-                _state.update { it.copy(conn = Conn.OFFLINE) }
+                // HTTP metadata can fail transiently even with a live event
+                // stream. Only the WebSocket close callback can demote ONLINE.
+                _state.update { if (it.conn == Conn.ONLINE) it else it.copy(conn = Conn.OFFLINE) }
             }
             false
         } catch (error: Exception) {
-            _state.update { it.copy(conn = Conn.OFFLINE) }
+            if (!stillCurrent()) return false
+            _state.update { if (it.conn == Conn.ONLINE) it else it.copy(conn = Conn.OFFLINE) }
             false
         }
     }
@@ -875,7 +1000,22 @@ class BridgeRepository(context: Context) {
     // ------------------------------------------------------------------- chat
 
     fun openSession(sessionId: String) {
-        liveBuffer.clear()   // 切会话：未刷出的流式残余作废
+        sessionVisitGeneration++
+        val previous = _state.value
+        val token = previous.token
+        if (previous.sessionId != null && token != null && (liveBuffer.isNotEmpty() || previous.live.isNotEmpty())) {
+            savedLive[LiveOwner(previous.sessionId, token, api.base)] = SavedLive(liveBuffer.toMap(), previous.live)
+        }
+        liveBuffer.clear()
+        val restored = token?.let { savedLive.remove(LiveOwner(sessionId, it, api.base)) }
+        restored?.pending?.let { liveBuffer.putAll(it) }
+        val restoredOptimistic = token?.let { optimisticRows[LiveOwner(sessionId, it, api.base)]?.map { row -> row.row } }.orEmpty()
+        historyRequestGeneration++
+        taskEventGeneration++
+        explicitWaitingSession = null
+        openingProgress = null
+        openingSession = sessionId
+
         val listed = _state.value.sessions.firstOrNull { it.sessionId == sessionId }
         // 打开历史会话要继承它自己的模型：列表里带了 projections.values.modelSelection，
         // 这里取出来当标签（模型名单缓存里有就用显示名，没有就用模型 id）
@@ -894,11 +1034,16 @@ class BridgeRepository(context: Context) {
                 sessionId = sessionId,
                 sessionTitle = listed?.title ?: sessionId.take(8),
                 sessionCwd = listed?.cwd.orEmpty(),
-                history = emptyList(),
-                live = emptyList(),
+                history = restoredOptimistic,
+                historyLoading = false,
+                live = restored?.visible.orEmpty(),
                 running = false,
                 thinking = false,
                 thinkingSince = 0L,
+                runSince = 0L, turnActivityAt = 0L, taskWaitingSince = 0L, sending = false,
+                taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1,
+                taskProgressAt = 0L, taskResponded = false, taskStage = "",
+                stopping = false, stopRequestedAt = 0L, stopAcked = false, stopSendFailed = false,
                 sessionFiles = emptyList(),
                 lastUsage = null,
                 usageTurn = 0,
@@ -931,44 +1076,59 @@ class BridgeRepository(context: Context) {
      * mode = "queue"：排队 —— 等当前回合结束后自动作为新回合发送。
      * 两种都由引擎收件箱承载，历史里的 spliced 事件会渲染成"待生效"气泡。
      */
-    /** N1 0.2.64 P0：单飞闸门——同一提交意图只允许一个本地派发流程（连点/IME/重入都走它）。 */
-    @Volatile
-    private var submitInFlight = false
+    /** A submission belongs to a bridge identity and session, not a screen visit. */
+    private val submitInFlight = mutableSetOf<LiveOwner>()
+
+    private fun acquireSubmission(visit: SessionVisit): Boolean = synchronized(submitInFlight) {
+        submitInFlight.add(LiveOwner(visit.sid, visit.token, visit.base))
+    }
+
+    private fun releaseSubmission(visit: SessionVisit) = synchronized(submitInFlight) {
+        submitInFlight.remove(LiveOwner(visit.sid, visit.token, visit.base))
+    }
+
+    private fun requireSubmissionAck(response: JSONObject) {
+        // REST returns pending at the top level; /mobile/rpc nests it in value.
+        if (response.optBoolean("pending") || response.optJSONObject("value")?.optBoolean("pending") == true) {
+            throw BridgeException("E_PENDING", "电脑仍在处理，结果尚未确认；请稍后用相同内容重试")
+        }
+    }
 
     /**
      * M4 0.2.61：提交回执标识。同一会话同文本的重试复用原 requestId（不生成"新任务"），
      * 内容变化才换新；成功后清除。桌面端回执可据此关联与去重。
      */
-    private fun submissionId(sid: String, text: String): String {
-        val pending = DraftStore.loadPending(appContext, sid)
-        return if (pending != null && pending.text == text) pending.requestId
-        else java.util.UUID.randomUUID().toString()
-    }
+    private fun pendingOwner(visit: SessionVisit) = DraftStore.PendingOwner(visit.base, visit.token, visit.sid)
+
+    private fun submissionId(owner: DraftStore.PendingOwner, fingerprint: String): String =
+        DraftStore.loadPending(appContext, owner, fingerprint)?.requestId ?: java.util.UUID.randomUUID().toString()
 
     suspend fun sendInbox(text: String, mode: String): Boolean {
         val s = _state.value
-        val sid = s.sessionId ?: return false
-        val token = s.token ?: return false
+        val visit = captureVisit(s) ?: return false
+        val sid = visit.sid
+        val token = visit.token
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
         // N1 0.2.64 P0：单飞闸门。
-        if (submitInFlight) return false
-        submitInFlight = true
-        val reqId = submissionId(sid, trimmed)
-        DraftStore.savePending(appContext, sid, reqId, trimmed, mode)
+        if (!acquireSubmission(visit)) return false
+        val owner = pendingOwner(visit)
+        val fingerprint = DraftStore.pendingFingerprint("inbox", mode, trimmed)
+        val reqId = submissionId(owner, fingerprint)
+        DraftStore.savePending(appContext, owner, reqId, trimmed, mode, fingerprint)
         return try {
-            api.prompt(token, sid, trimmed, mode, reqId)
-            DraftStore.clearPending(appContext, sid)
-            toast(if (mode == "steer") "电脑已收到插话，将在可插入步骤生效" else "电脑已收到排队，本轮结束后发送")
+            requireSubmissionAck(api.prompt(token, sid, trimmed, mode, reqId))
+            DraftStore.clearPending(appContext, owner, reqId)
+            if (isCurrent(visit)) toast(if (mode == "steer") "电脑已收到插话，将在可插入步骤生效" else "电脑已收到排队，本轮结束后发送")
             true
         } catch (error: BridgeException) {
-            handleApiError(error, "追加消息失败")
+            if (isCurrent(visit)) handleApiError(error, "追加消息失败")
             false
         } catch (error: Exception) {
-            fail("send", "追加消息失败：${error.message ?: "网络错误"}")
+            if (isCurrent(visit)) fail("send", "追加消息失败：${error.message ?: "网络错误"}")
             false
         } finally {
-            submitInFlight = false
+            releaseSubmission(visit)
         }
     }
 
@@ -1133,11 +1293,61 @@ class BridgeRepository(context: Context) {
      * reconnecting must never replay a message the user has already read —
      * history is history.
      */
+    /** Coalesce same-session polls without cancelling or invalidating their in-flight snapshot. */
     private suspend fun fetchHistory(sid: String, quiet: Boolean = false, announce: Boolean = false) {
+        // Closing or switching a visit must not finish a poll, or its quiet
+        // snapshot can re-arm timers for the session the user has left.
+        if (!currentCoroutineContext().isActive) return
+        if (_state.value.sessionId != sid) return
         val token = _state.value.token ?: return
+        val base = api.base
+        val active = historyFlight
+        if (active != null && active.sid == sid && active.token == token && active.base == base &&
+            active.generation == historyRequestGeneration) {
+            active.pending = true
+            active.pendingQuiet = active.pendingQuiet && quiet
+            if (!quiet) _state.update { it.copy(historyLoading = true) }
+            active.done.await()
+            return
+        }
+        val flight = HistoryFlight(sid, token, base, ++historyRequestGeneration)
+        historyFlight = flight
+        // The flight belongs to the repository, not to a debounced caller that
+        // can be cancelled while the HTTP response is still on its way.
+        scope.launch {
+            var nextQuiet = quiet
+            try {
+                do {
+                    flight.pending = false
+                    flight.pendingQuiet = true
+                    fetchHistorySnapshot(flight, nextQuiet)
+                    nextQuiet = flight.pendingQuiet
+                } while (flight.pending && historyFlight === flight &&
+                    _state.value.sessionId == sid && _state.value.token == token && api.base == base &&
+                    flight.generation == historyRequestGeneration)
+            } finally {
+                if (historyFlight === flight) historyFlight = null
+                flight.done.complete(Unit)
+            }
+        }
+        flight.done.await()
+    }
+
+    private suspend fun fetchHistorySnapshot(flight: HistoryFlight, quiet: Boolean) {
+        val sid = flight.sid
+        val token = flight.token
+        val requestGeneration = flight.generation
+        val eventGeneration = taskEventGeneration
+        val optimisticAtRequest = optimisticGeneration
+        val historyAtRequest = _state.value.history
+        fun stillCurrent(): Boolean = _state.value.sessionId == sid && _state.value.token == token &&
+            api.base == flight.base && requestGeneration == historyRequestGeneration
         if (!quiet) _state.update { it.copy(historyLoading = true) }
         try {
             val json = api.history(token, sid, 100)
+            // A cancelled call can still return its already-received body; an
+            // abandoned visit must never apply that snapshot as "current".
+            if (!currentCoroutineContext().isActive) return
             // JSON 解析放到后台：大会话（几百条、每条带着几十 KB 的思考）在手机上
             // 不是零成本，放在主线程解析就是「点进去顿一下」的来源。
             val parsed = withContext(Dispatchers.Default) { Wire.parseHistory(json, sid) }
@@ -1148,35 +1358,108 @@ class BridgeRepository(context: Context) {
             val respondedFromHistory = Wire.hasModelOutputSinceLastUser(parsed.rows)
             // 历史里已经落地的 "turn:step" 集合：流式临时气泡要在这一次状态更新里
             // 原子撤掉（历史行出现与临时的消失同一帧），不给"文字先没了历史还没到"留空窗。
-            val settled = parsed.rows.mapNotNull { it.turnKey.ifEmpty { null } }.toSet()
+            val answers = parsed.rows.filter { it.who == Role.ASSISTANT }
+            val settled = answers.mapNotNull { it.turnKey.ifEmpty { null } }.toSet()
+            val owner = LiveOwner(sid, token, flight.base)
+            if (stillCurrent()) {
+                val highWater = historyHighWater.getOrPut(owner) { mutableMapOf() }
+                parsed.rows.filter { it.who == Role.USER }.groupingBy { userMessageKey(it) }.eachCount().forEach { (key, count) ->
+                    highWater[key] = maxOf(highWater[key] ?: 0, count)
+                }
+            }
+            val tracked = if (stillCurrent()) optimisticRows[owner]?.toList().orEmpty() else emptyList()
+            // A snapshot requested before a local send may contain older identical
+            // rows; count them as pre-existing, never as proof of that send.
+            tracked.filter { it.generation > optimisticAtRequest }.groupBy { it.key }.forEach { (key, rows) ->
+                val prior = parsed.rows.count { it.who == Role.USER && userMessageKey(it) == key }
+                rows.sortedBy { it.generation }.forEachIndexed { index, local ->
+                    local.precedingMatches = maxOf(local.precedingMatches, prior + index)
+                }
+            }
+            // One new occurrence settles at most one local message. Old identical
+            // history rows were already counted when each submission was created.
+            val settledLocal = tracked.filter { local ->
+                local.generation <= optimisticAtRequest &&
+                    parsed.rows.count { it.who == Role.USER && userMessageKey(it) == local.key } > local.precedingMatches
+            }
+            if (settledLocal.isNotEmpty()) {
+                optimisticRows[owner]?.let { rows ->
+                    rows.removeAll(settledLocal.toSet())
+                    if (rows.isEmpty()) optimisticRows.remove(owner)
+                }
+            }
+            val remainingLocal = tracked.filterNot { it in settledLocal }.map { it.row }
+            if (stillCurrent() && eventGeneration == taskEventGeneration) {
+                outstandingTurns[owner]?.toList().orEmpty().forEach { operation ->
+                    if (operation.generation <= optimisticAtRequest) {
+                        val occurrence = parsed.userEvents.filter { userMessageKey(it.second) == operation.key }
+                            .getOrNull(operation.precedingMatches)
+                        if (occurrence != null) {
+                            // An authoritative new occurrence confirms persistence, not completion.
+                            // Retain this fact after the optimistic row is withdrawn so a late
+                            // unknown/pending transport receipt cannot terminate accepted work.
+                            operation.historyPersisted = true
+                            if (parsed.lastTurnEndIndex > occurrence.first) finishTurn(owner, operation)
+                        }
+                    }
+                }
+            }
+            // A terminal snapshot that predates an outstanding local message
+            // is not a completion boundary for its newer running turn.
+            val localTurnNewer = outstandingTurns[owner]?.isNotEmpty() == true && !parsed.running
+            val terminalBuffer = if (stillCurrent() && eventGeneration == taskEventGeneration && !parsed.running && !localTurnNewer) {
+                liveBuffer.toMap().also { liveBuffer.clear() }
+            } else emptyMap()
             _state.update { current ->
-                if (current.sessionId != sid) {
+                if (!stillCurrent()) {
                     current
                 } else {
-                    val last = parsed.rows.lastOrNull()
-                    val fresh = announce && !current.streamedLive && last != null && last.who == Role.ASSISTANT &&
-                        current.history.lastOrNull()?.text != last.text
-                    if (fresh) Log.i(TAG, "typewriter armed (${last?.text?.length ?: 0} chars)")
+                    val liveStatusNewer = eventGeneration != taskEventGeneration || localTurnNewer
+                    val running = if (localTurnNewer && eventGeneration == taskEventGeneration) true
+                        else if (liveStatusNewer) current.running else parsed.running
+                    // Preserve local rows created while the snapshot was in flight.
+                    // A matching newly persisted row takes over atomically instead
+                    // of rendering a duplicate optimistic bubble.
+                    var prefix = 0
+                    while (prefix < historyAtRequest.size && prefix < current.history.size &&
+                        historyAtRequest[prefix].copy(pendingAck = false) == current.history[prefix].copy(pendingAck = false)) prefix++
+                    val localRows = current.history.filterIndexed { index, row ->
+                        (index >= prefix || row.pendingAck) && tracked.none { it.row === row || it.original === row }
+                    }
+                    val newSnapshotRows = parsed.rows.drop(historyAtRequest.size.coerceAtMost(parsed.rows.size))
+                    val retainedRows = localRows.filterNot { local ->
+                        newSnapshotRows.any { it.who == local.who && it.text == local.text }
+                    }
+                    val terminalLive = current.live.toMutableList()
+                    terminalBuffer.forEach { (key, text) ->
+                        val index = terminalLive.indexOfFirst { it.key == key }
+                        if (index < 0) terminalLive.add(LiveBubble(key, text))
+                        else terminalLive[index] = terminalLive[index].copy(text = terminalLive[index].text + text)
+                    }
                     current.copy(
-                        history = parsed.rows,
+                        history = parsed.rows + retainedRows + remainingLocal,
                         historyEndTime = parsed.endTime,
                         lastUsage = parsed.lastUsage,
                         usageTurn = parsed.lastUsageTurn,
                         // 已落库的流式气泡在这里原子撤掉（同帧与历史行交接，防闪窗）
-                        live = if (settled.isEmpty()) current.live
-                        else current.live.filterNot { it.key in settled },
-                        running = parsed.running,
+                        live = if (liveStatusNewer) current.live else terminalLive.filterNot { bubble ->
+                            bubble.key in settled || (bubble.key.startsWith("local:") &&
+                                answers.any { it.text == bubble.text })
+                        },
+                        running = running,
                         // 重进正在跑的会话要把"进行态"也恢复出来，否则看起来像卡住/没反应；
                         // 秒数用历史里 turn/start 的真实时间续上——不从 0 重数（用户实测提问过）。
-                        thinking = parsed.running,
+                        thinking = if (liveStatusNewer) current.thinking else running,
                         thinkingSince = when {
-                            !parsed.running -> 0L
+                            liveStatusNewer -> current.thinkingSince
+                            !running -> 0L
                             current.thinkingSince > 0L -> current.thinkingSince
                             parsed.runningSince > 0L -> parsed.runningSince
                             else -> System.currentTimeMillis()
                         },
                         runSince = when {
-                            !parsed.running -> 0L
+                            liveStatusNewer -> current.runSince
+                            !running -> 0L
                             current.runSince > 0L -> current.runSince
                             parsed.runningSince > 0L -> parsed.runningSince
                             else -> System.currentTimeMillis()
@@ -1187,26 +1470,38 @@ class BridgeRepository(context: Context) {
                         // 解析器现在会在 assistant/message、step/end、回合边界把它清掉，
                         // 这里不再兜底保留旧值（旧值正是「换模型跑得好好的，横幅还挂着
                         // 正在重试」的根源）。
-                        taskRetry = if (!parsed.running) "" else parsed.retryText.orEmpty(),
-                        taskAttemptMs = if (!parsed.running) 0L else parsed.attemptMs,
-                        taskChars = if (parsed.running) current.taskChars else -1,
-                        taskReasonChars = if (parsed.running) current.taskReasonChars else -1,
-                        taskProgressAt = if (parsed.running) current.taskProgressAt else 0L,
-                        // 事件流断线时用历史产物兜底：本轮已有模型输出就算已响应。
-                        taskResponded = current.taskResponded || (parsed.running && respondedFromHistory),
+                        taskRetry = if (liveStatusNewer) current.taskRetry else if (!running) "" else parsed.retryText.orEmpty(),
+                        taskAttemptMs = if (liveStatusNewer) current.taskAttemptMs else if (!running) 0L else parsed.attemptMs,
+                        taskChars = if (running) current.taskChars else -1,
+                        taskReasonChars = if (running) current.taskReasonChars else -1,
+                        taskProgressAt = if (running) current.taskProgressAt else 0L,
+                        taskWaitingSince = when {
+                            liveStatusNewer -> current.taskWaitingSince
+                            !running -> 0L
+                            current.taskWaitingSince > 0L -> current.taskWaitingSince
+                            parsed.runningSince > 0L -> parsed.runningSince
+                            else -> System.currentTimeMillis()
+                        },
+                        // Explicit waiting starts a *new model request*: old steps
+                        // after the same user message cannot prove it responded.
+                        taskResponded = if (liveStatusNewer) current.taskResponded else
+                            running && (current.taskResponded || (explicitWaitingSession != sid && respondedFromHistory)),
+                        taskStage = if (running) current.taskStage else "",
                         // 安静锚点：重进运行中的会话时用历史里的回合开始时间兜底（0.4.8）
                         turnActivityAt = when {
-                            !parsed.running -> 0L
+                            liveStatusNewer -> current.turnActivityAt
+                            !running -> 0L
                             current.turnActivityAt > 0L -> current.turnActivityAt
                             parsed.runningSince > 0L -> parsed.runningSince
                             else -> System.currentTimeMillis()
                         },
-                        stopping = parsed.running && current.stopping,
-                        stopRequestedAt = if (parsed.running) current.stopRequestedAt else 0L,
-                        stopAcked = parsed.running && current.stopAcked,
-                        stopSendFailed = parsed.running && current.stopSendFailed,
+                        stopping = running && current.stopping,
+                        stopRequestedAt = if (running) current.stopRequestedAt else 0L,
+                        stopAcked = running && current.stopAcked,
+                        stopSendFailed = running && current.stopSendFailed,
                         historyLoading = false,
-                        revealText = if (fresh) last?.text else current.revealText,
+                        // 不重播打字机；完整正文一次性渲染，避免历史/键盘重组闪烁。
+                        revealText = null,
                         modelProvider = selection?.first ?: current.modelProvider,
                         modelId = selection?.second ?: current.modelId,
                         // 0.4.8：换了模型时标签要跟上——旧值会让胶囊显示成「cpa/muse-spark-1.3」
@@ -1220,10 +1515,24 @@ class BridgeRepository(context: Context) {
                     )
                 }
             }
+            // A progress frame delivered while the initial history was in flight
+            // has already advanced the replay cursor. Apply it only if this
+            // snapshot proves the turn is running and no later task event won.
+            if (stillCurrent()) {
+                val pending = openingProgress
+                openingProgress = null
+                openingSession = null
+                if (pending != null && pending.generation == taskEventGeneration && _state.value.running) {
+                    replayArrivalAt = pending.arrivedAt
+                    try { handleEvent(pending.frame) } finally { replayArrivalAt = 0L }
+                }
+            }
         } catch (error: BridgeException) {
+            if (!stillCurrent()) return
             _state.update { it.copy(historyLoading = false) }
             if (!quiet) handleApiError(error, "读取历史失败")
         } catch (error: Exception) {
+            if (!stillCurrent()) return
             _state.update { it.copy(historyLoading = false) }
             if (!quiet) fail("history", "读取历史失败：${error.message ?: "网络错误"}")
         }
@@ -1234,16 +1543,12 @@ class BridgeRepository(context: Context) {
     suspend fun sendWithImages(text: String, images: List<com.dsh.mobile.ui.AttachImage>): Boolean {
         completionPending = false
         val s = _state.value
-        val sid = s.sessionId ?: return false
-        val token = s.token ?: return false
+        val visit = captureVisit(s) ?: return false
+        val sid = visit.sid
+        val token = visit.token
         val trimmed = text.trim()
         if (trimmed.isEmpty() && images.isEmpty()) return false
         val label = trimmed.ifEmpty { "（图片 ×${images.size}）" }
-        // N1 0.2.64 P0：单飞闸门。
-        if (submitInFlight) return false
-        submitInFlight = true
-        val reqId = submissionId(sid, label)
-        DraftStore.savePending(appContext, sid, reqId, label, "queue")
         val optimistic = ChatRow(
             Role.USER,
             trimmed,
@@ -1252,12 +1557,30 @@ class BridgeRepository(context: Context) {
             },
             pendingAck = true,
         )
+        // Match attachment contents to the bridge's sha256: IDs off the UI thread.
+        val messageKey = withContext(Dispatchers.Default) { userMessageKey(optimistic) }
+        if (!isCurrent(visit)) return false
+        // N1 0.2.64 P0：单飞闸门。
+        if (!acquireSubmission(visit)) return false
+        val owner = pendingOwner(visit)
+        val fingerprint = DraftStore.pendingFingerprint("rich", "queue", trimmed,
+            images.mapIndexed { index, image -> JSONObject().put("type", image.mediaType).put("name", image.name)
+                .put("content", messageKey.images[index]).toString() })
+        val reqId = submissionId(owner, fingerprint)
+        val sendStopGeneration = stopRequestGeneration
+        taskEventGeneration++
+        val sendGeneration = taskEventGeneration
+        explicitWaitingSession = null
+        DraftStore.savePending(appContext, owner, reqId, label, "queue", fingerprint)
+        val tracked = trackOptimistic(visit, optimistic, messageKey)
+        val sendNow = System.currentTimeMillis()
         _state.update {
             it.copy(
                 history = it.history + optimistic,
                 running = true,
                 sending = true,
                 lastSendFailed = false,
+                runSince = sendNow, turnActivityAt = sendNow, taskWaitingSince = sendNow,
             )
         }
         return try {
@@ -1274,24 +1597,15 @@ class BridgeRepository(context: Context) {
                         .put("name", image.name),
                 )
             }
-            api.promptRich(token, sid, content, reqId)
-            DraftStore.clearPending(appContext, sid)
-            // 回执到了：撤下"发送中"
-            _state.update { st ->
-                val idx = st.history.indexOfFirst { row -> row === optimistic }
-                if (idx < 0) st
-                else st.copy(history = st.history.toMutableList().also { list -> list[idx] = list[idx].copy(pendingAck = false) })
-            }
-            _state.update {
-                it.copy(
-                    sending = false,
-                    running = true,
-                    thinking = true,
-                    thinkingSince = System.currentTimeMillis(),
-                )
-            }
+            requireSubmissionAck(api.promptRich(token, sid, content, reqId))
+            DraftStore.clearPending(appContext, owner, reqId)
+            projectAcknowledgement(visit, tracked, sendGeneration)
             true
         } catch (error: Exception) {
+            forgetOptimistic(visit, tracked)
+            if (!tracked.stopRequested && !tracked.liveActivity && !tracked.historyPersisted)
+                finishTurn(LiveOwner(sid, token, visit.base), tracked)
+            if (!isCurrent(visit)) return false
             val reason = error.message?.takeIf { it.isNotBlank() } ?: "网络错误"
             // 失败要留痕：按对象身份精确撤掉这条乐观气泡（原来的 dropLast(1) 在
             // 电脑端已回显同名消息时会删错行），补一条明文说明；内容留在输入框可再试。
@@ -1301,7 +1615,7 @@ class BridgeRepository(context: Context) {
                 if (idx >= 0) list.removeAt(idx)
                 it.copy(
                     history = list + ChatRow(Role.NOTICE, "发送失败：$reason（内容还在输入框里，可再试一次）"),
-                    running = false,
+                    running = if (!tracked.historyPersisted && taskEventGeneration == sendGeneration && stopRequestGeneration == sendStopGeneration) false else it.running,
                     sending = false,
                     lastSendFailed = true,
                 )
@@ -1310,66 +1624,65 @@ class BridgeRepository(context: Context) {
             else fail("send", "发送失败：$reason")
             false
         } finally {
-            submitInFlight = false
+            releaseSubmission(visit)
         }
     }
 
     suspend fun send(text: String): Boolean {
         completionPending = false
         val s = _state.value
-        val sid = s.sessionId ?: return false
-        val token = s.token ?: return false
+        val visit = captureVisit(s) ?: return false
+        val sid = visit.sid
+        val token = visit.token
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
         // 新会话的默认模型如果还在后台套用中，先等它落地（最多 4s）——
         // 不然第一条消息可能跑在电脑端当前的模型上
         if (modelSelectSid != null && modelSelectSid == sid) {
-            withTimeoutOrNull(4000) { modelSelectJob?.join() }
-            modelSelectJob = null
-            modelSelectSid = null
+            val pendingModel = modelSelectJob
+            withTimeoutOrNull(4000) { pendingModel?.join() }
+            if (modelSelectJob === pendingModel) {
+                modelSelectJob = null
+                modelSelectSid = null
+            }
+            if (!isCurrent(visit)) return false
         }
         EventTrail.add("send ${trimmed.length} chars sid=${sid.take(8)}")
         // N1 0.2.64 P0：单飞闸门。
-        if (submitInFlight) return false
-        submitInFlight = true
-        val reqId = submissionId(sid, trimmed)
-        DraftStore.savePending(appContext, sid, reqId, trimmed, "queue")
+        if (!acquireSubmission(visit)) return false
+        val owner = pendingOwner(visit)
+        val fingerprint = DraftStore.pendingFingerprint("text", "queue", trimmed)
+        val reqId = submissionId(owner, fingerprint)
+        val sendStopGeneration = stopRequestGeneration
+        taskEventGeneration++
+        val sendGeneration = taskEventGeneration
+        explicitWaitingSession = null
+        DraftStore.savePending(appContext, owner, reqId, trimmed, "queue", fingerprint)
         // 乐观行带"发送中"标记：回执回来之前不冒充已送达（以前气泡出现与否
         // 和"电脑是否收到"完全无关）。
         val optimistic = ChatRow(Role.USER, trimmed, pendingAck = true)
+        val tracked = trackOptimistic(visit, optimistic)
         // 0.4.8：发送即起表——任务条立刻有「已发送 · 等待模型响应」+ 计时 + 安静提醒锚点，
         // 不再等 turn/start 到达才出现（上游慢时那段空窗正是「没反应」的观感来源）。
         val sendNow = System.currentTimeMillis()
         _state.update {
             it.copy(
                 history = it.history + optimistic, running = true, sending = true, lastSendFailed = false,
-                runSince = sendNow, turnActivityAt = sendNow,
+                runSince = sendNow, turnActivityAt = sendNow, taskWaitingSince = sendNow,
                 taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L,
-                taskResponded = false,
+                taskResponded = false, taskStage = "",
             )
         }
         return try {
-            api.prompt(token, sid, trimmed, "queue", reqId)
-            DraftStore.clearPending(appContext, sid)
-            // 回执到了：撤下"发送中"（气泡保留；之后历史重刷会用落库行替换它）
-            _state.update { st ->
-                val idx = st.history.indexOfFirst { row -> row === optimistic }
-                if (idx < 0) st
-                else st.copy(history = st.history.toMutableList().also { list -> list[idx] = list[idx].copy(pendingAck = false) })
-            }
-            // The "desktop is working" row has to be there the moment the
-            // request lands — `turn/start` can take a beat, and a blank screen
-            // after sending is exactly what "手机端没有任何反馈" looked like.
-            _state.update {
-                it.copy(
-                    sending = false,
-                    running = true,
-                    thinking = true,
-                    thinkingSince = System.currentTimeMillis(),
-                )
-            }
+            requireSubmissionAck(api.prompt(token, sid, trimmed, "queue", reqId))
+            DraftStore.clearPending(appContext, owner, reqId)
+            projectAcknowledgement(visit, tracked, sendGeneration)
             true
         } catch (error: Exception) {
+            forgetOptimistic(visit, tracked)
+            if (!tracked.stopRequested && !tracked.liveActivity && !tracked.historyPersisted)
+                finishTurn(LiveOwner(sid, token, visit.base), tracked)
+            if (!isCurrent(visit)) return false
             val reason = error.message?.takeIf { it.isNotBlank() } ?: "网络错误"
             // 失败要留痕：按对象身份精确撤掉这条乐观气泡（原来的 dropLast(1) 在
             // 电脑端已回显同名消息时会删错行），补一条明文说明；内容留在输入框可再试。
@@ -1379,7 +1692,7 @@ class BridgeRepository(context: Context) {
                 if (idx >= 0) list.removeAt(idx)
                 it.copy(
                     history = list + ChatRow(Role.NOTICE, "发送失败：$reason（内容还在输入框里，可再试一次）"),
-                    running = false,
+                    running = if (!tracked.historyPersisted && taskEventGeneration == sendGeneration && stopRequestGeneration == sendStopGeneration) false else it.running,
                     sending = false,
                     lastSendFailed = true,
                 )
@@ -1388,23 +1701,22 @@ class BridgeRepository(context: Context) {
             else fail("send", "发送失败：$reason")
             false
         } finally {
-            submitInFlight = false
+            releaseSubmission(visit)
         }
     }
 
     /** Same as the PWA: "重新生成" asks the desktop to keep going. */
     fun regenerate() {
         val s = _state.value
-        val sid = s.sessionId ?: return
-        val token = s.token ?: return
+        val visit = captureVisit(s) ?: return
         scope.launch {
             try {
-                api.prompt(token, sid, "继续", "queue")
-                _state.update { it.copy(running = true) }
+                api.prompt(visit.token, visit.sid, "继续", "queue")
+                if (isCurrent(visit)) _state.update { it.copy(running = true) }
             } catch (error: BridgeException) {
-                handleApiError(error, "重新生成失败")
+                if (isCurrent(visit)) handleApiError(error, "重新生成失败")
             } catch (error: Exception) {
-                fail("send", "重新生成失败：${error.message ?: "网络错误"}")
+                if (isCurrent(visit)) fail("send", "重新生成失败：${error.message ?: "网络错误"}")
             }
         }
     }
@@ -1412,8 +1724,7 @@ class BridgeRepository(context: Context) {
     /** 空回复的「重试」：把上一条用户消息原样再发一遍（比发「继续」更贴语义）。 */
     fun retryLastPrompt() {
         val s = _state.value
-        val sid = s.sessionId ?: return
-        val token = s.token ?: return
+        val visit = captureVisit(s) ?: return
         val lastUser = s.history.lastOrNull { it.who == Role.USER }?.text
         if (lastUser.isNullOrBlank()) {
             toast("找不到可重发的消息")
@@ -1421,24 +1732,25 @@ class BridgeRepository(context: Context) {
         }
         scope.launch {
             try {
-                api.prompt(token, sid, lastUser, "queue")
-                _state.update { it.copy(running = true) }
+                api.prompt(visit.token, visit.sid, lastUser, "queue")
+                if (isCurrent(visit)) _state.update { it.copy(running = true) }
             } catch (error: BridgeException) {
-                handleApiError(error, "重试失败")
+                if (isCurrent(visit)) handleApiError(error, "重试失败")
             } catch (error: Exception) {
-                fail("send", "重试失败：${error.message ?: "网络错误"}")
+                if (isCurrent(visit)) fail("send", "重试失败：${error.message ?: "网络错误"}")
             }
         }
     }
 
     fun cancelTurn() {
         val s = _state.value
-        val sid = s.sessionId ?: return
-        val token = s.token ?: return
+        val visit = captureVisit(s) ?: return
         // 防连点（P0-003）：同一波停止 1.2 秒内只发一次，"重试停止"是更晚的手势、
         // 不受影响。连点不再变成多份停止请求。
         val nowTap = System.currentTimeMillis()
         if (s.stopping && nowTap - s.stopRequestedAt < 1200) return
+        val stopRequest = ++stopRequestGeneration
+        outstandingTurns[LiveOwner(visit.sid, visit.token, visit.base)]?.forEach { it.stopRequested = true }
         // 三层事实：本地已响应（stopping）→ 电脑已收到（stopAcked）→ 真正停止（turn/end）。
         // 任何一层都不冒充下一层（J1《聊天页会诊》01；界面全部状态显示在任务控制条）。
         _state.update {
@@ -1449,10 +1761,12 @@ class BridgeRepository(context: Context) {
         }
         scope.launch {
             try {
-                api.cancel(token, sid)
-                _state.update { if (it.stopping && it.running) it.copy(stopAcked = true) else it }
+                api.cancel(visit.token, visit.sid)
+                if (isCurrent(visit) && stopRequest == stopRequestGeneration)
+                    _state.update { if (it.stopping && it.running) it.copy(stopAcked = true) else it }
             } catch (error: Exception) {
-                _state.update { it.copy(stopSendFailed = true) }
+                if (isCurrent(visit) && stopRequest == stopRequestGeneration)
+                    _state.update { if (it.stopping && it.running) it.copy(stopSendFailed = true) else it }
             }
         }
     }
@@ -1804,14 +2118,6 @@ class BridgeRepository(context: Context) {
             handleHello(frame)
             return
         }
-        if (seq > lastSeq) {
-            // Deliberately NOT part of the UI state: an event stream that bumps a
-            // StateFlow for every frame drags the entire screen through
-            // recomposition dozens of times per turn — which is jank you can see
-            // while scrolling. Only the reconnect handshake needs this number.
-            lastSeq = seq
-            persistSeq(seq)
-        }
         when (kind) {
             "notify" -> {
                 // Turn-complete and config notices arrive once per turn — and every
@@ -1825,6 +2131,12 @@ class BridgeRepository(context: Context) {
                 if (_state.value.view == View.CHAT) scheduleHistoryReload()
             }
             "event" -> handleEvent(frame)
+        }
+        // A hello is the SERVER watermark, not proof of delivery. Advance only
+        // after handling an actual event/notification, never on control frames.
+        if ((kind == "event" || kind == "notify") && seq > lastSeq) {
+            lastSeq = seq
+            persistSeq(seq)
         }
     }
 
@@ -1850,9 +2162,11 @@ class BridgeRepository(context: Context) {
             lastSeq = 0L
             EventTrail.add("hello: epoch 变化 → 全量重读")
             scope.launch {
-                store.saveEpoch(epoch)
-                store.saveSeq(0L)
+                cursorWriteLock.withLock {
+                    if (bridgeEpoch == epoch) store.saveCursor(epoch, lastSeq)
+                }
             }
+            lastSeqWrite = 0L
             onReconnected()
             return
         }
@@ -1865,18 +2179,35 @@ class BridgeRepository(context: Context) {
     private fun handleEvent(frame: JSONObject) {
         val s = _state.value
         val sid = frame.optString("sessionId")
-        val nowAt = System.currentTimeMillis()
+        val nowAt = replayArrivalAt.takeIf { it > 0L } ?: System.currentTimeMillis()
+        val evType = frame.optString("type")
+        // A replayed old progress frame is not proof of a live turn. During an
+        // initial history request retain the latest meaningful waiting/progress
+        // until history confirms running, instead of silently losing its seq.
+        if (!s.running && evType in setOf("assistant/waiting", "assistant/progress", "assistant/chunk")) {
+            val flight = historyFlight
+            val opening = sid.isNotEmpty() && sid == s.sessionId &&
+                (openingSession == sid || (flight != null && flight.sid == sid &&
+                    flight.token == s.token && flight.base == api.base && flight.generation == historyRequestGeneration))
+            val data = frame.optJSONObject("data")
+            val meaningful = evType == "assistant/waiting" || (evType == "assistant/progress" &&
+                (data?.optString("phase").orEmpty().isNotEmpty() || (data?.optInt("textChars", -1) ?: -1) > 0 ||
+                    (data?.optInt("reasoningChars", -1) ?: -1) > 0))
+            if (opening && meaningful) openingProgress = OpeningProgress(taskEventGeneration, JSONObject(frame.toString()), nowAt)
+            return
+        }
         // 活性时间：设置页「连接状态」行显示「刚刚 / N 分钟前还有活动」；当前会话跑动中
         // 时同时刷新安静锚点——任何事件（含工具调用）都算一次「它还在动」的证据（0.4.8）。
-        _state.update {
-            it.copy(
-                lastEventAt = nowAt,
-                turnActivityAt = if (it.running && (sid.isEmpty() || sid == it.sessionId)) nowAt else it.turnActivityAt,
-            )
+        if (evType != "assistant/chunk" || nowAt - s.lastEventAt >= 1000L) {
+            _state.update {
+                it.copy(
+                    lastEventAt = maxOf(it.lastEventAt, nowAt),
+                    turnActivityAt = if (it.running && (sid.isEmpty() || sid == it.sessionId)) maxOf(it.turnActivityAt, nowAt) else it.turnActivityAt,
+                )
+            }
         }
         // 审批只读（K2-A）：任何会话的审批事实都刷新本机审批视图；发生在当前会话里的
         // 审批同时触发历史重读（聊天里出现「等待你在电脑上审批」行）。
-        val evType = frame.optString("type")
         if (evType == "approval/asked" || evType == "approval/decided") {
             scheduleApprovalsReload()
             if (sid.isNotEmpty() && sid == s.sessionId) scheduleHistoryReload()
@@ -1918,22 +2249,38 @@ class BridgeRepository(context: Context) {
             return
         }
         val data = frame.optJSONObject("data") ?: JSONObject()
+        if (evType in setOf("turn/start", "turn/end", "assistant/waiting", "assistant/progress",
+                "assistant/chunk", "assistant/message", "tool/call", "tool/result", "llm/retry", "assistant/attempt")) {
+            taskEventGeneration++
+            if (evType != "turn/end") captureVisit(s)?.let { visit ->
+                outstandingTurns[LiveOwner(visit.sid, visit.token, visit.base)]?.forEach { it.liveActivity = true }
+            }
+        }
         when (frame.optString("type")) {
             "turn/start" -> {
-                // 新回合：上一回合的缓冲残余作废（正常已在 turn/end 冲刷过）
-                liveBuffer.clear()
+                explicitWaitingSession = null
+                // A missing end event must not throw away the preceding partial answer.
+                flushLiveBuffer()
+                fallbackTurn += 1
+                fallbackStep = 0
+                lastChunkUpdateAt = 0L
                 val startedAt = System.currentTimeMillis()
                 _state.update {
                     it.copy(
-                        running = true, live = emptyList(), thinking = true, thinkingSince = startedAt,
-                        runSince = startedAt, turnActivityAt = startedAt, stopping = false, stopRequestedAt = 0L,
+                        running = true, thinking = true, thinkingSince = startedAt,
+                        runSince = startedAt, turnActivityAt = startedAt, taskWaitingSince = startedAt, stopping = false, stopRequestedAt = 0L,
                         stopAcked = false, stopSendFailed = false, streamedLive = false,
                         taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L,
-                        taskResponded = false,
+                        taskResponded = false, taskStage = "",
                     )
                 }
             }
             "turn/end" -> {
+                explicitWaitingSession = null
+                captureVisit(s)?.let { visit ->
+                    val owner = LiveOwner(visit.sid, visit.token, visit.base)
+                    outstandingTurns[owner]?.toList().orEmpty().forEach { finishTurn(owner, it) }
+                }
                 // 回合结束：先把缓冲里剩余的内容刷出并清掉定时器（finish 逻辑），
                 // 不足一个节流窗口的尾巴不能丢。
                 flushLiveBuffer()
@@ -1964,39 +2311,41 @@ class BridgeRepository(context: Context) {
                 _state.value.sessionId?.let { sid -> loadSessionFiles(sid, quiet = true) }
                 _state.update {
                     // live 不在这里清：已落库的由历史重载原子撤；失败/停止回合留下的
-                    // 半截文字继续显示（用户看得到已生成的部分），下一个 turn/start 统一清场。
+                    // 半截文字继续显示，直到权威历史成功接管。
                     it.copy(running = false, thinking = false, thinkingSince = 0L, runSince = 0L, stopping = false, stopRequestedAt = 0L, stopAcked = false, stopSendFailed = false,
-                        taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L, turnActivityAt = 0L,
-                        taskResponded = false)
+                        taskRetry = "", taskAttemptMs = 0L, taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L, turnActivityAt = 0L, taskWaitingSince = 0L,
+                        taskResponded = false, taskStage = "")
                 }
             }
             "assistant/chunk" -> {
-                // 有流式增量 = 上游确实开始吐了（哪怕这一轮桥接没发计数脉冲）。
-                _state.update { it.copy(taskResponded = true, turnActivityAt = System.currentTimeMillis()) }
-                // 0.4.6：有内容在流 = 之前那次重试已经出结果（成功开始输出），横幅立刻撤；
-                // 若这次尝试最终仍失败，新的 llm/retry 会把它重新设回来。
-                if (_state.value.taskRetry.isNotEmpty()) {
-                    _state.update { it.copy(taskRetry = "", taskAttemptMs = 0L) }
-                }
-                // A streaming adapter may send thinking first; it belongs in the
-                // running indicator, never inside the reply bubble.
-                if (Wire.chunkIsReasoning(data)) {
-                    if (!_state.value.thinking) _state.update { it.copy(thinking = true) }
-                } else {
-                    val text = Wire.chunkText(data)
-                    if (text.isNotEmpty()) {
-                        // 节流：先进缓冲，最多每 liveFlushMs 合并写一次 state（防高频重绘闪烁）。
-                        val key = "${data.opt("turn") ?: 0}:${data.opt("step") ?: 0}"
+                val text = Wire.chunkText(data)
+                val reasoning = Wire.chunkIsReasoning(data)
+                // 空帧不是思考/输出证据；非空增量只更新状态，正文留到完整消息。
+                if (text.isNotEmpty()) {
+                    explicitWaitingSession = null
+                    val local = nowAt
+                    val stage = if (reasoning) "reasoning" else "output"
+                    if (_state.value.taskStage != stage || local - lastChunkUpdateAt >= 1000L) {
+                        lastChunkUpdateAt = local
+                        _state.update { st -> st.copy(taskResponded = true, taskStage = stage,
+                            taskProgressAt = local, turnActivityAt = local, taskRetry = "", taskAttemptMs = 0L) }
+                    }
+                    if (!reasoning) {
+                        val turn = data.optInt("turn", 0)
+                        val step = data.optInt("step", 0)
+                        val key = if (turn > 0 && step > 0) "$turn:$step" else "local:$fallbackTurn:$fallbackStep"
                         queueLiveChunk(key, text)
                     }
                 }
             }
             "assistant/message" -> {
+                explicitWaitingSession = null
                 // 消息落库本身就是上游已响应的铁证（工具轮之间尤其常见：
                 // 没有流式帧，只有最终 message+tool call）。
-                _state.update { it.copy(taskResponded = true, turnActivityAt = System.currentTimeMillis()) }
+                _state.update { it.copy(taskResponded = true, taskStage = "responding", turnActivityAt = System.currentTimeMillis()) }
                 // 先把缓冲里不足一个节流窗口的流式尾巴落地（finish 冲刷），再安排重载。
                 flushLiveBuffer()
+                fallbackStep += 1
                 // 0.4.6：消息落地 = 之前那次重试已经过去（成功产出）；横幅立刻撤。
                 // 若这次尝试仍失败，新的 llm/retry 会把它重新设回来。
                 if (_state.value.taskRetry.isNotEmpty()) {
@@ -2026,21 +2375,54 @@ class BridgeRepository(context: Context) {
                 val span = Wire.attemptSpanMs(data)
                 if (span > 0) _state.update { it.copy(taskAttemptMs = span) }
             }
+            "assistant/waiting" -> {
+                explicitWaitingSession = s.sessionId
+                val local = nowAt
+                _state.update { it.copy(taskResponded = false, taskStage = "", taskChars = -1,
+                    taskReasonChars = -1, taskProgressAt = 0L, turnActivityAt = maxOf(it.turnActivityAt, local), taskWaitingSince = local,
+                    taskRetry = "", taskAttemptMs = 0L, thinking = true) }
+            }
             "assistant/progress" -> {
                 // 桥接 0.2.31 的计数脉冲（不含内容）：证明上游还在吐数据——「真在思考」的答案。
                 // 0.4.8：新鲜度以**本地到达时间**为准（桥接帧里的 at 是电脑时钟，跨设备比较会漂）。
-                Wire.progressCounts(data)?.let { counts ->
-                    val local = System.currentTimeMillis()
-                    _state.update {
-                        it.copy(taskChars = counts.first, taskReasonChars = counts.second, taskProgressAt = local,
-                            taskResponded = true, turnActivityAt = local)
+                run {
+                    val local = nowAt
+                    // 新桥接会在 start 发 waiting（0/0），只代表请求开始而非模型输出；
+                    // responding/reasoning/output/tool 都必须由桥接的真实 chunk 派生。
+                    val phase = data.optString("phase")
+                    val textChars = data.optInt("textChars", -1)
+                    val reasoningChars = data.optInt("reasoningChars", -1)
+                    val stage = when {
+                        phase in listOf("responding", "reasoning", "output", "tool") -> phase
+                        phase == "waiting" -> ""
+                        textChars > 0 -> "output"
+                        reasoningChars > 0 -> "reasoning"
+                        else -> ""
+                    }
+                    if (phase == "waiting") {
+                        explicitWaitingSession = s.sessionId
+                    } else if (stage.isNotEmpty()) {
+                        explicitWaitingSession = null
+                    }
+                    _state.update { st ->
+                        if (phase == "waiting") st.copy(taskResponded = false, taskStage = "",
+                            taskChars = -1, taskReasonChars = -1, taskProgressAt = 0L,
+                            taskRetry = "", taskAttemptMs = 0L, thinking = true, turnActivityAt = maxOf(st.turnActivityAt, local), taskWaitingSince = local)
+                        else if (stage.isEmpty()) st else st.copy(
+                            taskChars = if (textChars >= 0) textChars else st.taskChars,
+                            taskReasonChars = if (reasoningChars >= 0) reasoningChars else st.taskReasonChars, taskProgressAt = local,
+                            taskResponded = true, taskStage = stage, turnActivityAt = maxOf(st.turnActivityAt, local),
+                            taskRetry = "", taskAttemptMs = 0L,
+                        )
                     }
                 }
             }
             "tool/call", "tool/result" -> {
+                explicitWaitingSession = null
                 // 工具调用/结果也是上游产物：模型已经在跑工具链，
                 // 不能再让界面说「上游还没有开始响应」。
-                _state.update { it.copy(taskResponded = true, turnActivityAt = System.currentTimeMillis()) }
+                val stage = if (frame.optString("type") == "tool/call") "tool" else "responding"
+                _state.update { it.copy(taskResponded = true, taskStage = stage, turnActivityAt = System.currentTimeMillis()) }
                 scheduleHistoryReload()
             }
             "user/message",
@@ -2103,7 +2485,12 @@ class BridgeRepository(context: Context) {
         val now = System.currentTimeMillis()
         if (now - lastSeqWrite < 1500L) return
         lastSeqWrite = now
-        scope.launch { store.saveSeq(seq) }
+        val epoch = bridgeEpoch
+        scope.launch {
+            cursorWriteLock.withLock {
+                if (bridgeEpoch == epoch) store.saveCursor(epoch, seq)
+            }
+        }
     }
 
     // ----------------------------------------------------------------- misc

@@ -48,6 +48,59 @@ object DraftStore {
     /** 提交回执标识。同文本重试复用 requestId；成功后才清除。 */
     data class Pending(val requestId: String, val text: String, val mode: String)
 
+    /** Identity is used only to derive irreversible keys, never persisted in cleartext. */
+    data class PendingOwner(val base: String, val token: String, val sessionId: String)
+
+    private fun digest(value: String): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it.toInt() and 255) }
+
+    private fun ownerPrefix(owner: PendingOwner): String {
+        val namespace = digest(org.json.JSONArray().put(owner.base).put(owner.token).toString())
+        return "pending.v2.$namespace.${digest(owner.sessionId)}."
+    }
+
+    /** A retry must match method, mode, text, and every attachment's content identity. */
+    fun pendingFingerprint(kind: String, mode: String, text: String, images: List<String> = emptyList()): String =
+        digest(org.json.JSONArray().put(kind).put(mode).put(text).put(org.json.JSONArray(images)).toString())
+
+    @Synchronized
+    fun loadPending(ctx: Context, owner: PendingOwner, fingerprint: String): Pending? {
+        if (owner.sessionId.isEmpty()) return null
+        val prefix = ownerPrefix(owner)
+        return prefs(ctx).all.entries.asSequence().filter { it.key.startsWith(prefix) }
+            .mapNotNull { entry ->
+                runCatching {
+                    val json = JSONObject(entry.value as String)
+                    if (json.optString("fingerprint") != fingerprint) return@runCatching null
+                    json.optLong("ts") to Pending(json.getString("requestId"), json.getString("text"), json.optString("mode", "queue"))
+                }.getOrNull()
+            }.maxByOrNull { it.first }?.second
+    }
+
+    @Synchronized
+    fun savePending(ctx: Context, owner: PendingOwner, requestId: String, text: String, mode: String, fingerprint: String) {
+        if (owner.sessionId.isEmpty() || requestId.isEmpty()) return
+        prefs(ctx).edit().putString(
+            ownerPrefix(owner) + digest(requestId),
+            JSONObject().put("requestId", requestId).put("text", text).put("mode", mode)
+                .put("fingerprint", fingerprint).put("stage", "attempted")
+                .put("ts", System.currentTimeMillis()).toString(),
+        ).apply()
+    }
+
+    /** Compare and remove the exact operation; never touch an unknown legacy slot. */
+    @Synchronized
+    fun clearPending(ctx: Context, owner: PendingOwner, requestId: String) {
+        if (owner.sessionId.isEmpty() || requestId.isEmpty()) return
+        val key = ownerPrefix(owner) + digest(requestId)
+        val raw = prefs(ctx).getString(key, null) ?: return
+        if (runCatching { JSONObject(raw).getString("requestId") }.getOrNull() == requestId) {
+            prefs(ctx).edit().remove(key).apply()
+        }
+    }
+
+    // Legacy identity was not recorded. Keep these accessors for old data and
+    // tests, but production submission must neither reuse nor delete this slot.
     private fun pendingKey(sessionId: String) = "$sessionId.pending"
 
     fun loadPending(ctx: Context, sessionId: String): Pending? {

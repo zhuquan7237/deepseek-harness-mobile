@@ -163,6 +163,9 @@ object Wire {
         val lastUsage: TurnUsage? = null,
         /** lastUsage 所属轮号（同轮多步已合并进 lastUsage）。 */
         val lastUsageTurn: Int = 0,
+        /** Event positions retain the distinction between message persistence and turn completion. */
+        val userEvents: List<Pair<Int, ChatRow>> = emptyList(),
+        val lastTurnEndIndex: Int = -1,
     )
 
     /** One content block inside an assistant/user message. */
@@ -315,7 +318,9 @@ object Wire {
     fun parseHistory(json: JSONObject, sessionId: String = ""): HistoryParse {
         val items = json.optJSONArray("items") ?: JSONArray()
         val rows = ArrayList<ChatRow>()
+        val userEvents = ArrayList<Pair<Int, ChatRow>>()
         var lastTurn: String? = null
+        var lastTurnEndIndex = -1
         var stepStart = 0L
         // 最近一次 turn/start 的时间（重进正在跑的会话时，正在思考的秒数要从这里续）
         var runningSince = 0L
@@ -350,6 +355,7 @@ object Wire {
                 }
                 "turn/end" -> {
                     lastTurn = "end"
+                    lastTurnEndIndex = i
                     // 回合结束：重试现场作废（横幅只属于进行中的回合）
                     lastRetryText = null
                     lastAttemptMs = 0L
@@ -398,7 +404,11 @@ object Wire {
                         val notice = modelChangedNotice(text)
                         when {
                             notice != null -> rows.add(ChatRow(Role.NOTICE, notice))
-                            !isInjectedContext(text) -> rows.add(ChatRow(Role.USER, text, images = images, time = time))
+                            !isInjectedContext(text) -> {
+                                val row = ChatRow(Role.USER, text, images = images, time = time)
+                                rows.add(row)
+                                userEvents.add(i to row)
+                            }
                         }
                     }
                 }
@@ -516,6 +526,8 @@ object Wire {
             lastAttemptMs,
             lastUsage = if (maxUsageTurn > 0) turnUsage[maxUsageTurn] else null,
             lastUsageTurn = maxUsageTurn,
+            userEvents = userEvents,
+            lastTurnEndIndex = lastTurnEndIndex,
         )
     }
 
@@ -860,9 +872,9 @@ fun isInjectedContext(text: String): Boolean =
     fun chunkIsReasoning(data: JSONObject?): Boolean {
         val chunk = data?.opt("chunk")
         if (chunk is JSONObject) {
-            if (chunk.optString("type") == "reasoning") return true
+            if (chunk.optString("type") in listOf("reasoning", "reasoning-delta")) return true
             val delta = chunk.optJSONObject("delta")
-            if (delta != null && delta.optString("type") == "reasoning") return true
+            if (delta != null && delta.optString("type") in listOf("reasoning", "reasoning-delta")) return true
         }
         return false
     }

@@ -1048,10 +1048,19 @@ private fun MessageList(
             }
         }
         if (live.isNotEmpty()) {
-            itemsIndexed(live, key = { _, bubble -> "live:" + bubble.key }) { index, bubble ->
-                // 回合结束后（失败/被停止）残留的半截文字还在，但「正在生成」标签
-                // 必须跟着 running 走，否则停了还显示"正在生成"。
-                Box(Modifier.animateItem()) { LiveRow(bubble, first = index == 0 && state.running) }
+            itemsIndexed(live, key = { _, bubble -> "live:" + bubble.key }) { _, bubble ->
+                // These are complete (or terminally interrupted) messages, not live typing.
+                Box(Modifier.animateItem()) {
+                    MessageRow(
+                        row = ChatRow(Role.ASSISTANT, bubble.text), onSaveCode = onSaveCode,
+                        showActions = false, reveal = false, onRevealDone = onRevealDone,
+                        onCopy = onCopy, onRegenerate = onRegenerate, onRetry = onRetry,
+                        onSwitchModel = onSwitchModel, onPreview = onPreview,
+                        onOpenExternal = onOpenExternal, onViewSource = onViewSource,
+                        onOpenGenerated = onOpenGenerated, onOpenRead = onOpenRead,
+                        fetchImage = fetchImage, fetchAttach = fetchAttach, onOpenImage = onOpenImage,
+                    )
+                }
             }
         }
         if (state.thinking && live.isEmpty()) {
@@ -1399,6 +1408,9 @@ private fun SpeakerSemantics(content: @Composable () -> Unit) {
     Box(Modifier.semantics { contentDescription = "电脑端" }) { content() }
 }
 
+internal fun pendingAckTextColor(bubbleUserText: Color): Color =
+    bubbleUserText.copy(alpha = 0.8f)
+
 @Composable
 private fun MessageRow(
     row: ChatRow,
@@ -1634,7 +1646,7 @@ private fun MessageRow(
                         Text(
                             "发送中…",
                             style = MaterialTheme.typography.labelSmall,
-                            color = palette.bubbleUserText.copy(alpha = 0.55f),
+                            color = pendingAckTextColor(palette.bubbleUserText),
                             modifier = Modifier.padding(top = 2.dp),
                         )
                     }
@@ -2496,27 +2508,6 @@ private fun ThinkingRow(state: AppState) {
     }
 }
 
-@Composable
-private fun LiveRow(bubble: LiveBubble, first: Boolean) {
-    val palette = LocalDsh.current
-    SpeakerSemantics {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 6.dp),
-        ) {
-            if (first) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(Modifier.size(6.dp).clip(CircleShape).background(palette.accent))
-                    Text("正在生成", style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
-                }
-                Spacer(Modifier.height(7.dp))
-            }
-            Text(bubble.text, style = MaterialTheme.typography.bodyLarge, color = palette.textPrimary)
-        }
-    }
-}
-
 /** 聊天里发过的图片：按已知宽高比先占好位置，加载到再显示；点开看大图。 */
 @Composable
 private fun ChatImageThumb(
@@ -3147,20 +3138,29 @@ private fun taskPhaseOf(state: AppState, now: Long): TaskPhase? {
     val startedAt = if (state.runSince > 0) state.runSince else progressAt
     val quietAnchor = maxOf(progressAt, state.turnActivityAt, startedAt)
     val quietFor = if (quietAnchor > 0) now - quietAnchor else 0L
-    val waitedFor = if (startedAt > 0) now - startedAt else 0L
+    val waitStartedAt = state.taskWaitingSince.takeIf { it > 0 }
+        ?: state.turnActivityAt.takeIf { it > 0 } ?: startedAt
+    val waitedFor = if (waitStartedAt > 0) now - waitStartedAt else 0L
     return when {
+        state.conn == Conn.OFFLINE -> TaskPhase("连接已断开 · 状态可能过期", true)
+        state.conn == Conn.CONNECTING || state.syncing -> TaskPhase("正在连接或补齐 · 状态可能过期", false)
         state.taskRetry.isNotEmpty() -> {
             val extra = if (state.taskAttemptMs >= 5000) "（上次尝试 ${spanText(state.taskAttemptMs)}）" else ""
             TaskPhase("${state.taskRetry}$extra", true)
         }
+        state.sending && !state.taskResponded -> TaskPhase("正在发送…", false)
         !state.taskResponded && waitedFor >= 30_000L ->
-            TaskPhase("上游还没有开始响应 · 已等待 ${spanText(waitedFor)}", waitedFor >= 120_000L)
+            TaskPhase("等待模型响应 · 已等待 ${spanText(waitedFor)}", waitedFor >= 120_000L)
         quietFor >= 60_000L -> TaskPhase("已 ${spanText(quietFor)}没有新输出", true)
         quietFor >= 20_000L -> TaskPhase("已 ${spanText(quietFor)}没有新输出（模型或工具较慢）", false)
+        state.taskStage == "tool" -> TaskPhase("模型正在调用工具…", false)
+        state.taskStage == "output" -> TaskPhase("模型正在输出…", false)
+        state.taskStage == "reasoning" -> TaskPhase("模型正在思考…", false)
+        state.taskStage == "responding" -> TaskPhase("已收到响应 · 正在处理", false)
         state.taskChars > 0 -> TaskPhase("模型正在输出…", false)
-        state.taskReasonChars > 0 || state.thinking -> TaskPhase("模型正在思考…", false)
+        state.taskReasonChars > 0 -> TaskPhase("模型正在思考…", false)
         !state.taskResponded -> TaskPhase("已发送 · 等待模型响应", false)
-        else -> TaskPhase("模型正在思考…", false)
+        else -> TaskPhase("已收到响应 · 正在处理", false)
     }
 }
 

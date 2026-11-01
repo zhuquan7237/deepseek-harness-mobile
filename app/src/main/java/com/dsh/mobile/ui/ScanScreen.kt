@@ -294,8 +294,9 @@ private class QrAnalyzer(private val onDecoded: (String) -> Unit) : ImageAnalysi
     override fun analyze(image: ImageProxy) {
         try {
             if (busy.get()) return
-            val media = image.image ?: return
-            val plane = media.planes.firstOrNull() ?: return
+            // ImageProxy exposes the same luminance plane without reaching into
+            // CameraX's experimental underlying android.media.Image API.
+            val plane = image.planes.firstOrNull() ?: return
             val buffer = plane.buffer
             val bytes = ByteArray(buffer.remaining())
             buffer.get(bytes)

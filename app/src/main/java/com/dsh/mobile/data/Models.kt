@@ -301,9 +301,13 @@ data class AppState(
     val taskChars: Int = -1,
     val taskReasonChars: Int = -1,
     val taskProgressAt: Long = 0L,
+    /** 本次模型请求的等待起点；与整回合的运行时长和其它事件活性分开。 */
+    val taskWaitingSince: Long = 0L,
     /** 本回合是否已收到任何模型侧产物（流式增量 / 落库消息 / 工具调用）——
      *  区分「上游真的没动静」与「已有输出但这一轮没有计数脉冲」。 */
     val taskResponded: Boolean = false,
+    /** 最新可信产物类型：空=无证据；其余来自真实模型事件。 */
+    val taskStage: String = "",
     /** 本回合最近一次任意事件（含工具调用）的本地到达时间——安静提醒的锚点（0.4.8）。 */
     val turnActivityAt: Long = 0L,
     /** 停止请求已发出、等待电脑确认——收到 turn/end 才清（绝不在断线时假装已停止）。 */

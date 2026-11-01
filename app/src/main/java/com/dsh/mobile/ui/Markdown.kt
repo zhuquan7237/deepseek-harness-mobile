@@ -3,6 +3,8 @@ package com.dsh.mobile.ui
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +12,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +30,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.Placeholder
@@ -60,9 +65,14 @@ val LocalDshLinkHandler = compositionLocalOf<((String) -> Unit)?> { null }
 
 sealed interface MdBlock {
     data class Heading(val level: Int, val text: String) : MdBlock
-    data class Para(val text: String) : MdBlock
-    data class Bullets(val items: List<String>) : MdBlock
-    data class Numbers(val items: List<String>) : MdBlock
+    data class Para(val text: String, val indent: Int = 0) : MdBlock
+    data class Bullets(val items: List<String>, val indent: Int = 0) : MdBlock
+    data class Numbers(
+        val items: List<String>,
+        val start: Int = 1,
+        val indent: Int = 0,
+        val delimiter: String = ".",
+    ) : MdBlock
     data class Quote(val text: String) : MdBlock
     data class Table(val header: List<String>, val rows: List<List<String>>) : MdBlock
     /** 独立成行的数学公式（`\[ … \]` / `$$ … $$`），交给 KaTeX 画。 */
@@ -87,15 +97,64 @@ data class MdSpan(
 object Markdown {
 
     private val bulletRe = Regex("^([-*+])\\s+(.*)$")
-    private val numberRe = Regex("^(\\d{1,3})[.)]\\s+(.*)$")
+    private val numberRe = Regex("^(\\d{1,3})([.)])\\s+(.*)$")
     private val linkRe = Regex("^\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
 
     fun parse(text: String): List<MdBlock> {
         val out = ArrayList<MdBlock>()
         val lines = text.replace("\r\n", "\n").replace('\r', '\n').split('\n')
+        // Counters belong to list levels, not contiguous rendering blocks. A nested
+        // list or an indented paragraph splits blocks without ending the parent.
+        data class ListLevel(val indent: Int, val delimiter: String, var next: Int, var contentIndent: Int)
+        val levels = mutableListOf<ListLevel>()
+        fun indentation(raw: String): Int {
+            var columns = 0
+            for (c in raw) {
+                when (c) {
+                    ' ' -> columns++
+                    '\t' -> columns += 4 - columns % 4
+                    else -> return columns
+                }
+            }
+            return columns
+        }
+        fun contentIndent(raw: String, markerLength: Int): Int {
+            val markerEnd = indentation(raw) + markerLength
+            var column = markerEnd
+            for (c in raw.trimStart(' ', '\t').drop(markerLength)) {
+                when (c) {
+                    ' ' -> column++
+                    '\t' -> column += 4 - column % 4
+                    else -> break
+                }
+            }
+            // CommonMark uses one column of padding when the gap exceeds four.
+            return markerEnd + (column - markerEnd).let { if (it in 1..4) it else 1 }
+        }
+        fun level(indent: Int, delimiter: String, start: Int, contentIndent: Int): ListLevel {
+            // A marker remains in a parent item only at or beyond its content column.
+            while (levels.size > 1 && indent < levels[levels.lastIndex - 1].contentIndent) {
+                levels.removeAt(levels.lastIndex)
+            }
+            val previous = levels.lastOrNull()
+            if (previous == null || indent >= previous.contentIndent) {
+                val visualIndent = if (previous == null) indent else maxOf(indent, previous.indent + 1)
+                levels += ListLevel(visualIndent, delimiter, start, contentIndent)
+            } else if (previous.delimiter != delimiter) {
+                levels[levels.lastIndex] = ListLevel(previous.indent, delimiter, start, contentIndent)
+            }
+            return levels.last()
+        }
+        fun isSibling(indent: Int, current: ListLevel): Boolean =
+            indent < current.contentIndent &&
+                (levels.size == 1 || indent >= levels[levels.lastIndex - 1].contentIndent)
         var i = 0
         while (i < lines.size) {
             val line = lines[i].trim()
+            val indent = indentation(lines[i])
+            if (line.isNotEmpty() && !bulletRe.matches(line) && !numberRe.matches(line)) {
+                while (levels.isNotEmpty() && indent <= levels.last().indent) levels.removeAt(levels.lastIndex)
+            }
             when {
                 line.isEmpty() -> i++
 
@@ -121,14 +180,20 @@ object Markdown {
                     }
                 }
 
-                line.startsWith("|") && i + 1 < lines.size && isTableSeparator(lines[i + 1]) -> {
-                    val raw = ArrayList<String>()
-                    while (i < lines.size && lines[i].trim().startsWith("|")) {
-                        raw += lines[i]
+                isTableStart(lines, i) -> {
+                    val header = cells(lines[i])
+                    i += 2 // header + delimiter
+                    val rows = ArrayList<List<String>>()
+                    while (i < lines.size && lines[i].isNotBlank() && hasTablePipe(lines[i])) {
+                        val next = lines[i].trim()
+                        if (headingLevel(next) > 0 || next.startsWith(">") ||
+                            bulletRe.matches(next) || numberRe.matches(next) ||
+                            next.startsWith("\\[") || next.startsWith("$$") ||
+                            next.startsWith("```") || next.startsWith("~~~") || isTableStart(lines, i)
+                        ) break
+                        rows += cells(lines[i])
                         i++
                     }
-                    val header = cells(raw.first())
-                    val rows = raw.drop(2).map { cells(it) }
                     // 分隔行后面没有数据行时，仍画表头（比丢掉强）
                     out += MdBlock.Table(header, rows)
                 }
@@ -143,36 +208,52 @@ object Markdown {
                 }
 
                 bulletRe.matches(line) -> {
+                    val current = level(indent, "bullet", 0, contentIndent(lines[i], 1))
                     val items = ArrayList<String>()
-                    while (i < lines.size && bulletRe.matches(lines[i].trim())) {
-                        items += bulletRe.find(lines[i].trim())!!.groupValues[2]
+                    while (i < lines.size) {
+                        val match = bulletRe.matchEntire(lines[i].trim()) ?: break
+                        if (!isSibling(indentation(lines[i]), current)) break
+                        items += match.groupValues[2]
+                        current.contentIndent = contentIndent(lines[i], 1)
                         i++
                     }
-                    out += MdBlock.Bullets(items)
+                    out += MdBlock.Bullets(items, current.indent)
                 }
 
                 numberRe.matches(line) -> {
+                    val first = numberRe.matchEntire(line)!!
+                    val delimiter = first.groupValues[2]
+                    val markerLength = first.groupValues[1].length + delimiter.length
+                    val current = level(indent, delimiter, first.groupValues[1].toInt(), contentIndent(lines[i], markerLength))
+                    val start = current.next
                     val items = ArrayList<String>()
-                    while (i < lines.size && numberRe.matches(lines[i].trim())) {
-                        items += numberRe.find(lines[i].trim())!!.groupValues[2]
+                    while (i < lines.size) {
+                        val match = numberRe.matchEntire(lines[i].trim()) ?: break
+                        if (match.groupValues[2] != delimiter || !isSibling(indentation(lines[i]), current)) break
+                        items += match.groupValues[3]
+                        current.next++
+                        current.contentIndent = contentIndent(lines[i], match.groupValues[1].length + delimiter.length)
                         i++
                     }
-                    out += MdBlock.Numbers(items)
+                    out += MdBlock.Numbers(items, start, current.indent, delimiter)
                 }
 
                 else -> {
+                    val paragraphIndent = if (levels.isEmpty()) 0 else indent
                     val buf = ArrayList<String>()
                     while (i < lines.size) {
                         val l = lines[i].trim()
-                        val stops = l.isEmpty() || isRule(l) || headingLevel(l) > 0 ||
+                        val exitsList = buf.isNotEmpty() && levels.isNotEmpty() &&
+                            indentation(lines[i]) <= levels.last().indent
+                        val stops = exitsList || l.isEmpty() || isRule(l) || headingLevel(l) > 0 ||
                             l.startsWith("\\[") || l.startsWith("$$") ||
-                            (l.startsWith("|") && i + 1 < lines.size && isTableSeparator(lines[i + 1])) ||
+                            isTableStart(lines, i) ||
                             l.startsWith(">") || bulletRe.matches(l) || numberRe.matches(l)
                         if (stops) break
                         buf += l
                         i++
                     }
-                    if (buf.isNotEmpty()) out += MdBlock.Para(buf.joinToString("\n"))
+                    if (buf.isNotEmpty()) out += MdBlock.Para(buf.joinToString("\n"), paragraphIndent)
                 }
             }
         }
@@ -430,12 +511,17 @@ object Markdown {
         return s.split(Regex("(?<!\\\\)\\|")).map { it.trim().replace("\\|", "|") }
     }
 
+    private fun hasTablePipe(line: String): Boolean = Regex("(?<!\\\\)\\|").containsMatchIn(line)
+
+    private fun isTableStart(lines: List<String>, index: Int): Boolean =
+        index + 1 < lines.size && hasTablePipe(lines[index]) &&
+            isTableSeparator(lines[index + 1]) && cells(lines[index]).size == cells(lines[index + 1]).size
+
     fun isTableSeparator(line: String): Boolean {
         val l = line.trim()
-        if (!l.startsWith("|")) return false
+        if (!hasTablePipe(l)) return false
         val cs = cells(l)
-        if (cs.isEmpty()) return false
-        return cs.all { c -> c.isNotEmpty() && c.all { it == '-' || it == ':' } && c.contains('-') }
+        return cs.isNotEmpty() && cs.all { it.matches(Regex(":?-+:?")) }
     }
 }
 
@@ -464,10 +550,10 @@ fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
                     text = block.text,
                     color = color,
                     style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(bottom = 6.dp),
+                    modifier = Modifier.padding(start = (block.indent.coerceIn(0, 10) * 8).dp, bottom = 6.dp),
                 )
 
-                is MdBlock.Bullets -> Column(Modifier.padding(bottom = 6.dp)) {
+                is MdBlock.Bullets -> Column(Modifier.padding(start = (block.indent.coerceIn(0, 10) * 8).dp, bottom = 6.dp)) {
                     block.items.forEach { item ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                             Text("•", style = MaterialTheme.typography.bodyLarge, color = color, modifier = Modifier.width(16.dp))
@@ -481,14 +567,16 @@ fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
                     }
                 }
 
-                is MdBlock.Numbers -> Column(Modifier.padding(bottom = 6.dp)) {
+                is MdBlock.Numbers -> Column(Modifier.padding(start = (block.indent.coerceIn(0, 10) * 8).dp, bottom = 6.dp)) {
+                    val digits = (block.start + (block.items.size - 1).coerceAtLeast(0)).toString().length
+                    val markerWidth = (22 + (digits - 1).coerceAtLeast(0) * 8).dp
                     block.items.forEachIndexed { index, item ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                             Text(
-                                "${index + 1}.",
+                                "${block.start + index}${block.delimiter}",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = palette.textTertiary,
-                                modifier = Modifier.width(22.dp),
+                                modifier = Modifier.width(markerWidth),
                             )
                             AnnotatedText(
                                 text = item,
@@ -500,11 +588,12 @@ fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
                     }
                 }
 
-                is MdBlock.Quote -> Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                is MdBlock.Quote -> Row(Modifier.fillMaxWidth().padding(bottom = 6.dp).height(IntrinsicSize.Min)) {
                     Box(
                         Modifier
                             .width(3.dp)
-                            .height(IntrinsicQuoteHeight)
+                            .fillMaxHeight()
+                            .testTag("markdown-quote-bar")
                             .background(palette.accent.copy(alpha = 0.5f)),
                     )
                     Spacer(Modifier.width(10.dp))
@@ -512,6 +601,7 @@ fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
                         text = block.text,
                         color = palette.textSecondary,
                         style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.testTag("markdown-quote-text"),
                     )
                 }
 
@@ -528,8 +618,6 @@ fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
     }
 }
 
-/** 引用条的高度跟随文字 —— 用一个最小高度就够了，不引入 IntrinsicSize 测量。 */
-private val IntrinsicQuoteHeight = 20.dp
 
 @Composable
 private fun headingStyle(level: Int) = when (level) {
@@ -540,8 +628,7 @@ private fun headingStyle(level: Int) = when (level) {
 }
 
 /**
- * 表格：等宽列 + 表头底色 + 细边框。列多的时候每一列自动变窄、文字换行，
- * 比原来的 `| a | b |` 好读得多。
+ * 表格：少列铺满视口，多列保持可读宽度并允许横向滚动。
  */
 @Composable
 private fun TableBlock(table: MdBlock.Table, surface: Color, textColor: Color) {
@@ -549,38 +636,42 @@ private fun TableBlock(table: MdBlock.Table, surface: Color, textColor: Color) {
     val border = palette.textTertiary.copy(alpha = 0.25f)
     val shape = RoundedCornerShape(10.dp)
     val columns = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0).coerceAtLeast(1)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .clip(shape)
-            .border(1.dp, border, shape),
-    ) {
-        Row(Modifier.fillMaxWidth().background(surface)) {
-            repeat(columns) { c ->
-                AnnotatedText(
-                    text = table.header.getOrElse(c) { "" },
-                    color = textColor,
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp),
-                    textColor = textColor,
-                )
-            }
-        }
-        HorizontalDivider(color = border)
-        table.rows.forEachIndexed { r, row ->
-            Row(Modifier.fillMaxWidth()) {
-                repeat(columns) { c ->
-                    AnnotatedText(
-                        text = row.getOrElse(c) { "" },
-                        color = textColor,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp),
-                        textColor = textColor,
-                    )
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        val viewportWidth = maxWidth
+        val tableWidth = maxOf(viewportWidth, 104.dp * columns)
+        Column {
+            Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("markdown-table-scroll")) {
+                Column(Modifier.width(tableWidth).clip(shape).border(1.dp, border, shape)) {
+                    Row(Modifier.fillMaxWidth().background(surface)) {
+                        repeat(columns) { c ->
+                            AnnotatedText(
+                                text = table.header.getOrElse(c) { "" }, color = textColor,
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp),
+                                textColor = textColor,
+                            )
+                        }
+                    }
+                    HorizontalDivider(color = border)
+                    table.rows.forEachIndexed { r, row ->
+                        Row(Modifier.fillMaxWidth()) {
+                            repeat(columns) { c ->
+                                AnnotatedText(
+                                    text = row.getOrElse(c) { "" }, color = textColor,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp),
+                                    textColor = textColor,
+                                )
+                            }
+                        }
+                        if (r != table.rows.lastIndex) HorizontalDivider(color = border)
+                    }
                 }
             }
-            if (r != table.rows.lastIndex) HorizontalDivider(color = border)
+            if (tableWidth > viewportWidth) {
+                Text("左右滑动查看完整表格", style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary, modifier = Modifier.padding(top = 4.dp))
+            }
         }
     }
 }

@@ -3,8 +3,18 @@ package com.dsh.mobile
 import com.dsh.mobile.data.EventStream
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.json.JSONObject
 
 class EventStreamTest {
+    @Test
+    fun helloCarriesTheDeliveredCursorAndEpoch() {
+        val method = EventStream.Companion.javaClass.getDeclaredMethod("replayHello", java.lang.Long.TYPE, String::class.java)
+        val hello = JSONObject(method.invoke(EventStream.Companion, 11L, "epoch-a") as String)
+        assertEquals("hello", hello.getString("type"))
+        assertEquals(11L, hello.getLong("since"))
+        assertEquals("epoch-a", hello.getString("epoch"))
+    }
+
     @Test
     fun wsUrlKeepsDirectBasePathAndUsesWs() {
         assertEquals(

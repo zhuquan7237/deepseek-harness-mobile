@@ -25,6 +25,124 @@ class MarkdownTest {
     }
 
     @Test
+    fun tableWithoutOuterPipesRendersAsTable() {
+        val blocks = Markdown.parse("项目 | 说明\n--- | ---\n连接 | 已连接")
+        assertEquals(MdBlock.Table(listOf("项目", "说明"), listOf(listOf("连接", "已连接"))), blocks.single())
+    }
+
+    @Test
+    fun tableWithoutOuterPipesAfterParagraphAndEscapedPipe() {
+        val blocks = Markdown.parse("说明\n名称 | 内容\n:--- | ---:\nA | 一\\|二\nB | 三\n\n结尾")
+        assertEquals(MdBlock.Para("说明"), blocks[0])
+        assertEquals(MdBlock.Table(listOf("名称", "内容"), listOf(listOf("A", "一|二"), listOf("B", "三"))), blocks[1])
+        assertEquals(MdBlock.Para("结尾"), blocks[2])
+    }
+
+    @Test
+    fun tableEndsBeforeHeadingContainingPipeAndKeepsFollowingParagraph() {
+        val blocks = Markdown.parse("A | B\n--- | ---\nx | y\n# Heading | explanation\nfollowing text")
+        assertEquals(
+            listOf(
+                MdBlock.Table(listOf("A", "B"), listOf(listOf("x", "y"))),
+                MdBlock.Heading(1, "Heading | explanation"),
+                MdBlock.Para("following text"),
+            ),
+            blocks,
+        )
+    }
+
+    @Test
+    fun tableEndsBeforeQuoteContainingPipe() {
+        val blocks = Markdown.parse("A | B\n--- | ---\nx | y\n> quoted | explanation")
+        assertEquals(
+            listOf(
+                MdBlock.Table(listOf("A", "B"), listOf(listOf("x", "y"))),
+                MdBlock.Quote("quoted | explanation"),
+            ),
+            blocks,
+        )
+    }
+
+    @Test
+    fun tableEndsBeforeBulletContainingPipe() {
+        val blocks = Markdown.parse("A | B\n--- | ---\nx | y\n- item | explanation")
+        assertEquals(
+            listOf(
+                MdBlock.Table(listOf("A", "B"), listOf(listOf("x", "y"))),
+                MdBlock.Bullets(listOf("item | explanation")),
+            ),
+            blocks,
+        )
+    }
+
+    @Test
+    fun tableEndsBeforeNumberedItemContainingPipe() {
+        val blocks = Markdown.parse("A | B\n--- | ---\nx | y\n1. item | explanation")
+        assertEquals(
+            listOf(
+                MdBlock.Table(listOf("A", "B"), listOf(listOf("x", "y"))),
+                MdBlock.Numbers(listOf("item | explanation")),
+            ),
+            blocks,
+        )
+    }
+
+    @Test
+    fun tableEndsBeforeDisplayMathContainingPipe() {
+        val blocks = Markdown.parse("A | B\n--- | ---\nx | y\n\\[ |x| \\]")
+        assertEquals(
+            listOf(
+                MdBlock.Table(listOf("A", "B"), listOf(listOf("x", "y"))),
+                MdBlock.Formula("|x|"),
+            ),
+            blocks,
+        )
+    }
+
+    @Test
+    fun tableEndsBeforeNextTableWithoutBlankLine() {
+        val blocks = Markdown.parse("A | B\n--- | ---\nx | y\nC | D\n--- | ---\nz | w")
+        assertEquals(
+            listOf(
+                MdBlock.Table(listOf("A", "B"), listOf(listOf("x", "y"))),
+                MdBlock.Table(listOf("C", "D"), listOf(listOf("z", "w"))),
+            ),
+            blocks,
+        )
+    }
+
+    @Test
+    fun tableEndsBeforeFenceAndCodeSplitterKeepsFencedCode() {
+        val md = "A | B\n--- | ---\nx | y\n```shell | sh\nprintf x | grep x\n```"
+        val blocks = Markdown.parse(md)
+        assertEquals(MdBlock.Table(listOf("A", "B"), listOf(listOf("x", "y"))), blocks[0])
+        assertEquals(MdBlock.Para("```shell | sh\nprintf x | grep x\n```"), blocks[1])
+        val segments = com.dsh.mobile.ui.splitCodeBlocks(md)
+        assertEquals(2, segments.size)
+        val body = segments[0] as com.dsh.mobile.ui.MsgSegment.Body
+        assertEquals(MdBlock.Table(listOf("A", "B"), listOf(listOf("x", "y"))), Markdown.parse(body.text).single())
+        assertEquals(com.dsh.mobile.ui.MsgSegment.Code("shell | sh", "printf x | grep x"), segments[1])
+    }
+
+    @Test
+    fun tableKeepsRowsWithEscapedPipeAndNonBlockMarkers() {
+        val blocks = Markdown.parse("A | B\n--- | ---\n#hashtag | x\\|y\n| # heading in a cell | ok |")
+        assertEquals(
+            MdBlock.Table(
+                listOf("A", "B"),
+                listOf(listOf("#hashtag", "x|y"), listOf("# heading in a cell", "ok")),
+            ),
+            blocks.single(),
+        )
+    }
+
+    @Test
+    fun mismatchedTableHeaderIsNotATable() {
+        val blocks = Markdown.parse("名称 | 内容 | 备注\n--- | ---\nA | B")
+        assertTrue(blocks.none { it is MdBlock.Table })
+    }
+
+    @Test
     fun tableWithoutSeparatorIsNotATable() {
         val blocks = Markdown.parse("| 这只是一行竖线文字 |")
         assertTrue(blocks.none { it is MdBlock.Table })
@@ -50,6 +168,181 @@ class MarkdownTest {
         val blocks = Markdown.parse("- 第一点\n- 第二点\n\n1. 甲\n2. 乙")
         assertEquals(MdBlock.Bullets(listOf("第一点", "第二点")), blocks[0])
         assertEquals(MdBlock.Numbers(listOf("甲", "乙")), blocks[1])
+    }
+
+    @Test
+    fun numberedNonOneStartChangesTheBlockIdentity() {
+        val actual = Markdown.parse("7. first").single()
+        assertFalse("a list starting at 7 must not be indistinguishable from one starting at 1",
+            actual == MdBlock.Numbers(listOf("first")))
+    }
+
+    @Test
+    fun nestedNumberedItemDoesNotMergeWithParentItems() {
+        val numbers = Markdown.parse("1. parent\n   1. child\n2. sibling").filterIsInstance<MdBlock.Numbers>()
+        assertEquals("nested level must not be merged into its parent", 3, numbers.size)
+    }
+
+    @Test
+    fun numberedListsUseFirstMarkerThenAutoIncrement() {
+        assertEquals(MdBlock.Numbers(listOf("a", "b", "c")),
+            Markdown.parse("1. a\n2. b\n3. c").single())
+        assertEquals(MdBlock.Numbers(listOf("a", "b", "c")),
+            Markdown.parse("1. a\n1. b\n1. c").single())
+        assertEquals(MdBlock.Numbers(listOf("a", "b", "c"), start = 7),
+            Markdown.parse("7. a\n1. b\n1. c").single())
+    }
+
+    // Derive what the actual renderer displays from production parse results; do not
+    // assert only hand-constructed MdBlock instances.
+    private fun visibleNumberedItems(markdown: String): List<Pair<String, String>> =
+        Markdown.parse(markdown).filterIsInstance<MdBlock.Numbers>().flatMap { block ->
+            block.items.mapIndexed { index, item -> "${block.start + index}${block.delimiter}" to item }
+        }
+
+    @Test
+    fun siblingIndentNumberingWorksInBothDirections() {
+        for ((first, second) in listOf(0 to 1, 1 to 0, 0 to 2, 2 to 0, 1 to 2, 2 to 1)) {
+            val input = " ".repeat(first) + "1. first\n" + " ".repeat(second) + "1. second"
+            assertEquals("sibling indent $first -> $second", listOf("1." to "first", "2." to "second"),
+                visibleNumberedItems(input))
+            val indents = Markdown.parse(input).filterIsInstance<MdBlock.Numbers>().map { it.indent }.distinct()
+            assertEquals("siblings should visually align: $input", 1, indents.size)
+        }
+    }
+
+    @Test
+    fun siblingIndentZigzagUsesOneCounter() {
+        val input = "1. alpha\n  1. bravo\n 1. charlie\n1. delta"
+        assertEquals(listOf("1." to "alpha", "2." to "bravo", "3." to "charlie", "4." to "delta"),
+            visibleNumberedItems(input))
+    }
+
+    @Test
+    fun siblingIndentHonoursStartDelimiterAndMarkerWidth() {
+        assertEquals(listOf("7)" to "seven", "8)" to "eight", "9)" to "nine"),
+            visibleNumberedItems("7) seven\n  1) eight\n1) nine"))
+        assertEquals(listOf("12." to "twelve", "13." to "thirteen"),
+            visibleNumberedItems("12. twelve\n   1. thirteen"))
+        assertEquals(listOf("1." to "one", "2." to "two", "3." to "three"),
+            visibleNumberedItems("1. one\n 10. two\n   1. three"))
+        assertEquals(listOf("1." to "dot", "1)" to "paren"),
+            visibleNumberedItems("1. dot\n 1) paren"))
+    }
+
+    @Test
+    fun siblingIndentDoesNotFlattenTrueOrderedChildren() {
+        val blocks = Markdown.parse("12. parent\n    1. child one\n     1. child two\n1. next parent")
+        val numbers = blocks.filterIsInstance<MdBlock.Numbers>()
+        assertEquals(listOf("12." to "parent", "1." to "child one", "2." to "child two", "13." to "next parent"),
+            visibleNumberedItems("12. parent\n    1. child one\n     1. child two\n1. next parent"))
+        val indentByItem = numbers.flatMap { b -> b.items.map { it to b.indent } }.toMap()
+        assertEquals(indentByItem["parent"], indentByItem["next parent"])
+        assertEquals(indentByItem["child one"], indentByItem["child two"])
+        assertTrue(indentByItem.getValue("child one") > indentByItem.getValue("parent"))
+    }
+
+    @Test
+    fun siblingIndentDoesNotFlattenTrueBulletChildren() {
+        val blocks = Markdown.parse("12. parent\n    - child one\n     - child two\n 1. next parent\n    - next child\n1. last parent")
+        val parents = blocks.filterIsInstance<MdBlock.Numbers>()
+        val children = blocks.filterIsInstance<MdBlock.Bullets>()
+        assertEquals(listOf("12." to "parent", "13." to "next parent", "14." to "last parent"),
+            parents.flatMap { b -> b.items.mapIndexed { n, item -> "${b.start + n}${b.delimiter}" to item } })
+        assertEquals(listOf("child one", "child two", "next child"), children.flatMap { it.items })
+        assertEquals(1, parents.map { it.indent }.distinct().size)
+        assertTrue(children.all { it.indent > parents.first().indent })
+    }
+
+    @Test
+    fun siblingIndentTopLevelFenceStillSeparatesLists() {
+        val segments = com.dsh.mobile.ui.splitCodeBlocks("1. before\n```txt\ncode\n```\n 1. after")
+        assertEquals(com.dsh.mobile.ui.MsgSegment.Code("txt", "code"), segments[1])
+        assertEquals(listOf("1." to "before", "1." to "after"),
+            segments.filterIsInstance<com.dsh.mobile.ui.MsgSegment.Body>().flatMap { visibleNumberedItems(it.text) })
+    }
+
+    @Test
+    fun numberedModelAnswerKeepsParentsAcrossIndentedBullets() {
+        val excerpt = """
+            1. 基础语法
+               - 变量与数据类型
+               - 运算符
+               - 输入与输出
+            2. 流程控制
+               - `if` 条件判断
+               - `for` / `while` 循环
+            3. 函数
+               - 定义与调用
+               - 参数传递
+               - 返回值
+        """.trimIndent()
+        assertEquals(listOf(
+            MdBlock.Numbers(listOf("基础语法")),
+            MdBlock.Bullets(listOf("变量与数据类型", "运算符", "输入与输出"), indent = 3),
+            MdBlock.Numbers(listOf("流程控制"), start = 2),
+            MdBlock.Bullets(listOf("`if` 条件判断", "`for` / `while` 循环"), indent = 3),
+            MdBlock.Numbers(listOf("函数"), start = 3),
+            MdBlock.Bullets(listOf("定义与调用", "参数传递", "返回值"), indent = 3),
+        ), Markdown.parse(excerpt))
+    }
+
+    @Test
+    fun nestedOrderedCountersAreIndependentAndResetForEachParent() {
+        val md = "1. parent a\n   1. child a\n   1. child b\n1. parent b\n   5. child c\n   1. child d\n1. parent c"
+        assertEquals(listOf(
+            MdBlock.Numbers(listOf("parent a")),
+            MdBlock.Numbers(listOf("child a", "child b"), indent = 3),
+            MdBlock.Numbers(listOf("parent b"), start = 2),
+            MdBlock.Numbers(listOf("child c", "child d"), start = 5, indent = 3),
+            MdBlock.Numbers(listOf("parent c"), start = 3),
+        ), Markdown.parse(md))
+    }
+
+    @Test
+    fun blankLinesAndIndentedParagraphContinueTheSameList() {
+        assertEquals(listOf(MdBlock.Numbers(listOf("a")), MdBlock.Numbers(listOf("b"), start = 2),
+            MdBlock.Numbers(listOf("c"), start = 3)), Markdown.parse("1. a\n\n1. b\n\n1. c"))
+        assertEquals(listOf(
+            MdBlock.Numbers(listOf("a"), start = 7),
+            MdBlock.Para("continuation", indent = 3),
+            MdBlock.Numbers(listOf("b"), start = 8),
+        ), Markdown.parse("7. a\n\n   continuation\n\n1. b"))
+    }
+
+    @Test
+    fun unindentedParagraphEndsListAndStartsIndependentNumbering() {
+        assertEquals(listOf(
+            MdBlock.Numbers(listOf("a")), MdBlock.Para("paragraph"), MdBlock.Numbers(listOf("b")),
+        ), Markdown.parse("1. a\n\nparagraph\n\n1. b"))
+    }
+
+    @Test
+    fun closingParenMarkersArePreservedAndAutoIncrement() {
+        assertEquals(MdBlock.Numbers(listOf("a", "b", "c"), start = 4, delimiter = ")"),
+            Markdown.parse("4) a\n1) b\n1) c").single())
+        assertEquals(listOf(MdBlock.Numbers(listOf("a")), MdBlock.Numbers(listOf("b"), delimiter = ")")),
+            Markdown.parse("1. a\n1) b"))
+    }
+
+    @Test
+    fun numberedItemsKeepLinksMathAndTableBoundaries() {
+        val blocks = Markdown.parse("A | B\n--- | ---\nx | y\n7. [doc](https://a.b) and \\(x+1\\)\n1. next")
+        assertEquals(MdBlock.Table(listOf("A", "B"), listOf(listOf("x", "y"))), blocks[0])
+        val numbers = blocks[1] as MdBlock.Numbers
+        assertEquals(MdBlock.Numbers(listOf("[doc](https://a.b) and \\(x+1\\)", "next"), start = 7), numbers)
+        val spans = Markdown.inlines(numbers.items.first())
+        assertEquals("https://a.b", spans.single { it.link != null }.link)
+        assertEquals("x+1", spans.single { it.math }.text)
+    }
+
+    @Test
+    fun explicitStartsSurviveIndependentBodiesAroundCode() {
+        val segments = com.dsh.mobile.ui.splitCodeBlocks("7. before\n```txt\n1. code\n```\n8. after")
+        assertEquals(com.dsh.mobile.ui.MsgSegment.Code("txt", "1. code"), segments[1])
+        val bodies = segments.filterIsInstance<com.dsh.mobile.ui.MsgSegment.Body>()
+        assertEquals(listOf(MdBlock.Numbers(listOf("before"), start = 7),
+            MdBlock.Numbers(listOf("after"), start = 8)), bodies.flatMap { Markdown.parse(it.text) })
     }
 
     @Test

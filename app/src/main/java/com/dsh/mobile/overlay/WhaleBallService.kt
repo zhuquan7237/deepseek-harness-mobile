@@ -93,8 +93,14 @@ class WhaleBallService : Service() {
     private val faceNormal by lazy { WhaleFace.NORMAL.res }
     private val faceSleepy by lazy { WhaleFace.SLEEPY.res }
 
+    /** Older Android versions do not have Handler.hasCallbacks (added in API 29). */
+    private var faceResetPending = false
+
     /** 恢复成普通脸（表情是临时的，都会自己回来）。 */
-    private val backToNormal = Runnable { setFace(faceNormal) }
+    private val backToNormal = Runnable {
+        faceResetPending = false
+        setFace(faceNormal)
+    }
 
     /** 40 秒没人理就困了——只换一次图，不轮询。 */
     private val getSleepy = Runnable { setFace(faceSleepy) }
@@ -102,9 +108,10 @@ class WhaleBallService : Service() {
     private fun setFace(res: Int) {
         if (::ball.isInitialized) ball.setImageResource(res)
         handler.removeCallbacks(backToNormal)
+        faceResetPending = false
         handler.removeCallbacks(getSleepy)
         if (res == faceNormal || res == faceSleepy) handler.postDelayed(getSleepy, 40_000)
-        if (res != faceNormal) handler.postDelayed(backToNormal, if (res == faceSleepy) 90_000 else 1500)
+        if (res != faceNormal) faceResetPending = handler.postDelayed(backToNormal, if (res == faceSleepy) 90_000 else 1500)
     }
 
     private val patLines = listOf("唔…被摸头了", "嘿嘿，再摸一下嘛", "痒痒的～", "今天也一起干活吧")
@@ -428,7 +435,7 @@ class WhaleBallService : Service() {
             .withEndAction { panel.post { runCatching { window.removeView(panel) } } }
             .start()
         bob?.resume()
-        if (handler.hasCallbacks(backToNormal).not()) setFace(WhaleFace.NORMAL.res)
+        if (!faceResetPending) setFace(WhaleFace.NORMAL.res)
     }
 
     // ------------------------------------------------------------------ 表情

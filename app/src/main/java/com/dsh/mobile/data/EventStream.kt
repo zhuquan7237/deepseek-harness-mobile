@@ -20,8 +20,8 @@ import kotlin.math.pow
  * the bridge replays whatever was missed, and exponential-backoff reconnects
  * (800ms × 1.6ⁿ, capped at 15s) that survive a phone sleeping on a train.
  *
- * Every callback fires on the main thread (OkHttp dispatches there when the
- * client is used from coroutines on Main; frames are small).
+ * OkHttp calls listeners on its own threads; callbacks are dispatched to the
+ * owner's scope so repository state and event ordering stay serialized.
  */
 class EventStream(private val client: OkHttpClient, private val scope: CoroutineScope) {
 
@@ -37,7 +37,7 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
     private var retry = 0
 
     /** Bumped on every (re)start so stale listeners cannot schedule reconnects. */
-    private var generation = 0
+    @Volatile private var generation = 0
 
     var onFrame: ((JSONObject) -> Unit)? = null
     var onConn: ((Conn) -> Unit)? = null
@@ -48,6 +48,7 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
 
     /** The highest event seq this device has processed; asked on every open. */
     var lastSeq: () -> Long = { 0L }
+    var lastEpoch: () -> String = { "" }
 
     fun start(url: String) {
         stopInternal()
@@ -77,18 +78,24 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
                 if (generationAtOpen != generation) return
                 retry = 0
                 Log.i(TAG, "ws open")
-                onConn?.invoke(Conn.ONLINE)
-                webSocket.send(JSONObject().put("type", "hello").put("since", lastSeq()).toString())
+                scope.launch {
+                    if (generationAtOpen == generation && !stopped) {
+                        // Read epoch and watermark together on the repository's dispatcher.
+                        webSocket.send(replayHello(lastSeq(), lastEpoch()))
+                        onConn?.invoke(Conn.ONLINE)
+                    }
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (generationAtOpen != generation || stopped) return
                 val frame = try {
                     JSONObject(text)
                 } catch (_: Exception) {
                     null
                 } ?: return
                 Log.i(TAG, "frame kind=${frame.optString("kind")} type=${frame.optString("type")} sid=${frame.optString("sessionId")} seq=${frame.optLong("seq")}")
-                onFrame?.invoke(frame)
+                scope.launch { if (generationAtOpen == generation && !stopped) onFrame?.invoke(frame) }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -103,14 +110,17 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
                 Log.w(TAG, "ws failure code=${response?.code} ${t.message}")
                 if (response?.code == 401 && generationAtOpen == generation && !stopped) {
                     stopInternal()
-                    onUnauthorized?.invoke()
+                    val stoppedGeneration = generation
+                    scope.launch { if (generation == stoppedGeneration && stopped) onUnauthorized?.invoke() }
                     return
                 }
                 schedule(generationAtOpen)
             }
 
             private fun schedule(generationAtEvent: Int) {
-                if (generationAtEvent == generation) onConn?.invoke(Conn.OFFLINE)
+                if (generationAtEvent == generation) scope.launch {
+                    if (generationAtEvent == generation && !stopped) onConn?.invoke(Conn.OFFLINE)
+                }
                 if (stopped || generationAtEvent != generation) return
                 val waitMs = min(15_000L, (800.0 * 1.6.pow(retry.toDouble())).toLong())
                 retry += 1
@@ -125,6 +135,10 @@ class EventStream(private val client: OkHttpClient, private val scope: Coroutine
 
     companion object {
         private const val TAG = "dsh-ws"
+
+        /** Only the client's delivered watermark, never the server's hello seq. */
+        fun replayHello(since: Long, epoch: String): String =
+            JSONObject().put("type", "hello").put("since", since).put("epoch", epoch).toString()
 
         /**
          * Build the event-stream URL while preserving a relay mount path.
