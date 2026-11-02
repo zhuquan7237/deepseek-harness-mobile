@@ -1,5 +1,7 @@
 # DeepSeek Harness Mobile
 
+当前版本 **0.6.1**，建议搭配桌面端 **0.7.9**。本版统一冷灰与蓝色主题，重排首页的继续会话、状态筛选和信息层级，并减少重复会话列表请求。
+
 电脑端 [DeepSeek Harness](https://github.com/zhuquan7237/deepseek-harness-desktop) 的安卓随身控制器：手机扫码或输码配对后，就能看会话、发提示词、切模型，离开电脑也不掉线。
 
 ## 项目定位
@@ -21,7 +23,7 @@ DeepSeek Harness 的主体跑在电脑上（真正的终端、文件、模型都
 方式一，直接下载 APK（走自己的域名，国内可达）：
 
 ```
-https://m.zhuquan.xyz/mobile/dsh-mobile.apk
+https://relay.zhuquan.xyz/dl/dsh-mobile.apk
 ```
 
 方式二，从本仓库的 [Releases](https://github.com/zhuquan7237/deepseek-harness-mobile/releases) 下载最新 APK。
@@ -46,10 +48,11 @@ E2E 再上传。流水线、验收截图与已知限制见 [docs/ios.md](docs/io
 
 ## 自动更新
 
-App 启动后会同时检查两处，取版本更高的一方，任一可达即可：
+App 启动后会检查已配对电脑、公共镜像和 GitHub，取其中更新的版本：
 
-1. **电脑端清单** `https://m.zhuquan.xyz/mobile/app-update.json`（由 `scripts/release.sh` 发布时写入，体积小、国内快）；
-2. **GitHub Releases** 的本仓库最新 Release（tag 即版本号，取第一个 `.apk` 附件）。
+1. **已配对电脑**的 `/mobile/app-update.json`；
+2. **公共镜像** `https://relay.zhuquan.xyz/dl/app-update.json`，以及国内直连备用线路；
+3. **GitHub Releases** 的本仓库最新 Release（tag 即版本号，取第一个 `.apk` 附件）。
 
 发现新版本后可以在 App 内直接下载安装，下载完会**校验字节数与 sha256**，不匹配就丢弃重来，然后交给系统安装器覆盖安装。
 
