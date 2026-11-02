@@ -854,6 +854,8 @@ class BridgeRepository(context: Context) {
     // --------------------------------------------------------------- sessions
 
     private var sessionsJob: Job? = null
+    /** 在途列表请求的身份(见 [SessionsReload])。 */
+    private var sessionsInFlightKey: String? = null
 
     /** 新建会话的默认模型选择：后台套用，首条消息发送前等它落地（保住默认模型语义）。 */
     private var modelSelectJob: Job? = null
@@ -861,8 +863,17 @@ class BridgeRepository(context: Context) {
 
     fun loadSessions(query: String = _state.value.search) {
         val token = _state.value.token ?: return
-        // 并发合并：上一次列表还在路上就直接换成最新的一次，避免多个 300KB 请求排队
+        val key = SessionsReload.key(token, query)
+        // 同一份数据已经在路上：什么都不做，等它回来。
+        // 以前这里是无条件 cancel-and-restart，而引擎事件流一个回合会来好几帧 notify、
+        // 每帧都调这个函数，于是同一份列表被反复重发（中继实测 1.09 秒 6 次），
+        // 每次都在桌面端引擎的队列后面重新排一次。
+        // 换查询串或换 token 仍然走 cancel —— 那才是「新请求取代旧请求」。
+        if (SessionsReload.decide(sessionsInFlightKey, sessionsJob?.isActive == true, key) == SessionsReload.Verdict.REUSE) {
+            return
+        }
         sessionsJob?.cancel()
+        sessionsInFlightKey = key
         sessionsJob = scope.launch {
             _state.update { it.copy(sessionsLoading = true) }
             try {
