@@ -9,6 +9,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -133,15 +135,22 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("会话", style = MaterialTheme.typography.headlineMedium, color = palette.textPrimary)
-                StatusPill(
-                    text = when (state.conn) {
-                        Conn.ONLINE -> "已连接"
-                        Conn.CONNECTING -> "正在连接"
-                        Conn.OFFLINE -> "未连接 · 点此处理"
-                    },
-                    conn = state.conn,
-                    onClick = if (state.conn == Conn.OFFLINE) ({ connHelp = true }) else null,
-                )
+                Row(
+                    Modifier.width(128.dp).heightIn(min = 40.dp).clip(RoundedCornerShape(12.dp))
+                        .background(palette.surface)
+                        .semantics { contentDescription = if (state.conn == Conn.OFFLINE) "未连接，点此处理连接问题" else "电脑连接状态" }
+                        .clickable(enabled = state.conn == Conn.OFFLINE) { connHelp = true }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    StatusDot(state.conn)
+                    Text(
+                        when (state.conn) { Conn.ONLINE -> "已连接"; Conn.CONNECTING -> "正在连接"; Conn.OFFLINE -> "未连接" },
+                        style = MaterialTheme.typography.bodySmall, color = palette.textSecondary,
+                        maxLines = 1, modifier = Modifier.weight(1f),
+                    )
+                }
             }
             CircleButton(Icons.Outlined.SwapHoriz, "文件传输", size = 48.dp) { repo.openTransfer() }
             Spacer(Modifier.width(6.dp))
@@ -628,7 +637,7 @@ private fun groupSessions(sessions: List<SessionSummary>): List<SessionGroup> {
     return byLabel.map { (label, list) -> SessionGroup(label, list) }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SessionRow(
     session: SessionSummary,
@@ -702,10 +711,10 @@ private fun SessionRow(
             }
             // 状态行只在有值得注意的状态时出现：在跑 / 有产出
             if (session.running || session.completed || session.fileCount > 0 || session.cwd.isNotBlank()) {
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
+                FlowRow(
+                    Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     if (session.running) {
                         // 图标 + 文案表明状态，颜色只作辅助。
@@ -734,16 +743,15 @@ private fun SessionRow(
                         Text("有新回复", style = MaterialTheme.typography.labelSmall, color = palette.accent)
                     }
                     if (session.fileCount > 0) {
-                        Icon(Icons.Outlined.Description, contentDescription = null, tint = palette.textTertiary, modifier = Modifier.size(13.dp))
-                        Text(
-                            "${session.fileCount} 个文件",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = palette.textTertiary,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Outlined.Description, contentDescription = null, tint = palette.textTertiary, modifier = Modifier.size(13.dp))
+                            Text("${session.fileCount} 个文件", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
+                        }
                     }
                     if (session.cwd.isNotBlank()) {
                         Text(session.cwd.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\'),
-                            style = MaterialTheme.typography.labelSmall, color = palette.textTertiary, maxLines = 1)
+                            style = MaterialTheme.typography.labelSmall, color = palette.textTertiary,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

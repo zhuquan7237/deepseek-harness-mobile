@@ -20,6 +20,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.test.platform.app.InstrumentationRegistry
 import com.dsh.mobile.data.AppState
@@ -95,7 +98,12 @@ class CompanionHomeStyleTest {
 
     @Test fun largeTextOfflineHomeDoesNotClaimRunning() {
         home("light", scale = 1.4f, connected = false)
-        compose.onNodeWithText("未连接 · 点此处理").assertIsDisplayed()
+        compose.onNodeWithText("未连接").assertIsDisplayed()
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithText("未连接", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        org.junit.Assert.assertTrue("connection status layout: " + layouts.joinToString { "size=${it.size}, lines=${it.lineCount}, widthOverflow=${it.didOverflowWidth}, heightOverflow=${it.didOverflowHeight}, text=${it.layoutInput.text}" },
+            layouts.isNotEmpty() && layouts.none { it.didOverflowWidth || (0 until it.lineCount).any { line -> it.isLineEllipsized(line) } })
         compose.onNodeWithText("进行中 1").performClick()
         compose.onNodeWithText("状态待核实").assertIsDisplayed()
         compose.onNodeWithText("正在执行").assertDoesNotExist()
