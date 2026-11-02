@@ -70,6 +70,45 @@ class RouteBookTest {
     }
 
     @Test
+    fun bootPrefersDirectOverCloudflareRelay() {
+        val book = RouteBook()
+        book.record(cn, 32L, true, 1000L)
+        book.record(relay, 210L, true, 1001L)
+        // 存的是 CF 线：开机直接用同设备路径的国内直连，别先连 210ms 再等后台升级。
+        assertEquals(cn, book.bootBase(relay, ""))
+    }
+
+    @Test
+    fun bootKeepsCloudflareWhenNoDirectRecord() {
+        val book = RouteBook()
+        book.record(relay, 210L, true, 1001L)
+        assertEquals(relay, book.bootBase(relay, ""))
+    }
+
+    @Test
+    fun bootDoesNotCrossDevicePaths() {
+        val book = RouteBook()
+        book.record("https://cn.zhuquan.xyz:8443/m/OTHERDEVICEKEY", 20L, true, 1000L)
+        assertEquals(relay, book.bootBase(relay, ""))
+    }
+
+    @Test
+    fun bootLegacyCloudflareHostAlsoSwitchesToDirect() {
+        val book = RouteBook()
+        val legacy = "https://m.zhuquan.xyz/m/0beafe808e5c42569635bab9032af9b203131327"
+        book.record(cn, 28L, true, 1000L)
+        assertEquals(cn, book.bootBase(legacy, ""))
+    }
+
+    @Test
+    fun bootKeepsFailedDirectRecordOut() {
+        val book = RouteBook()
+        book.record(cn, -1L, false, 1000L)
+        // 直连线最近探测失败：不拿它当开机首选。
+        assertEquals(relay, book.bootBase(relay, ""))
+    }
+
+    @Test
     fun bootSkipsIneligibleLanForBestRemote() {
         val book = RouteBook()
         book.add(lan)

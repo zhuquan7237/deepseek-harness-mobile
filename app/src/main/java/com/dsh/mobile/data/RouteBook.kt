@@ -3,6 +3,8 @@ package com.dsh.mobile.data
 import org.json.JSONArray
 import org.json.JSONObject
 
+import java.net.URI
+
 /**
  * 已知线路登记簿：记住见过的 base（配对得到的、中继域名对偶、桥接下发的局域网地址），
  * 以及每条线最近一次观测（耗时 / 是否成功）。只负责记录与候选计算 ——
@@ -121,7 +123,8 @@ class RouteBook {
      */
     fun bootBase(stored: String, currentWifiPrefix: String): String {
         val value = stored.trim().trimEnd('/')
-        if (value.isEmpty() || !value.startsWith("http://")) return value
+        if (value.isEmpty()) return value
+        if (!value.startsWith("http://")) return preferDirect(value)
         if (eligibleLanBase(currentWifiPrefix) == value) return value
         val remote = entries.values
             .filter { it.base.startsWith("https://") }
@@ -132,6 +135,39 @@ class RouteBook {
             )
             .firstOrNull()
         return remote?.base ?: value
+    }
+
+    /**
+     * 存的远端线落在 Cloudflare 上（`relay.zhuquan.xyz` 或旧的 `m.zhuquan.xyz`）时，
+     * 改用「同一设备挂载路径、近期成功过」的国内直连线启动。
+     *
+     * 不这么做的话，开机要先连一条 200ms 量级的 CF 线，再等后台探测（连上后若干秒）
+     * 才升级到 12ms 的直连，用户感受就是「打开就要等」。这里只用登记簿里已有的观测，
+     * 不发起新探测，不违反「选择本身不得拖慢连接」的设计红线。
+     */
+    private fun preferDirect(stored: String): String {
+        val host = hostOf(stored) ?: return stored
+        if (host != RELAY_CF_HOST && host != LEGACY_CF_HOST) return stored
+        val path = pathOf(stored)
+        val direct = entries.values
+            .filter {
+                it.ok && it.ms >= 0 && hostOf(it.base) == RELAY_CN_HOST && pathOf(it.base) == path
+            }
+            .minByOrNull { it.ms } ?: return stored
+        return direct.base
+    }
+
+    private fun hostOf(base: String): String? =
+        runCatching { URI(base).host?.lowercase() }.getOrNull()
+
+    /** 只取路径部分（去掉查询/片段），用来判断是不是同一台设备的同一个挂载点。 */
+    private fun pathOf(base: String): String =
+        runCatching { URI(base).path.orEmpty().trimEnd('/') }.getOrDefault("")
+
+    companion object {
+        const val RELAY_CN_HOST = "cn.zhuquan.xyz"
+        const val RELAY_CF_HOST = "relay.zhuquan.xyz"
+        const val LEGACY_CF_HOST = "m.zhuquan.xyz"
     }
 
     /** 诊断用快照。 */
