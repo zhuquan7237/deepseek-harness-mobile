@@ -16,6 +16,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -29,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.View
+import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.DshTheme
 import com.dsh.mobile.ui.theme.LocalDsh
 
@@ -158,6 +164,16 @@ fun AppRoot(repo: BridgeRepository) {
                     onConfirm = { repo.confirmSendLogs() },
                 )
             }
+            // 存档里还是旧的 Cloudflare 线路时提示重新配对：每条 base 只提示一次，
+            // 用户按「稍后」后不再打扰；重新配对成功、base 变成直连后自然消失。
+            if (state.ready && state.token != null && !state.pairing &&
+                Wire.isLegacyRelayBase(state.base) && state.legacyOk != state.base
+            ) {
+                LegacyLineDialog(
+                    onRepair = { repo.unpair() },
+                    onLater = { repo.dismissLegacyPrompt() },
+                )
+            }
         }
     }
 }
@@ -184,4 +200,33 @@ private fun Context.findActivity(): Activity? {
         current = current.baseContext
     }
     return null
+}
+
+/**
+ * 旧线路提示：不拦路、不吓人，只讲清楚「现在为什么慢、点一下能好」。
+ * 确认键用强调色而不是危险色——重新配对不是破坏性操作。
+ */
+@Composable
+private fun LegacyLineDialog(onRepair: () -> Unit, onLater: () -> Unit) {
+    val palette = LocalDsh.current
+    AlertDialog(
+        onDismissRequest = onLater,
+        shape = RoundedCornerShape(24.dp),
+        containerColor = palette.surface,
+        title = { Text("建议重新配对", color = palette.textPrimary, style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Text(
+                "当前连接还在走旧的 Cloudflare 线路，实测比国内直连慢 30～40 倍。\n\n" +
+                    "在电脑上打开「移动端配对」重新扫一次码即可，配对时会自动选最快的直连线路，之后不用再管。",
+                color = palette.textSecondary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onRepair) { Text("去重新配对", color = palette.accent) }
+        },
+        dismissButton = {
+            TextButton(onClick = onLater) { Text("稍后", color = palette.textSecondary) }
+        },
+    )
 }

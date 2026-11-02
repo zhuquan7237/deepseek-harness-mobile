@@ -258,6 +258,8 @@ data class AppState(
     /** 电脑昵称（只在这台手机显示）：空 = 显示电脑自己的名字。 */
     val hostAlias: String = "",
     val publicUrl: String = "",
+    /** 用户对「旧线路」提示按过「稍后」的那条 base；换线路后会再次提示。 */
+    val legacyOk: String = "",
     val conn: Conn = Conn.OFFLINE,
     /** 最近一条桥接事件的时间——设置页「连接状态」行的活性指示。 */
     val lastEventAt: Long = 0L,

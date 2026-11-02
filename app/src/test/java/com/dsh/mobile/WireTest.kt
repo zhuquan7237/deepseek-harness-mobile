@@ -1237,4 +1237,27 @@ class WireTest {
         assertEquals(null, Wire.relativeInCwd("D:\\DeepSeek\\..\\x.svg", "D:\\DeepSeek"))
         assertEquals(null, Wire.relativeInCwd("D:\\DeepSeek\\x.svg", ""))
     }
+
+    @Test
+    fun legacyRelayDetection() {
+        val key = "0beafe808e5c42569635bab9032af9b203131327"
+        assertTrue(Wire.isLegacyRelayBase("https://relay.zhuquan.xyz/m/$key"))
+        assertTrue(Wire.isLegacyRelayBase("https://m.zhuquan.xyz/m/$key"))
+        assertFalse(Wire.isLegacyRelayBase("https://cn.zhuquan.xyz:8443/m/$key"))
+        assertFalse(Wire.isLegacyRelayBase("http://192.168.1.187:17732"))
+        assertFalse(Wire.isLegacyRelayBase(""))
+    }
+
+    @Test
+    fun preferredDirectBaseRewritesCloudflareEntry() {
+        val key = "0beafe808e5c42569635bab9032af9b203131327"
+        assertEquals(
+            "https://cn.zhuquan.xyz:8443/m/$key",
+            Wire.preferredDirectBase("https://relay.zhuquan.xyz/m/$key"),
+        )
+        // 已经是直连 / 局域网 / 旧隧道根路径（没有 /m/<key>）都不改写。
+        assertEquals(null, Wire.preferredDirectBase("https://cn.zhuquan.xyz:8443/m/$key"))
+        assertEquals(null, Wire.preferredDirectBase("http://192.168.1.187:17732"))
+        assertEquals(null, Wire.preferredDirectBase("https://m.zhuquan.xyz"))
+    }
 }

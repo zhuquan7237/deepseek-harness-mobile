@@ -31,6 +31,7 @@ data class StoredSession(
     val defaultLabel: String = "",
     /** 已知线路登记簿（JSON 字符串）：自动选线用，见 RouteBook。 */
     val routes: String = "",
+    val legacyOk: String = "",
 )
 
 /** 「从上游同步」最近一次的结果：成功给时间，失败给原因（模型页展示用）。 */
@@ -59,6 +60,8 @@ class SettingsStore(context: Context) {
         val DEFAULT_LABEL = stringPreferencesKey("default_label")
         val HOST_ALIAS = stringPreferencesKey("host_alias")
         val ROUTES = stringPreferencesKey("route_book")
+        /** 用户按过「稍后」的那条旧线路 base。 */
+        val LEGACY_OK = stringPreferencesKey("legacy_ok")
     }
 
     suspend fun load(): StoredSession {
@@ -83,6 +86,7 @@ class SettingsStore(context: Context) {
             defaultModel = prefs[Keys.DEFAULT_MODEL].orEmpty(),
             defaultLabel = prefs[Keys.DEFAULT_LABEL].orEmpty(),
             routes = prefs[Keys.ROUTES].orEmpty(),
+            legacyOk = prefs[Keys.LEGACY_OK].orEmpty(),
         )
     }
 
@@ -199,6 +203,11 @@ class SettingsStore(context: Context) {
 
     suspend fun loadHostAlias(): String =
         context.dshStore.data.first()[Keys.HOST_ALIAS].orEmpty()
+
+    /** 记住用户对哪条旧线路按过「稍后」，换线路后会重新提示。 */
+    suspend fun saveLegacyOk(base: String) {
+        context.dshStore.edit { prefs -> prefs[Keys.LEGACY_OK] = base }
+    }
 
     /** 自动选线：切换线路时更新当前 base（不动 token）。 */
     suspend fun saveBase(base: String) {

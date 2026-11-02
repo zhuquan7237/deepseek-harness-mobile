@@ -1065,11 +1065,35 @@ fun isInjectedContext(text: String): Boolean =
         }
         val path = uri.path.orEmpty().trimEnd('/')
         return when (uri.host) {
-            "cn.zhuquan.xyz" -> "https://relay.zhuquan.xyz$path"
-            "relay.zhuquan.xyz" -> "https://cn.zhuquan.xyz:8443$path"
+            DIRECT_RELAY_HOST -> "https://$CF_RELAY_HOST$path"
+            CF_RELAY_HOST -> "https://$DIRECT_RELAY_HOST:8443$path"
             else -> null
         }
     }
+
+    /**
+     * 旧配置的线路：落在 Cloudflare 上（`relay.zhuquan.xyz` 或早期的 `m.zhuquan.xyz`）。
+     * 这类线路每次请求要绕 CF 边缘，实测比国内直连慢 30～40 倍，值得提醒用户重新配对。
+     */
+    fun isLegacyRelayBase(base: String): Boolean {
+        val host = runCatching { URI(base).host?.lowercase() }.getOrNull() ?: return false
+        return host == CF_RELAY_HOST || host == LEGACY_CF_HOST
+    }
+
+    /**
+     * 重新配对时要优先试的国内直连地址：把旧 CF 线路换成同一设备路径的 `cn:8443`。
+     * 非 CF 线路返回 null（不改原有顺序）。
+     */
+    fun preferredDirectBase(base: String): String? {
+        if (!isLegacyRelayBase(base)) return null
+        val path = runCatching { URI(base).path.orEmpty().trimEnd('/') }.getOrNull() ?: return null
+        if (!path.startsWith("/m/")) return null
+        return "https://$DIRECT_RELAY_HOST:8443$path"
+    }
+
+    const val DIRECT_RELAY_HOST = "cn.zhuquan.xyz"
+    const val CF_RELAY_HOST = "relay.zhuquan.xyz"
+    const val LEGACY_CF_HOST = "m.zhuquan.xyz"
 
     /** Uppercase alphanumerics only — the bridge normalizes the same way. */
     fun normalizeCode(value: String): String = value.uppercase().filter { it.isLetterOrDigit() }

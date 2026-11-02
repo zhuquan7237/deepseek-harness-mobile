@@ -347,6 +347,7 @@ class BridgeRepository(context: Context) {
                 overlayPermission = canOverlay(),
                 version = BuildConfig.VERSION_NAME,
                 hostAlias = hostAlias,
+                legacyOk = stored.legacyOk,
             )
         }
         refreshLogCounts()
@@ -465,18 +466,32 @@ class BridgeRepository(context: Context) {
                 // 第一条被当地网络掐掉时（TLS 被中断——用户侧表现为"连不上"，例如
                 // connection closed），自动换另一条再试一次；桥接已经明确回话
                 //（配对码不对、电脑没开远程访问等）则不换线，避免误导。
-                var used = base
-                val result = try {
-                    attempt(base)
-                } catch (blocked: BridgeException) {
-                    throw blocked
-                } catch (network: Exception) {
-                    val alt = Wire.alternateRelayBase(base) ?: throw network
-                    used = alt
-                    attempt(alt)
+                // 线路顺序：旧配置先试国内直连（把 Cloudflare 入口换成 cn:8443），
+                // 再试原地址，最后试对偶线路。桥接已明确回话（配对码不对、电脑没开
+                // 远程访问等）时立刻停手，不再换线，避免把错误结论带偏。
+                val preferredDirect = Wire.preferredDirectBase(base)
+                val candidates = buildList {
+                    preferredDirect?.let { add(it) }
+                    add(base)
+                    Wire.alternateRelayBase(base)?.takeIf { it != base }?.let { add(it) }
+                }.distinct()
+                var used = candidates.first()
+                var result: JSONObject? = null
+                var lastError: Exception? = null
+                for (candidate in candidates) {
+                    try {
+                        result = attempt(candidate)
+                        used = candidate
+                        break
+                    } catch (blocked: BridgeException) {
+                        throw blocked
+                    } catch (network: Exception) {
+                        lastError = network
+                    }
                 }
-                val token = result.optString("token")
-                val device = result.optJSONObject("device")
+                val response = result ?: throw (lastError ?: BridgeException("E_NETWORK", "连不上电脑"))
+                val token = response.optString("token")
+                val device = response.optJSONObject("device")
                 if (token.isBlank() || device == null) {
                     throw BridgeException("E_PAIRING", "配对响应不完整，请重试")
                 }
@@ -982,6 +997,13 @@ class BridgeRepository(context: Context) {
 
     /** 现在有没有设默认模型（界面用来显示勾）。 */
     fun currentDefaultModel(): Triple<String, String, String>? = defaultModel
+
+    /** 用户对「当前这条线路是旧配置」的提示按了「稍后」：记下 base，换线路后重新提示。 */
+    fun dismissLegacyPrompt() {
+        val base = _state.value.base
+        _state.update { it.copy(legacyOk = base) }
+        scope.launch { store.saveLegacyOk(base) }
+    }
 
     /** 只改思考强度：拿当前模型再选一次，只是把 reasoningEffort 换个值。 */
     fun setEffort(effort: String) {

@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import com.dsh.mobile.data.AppState
 import com.dsh.mobile.data.BridgeRepository
 import com.dsh.mobile.data.Conn
+import com.dsh.mobile.data.Wire
 import com.dsh.mobile.ui.theme.LocalDsh
 
 /**
@@ -99,6 +101,9 @@ fun SettingsScreen(state: AppState, repo: BridgeRepository) {
             GroupHeader("账户与服务")
             ConnStatusRow(state) { repo.openLogs() }
             ServerRow(state.base)
+            if (Wire.isLegacyRelayBase(state.base)) {
+                LegacyLineNote(onRepair = { confirmUnpair = true })
+            }
             SettingsAction(
                 label = "权限",
                 value = if (state.scopes.isEmpty()) "未知" else "${state.scopes.size} 项已授权",
@@ -477,6 +482,45 @@ private fun ServerRow(base: String) {
             tint = palette.textTertiary,
             modifier = Modifier.size(15.dp),
         )
+    }
+}
+
+/**
+ * 旧线路的常驻提示：只在服务器行下面多一行，不打断任何操作。
+ * 文案只讲结论和代价，不解释 CF/直连的技术细节。
+ */
+@Composable
+private fun LegacyLineNote(onRepair: () -> Unit) {
+    val palette = LocalDsh.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onRepair)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Info,
+            contentDescription = null,
+            tint = palette.warn,
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "当前是旧的连接线路，速度慢 30～40 倍",
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.warn,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "在电脑上重新扫码配对即可切到国内直连",
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.textTertiary,
+            )
+        }
+        Text("重新配对", style = MaterialTheme.typography.bodyMedium, color = palette.accent)
     }
 }
 
