@@ -21,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -165,8 +166,11 @@ fun AppRoot(repo: BridgeRepository) {
 @Composable
 private fun SystemBarTint(dark: Boolean) {
     val context = LocalContext.current
-    LaunchedEffect(dark) {
+    val background = LocalDsh.current.bg
+    LaunchedEffect(dark, background) {
         val activity = context.findActivity() ?: return@LaunchedEffect
+        // Also follow an explicit in-app theme when it differs from the OS.
+        activity.window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(background.toArgb()))
         val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
         controller.isAppearanceLightStatusBars = !dark
         controller.isAppearanceLightNavigationBars = !dark

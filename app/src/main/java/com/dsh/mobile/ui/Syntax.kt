@@ -11,11 +11,11 @@ import androidx.compose.ui.text.buildAnnotatedString
  * 只做词法着色，不改动原文；复制/保存永远拿 raw 原文。
  */
 internal fun highlightFor(lang: String, code: String, dark: Boolean): AnnotatedString {
-    val tag = Color(if (dark) 0xFFE7A28E else 0xFF9F3F32)
-    val attr = Color(if (dark) 0xFFCFB783 else 0xFF786037)
-    val str = Color(if (dark) 0xFFADC99A else 0xFF42613D)
-    val num = Color(if (dark) 0xFF9EC6CB else 0xFF355F68)
-    val comment = Color(if (dark) 0xFF9FA694 else 0xFF626859)
+    val tag = Color(if (dark) 0xFFA9C4FF else 0xFF315BB5)
+    val attr = Color(if (dark) 0xFFD1B5EB else 0xFF73509A)
+    val str = Color(if (dark) 0xFFA0D2BD else 0xFF28694E)
+    val num = Color(if (dark) 0xFFE4C68B else 0xFF805B17)
+    val comment = Color(if (dark) 0xFF9BAAC2 else 0xFF58677D)
     val isMarkup = lang.equals("svg", true) || lang.equals("html", true) ||
         lang.equals("xml", true) || code.trimStart().startsWith("<")
     val re = if (isMarkup) {

@@ -5,6 +5,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.compositeOver
 import com.dsh.mobile.ui.theme.DshPalette
 import com.dsh.mobile.ui.pendingAckTextColor
+import com.dsh.mobile.ui.highlightFor
 import com.dsh.mobile.ui.theme.DarkPalette
 import com.dsh.mobile.ui.theme.LightPalette
 import org.junit.Assert.assertTrue
@@ -19,6 +20,12 @@ class ChatContrastTest {
             checkPair(name, "tertiary", palette.textTertiary, palette.assistantBg)
             checkPair(name, "user bubble", palette.bubbleUserText, palette.bubbleUser)
             checkPair(name, "code", palette.codeText, palette.codeBg)
+            checkPair(name, "primary action", palette.onPrimaryBtn, palette.primaryBtn)
+            checkPair(name, "accent action", palette.onAccent, palette.accent)
+            checkPair(name, "selected filter", palette.selectedFg, palette.selectedBg)
+            checkPair(name, "link on card", palette.link, palette.surface)
+            checkPair(name, "secondary on card", palette.textSecondary, palette.surface)
+            checkPair(name, "metadata on card", palette.textTertiary, palette.surface)
         }
     }
 
@@ -28,6 +35,16 @@ class ChatContrastTest {
 
     @Test fun sendingLabelMeetsAaOnDarkUserBubble() {
         checkSendingLabel("dark", DarkPalette)
+    }
+
+    @Test fun syntaxColorsMeetAaInBothThemes() {
+        for ((name, palette) in listOf("light" to LightPalette, "dark" to DarkPalette)) {
+            for ((lang, source) in listOf("svg" to "<!-- note --><svg width=\"12\"/>", "js" to "// note\nconst n = 12; const s = 'text';")) {
+                highlightFor(lang, source, palette.dark).spanStyles.forEach { span ->
+                    checkPair(name, "syntax $lang", span.item.color, palette.codeBg)
+                }
+            }
+        }
     }
 
     private fun checkSendingLabel(theme: String, palette: DshPalette) {

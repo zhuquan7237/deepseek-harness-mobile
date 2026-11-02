@@ -3,9 +3,9 @@ package com.dsh.mobile.ui
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -30,7 +32,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Edit
@@ -68,6 +72,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import com.dsh.mobile.data.AppState
 import kotlinx.coroutines.delay
@@ -83,9 +91,8 @@ import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
 /**
- * The session list follows the ChatGPT mobile shell: round top-bar buttons
- * around a connection pill, a plain grouped list with no dividers, and the
- * floating bottom dock (search + a blue CTA) the list scrolls under.
+ * Companion home: connection, search, a resume card, then grouped conversations.
+ * Only short previews belong here; full prose, tables and code live in the chat.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,6 +103,12 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
     var showUpdate by remember { mutableStateOf(false) }
     // 连接不上时的自救入口：重试 / 解除本机绑定重新配对（用户反馈「找不到取消配对」）。
     var connHelp by remember { mutableStateOf(false) }
+    var filter by rememberSaveable(state.base) { mutableStateOf("all") }
+    val searching = state.search.isNotBlank()
+    val (testSessions, normalSessions) = remember(state.sessions, searching) {
+        if (searching) emptyList<SessionSummary>() to state.sessions
+        else state.sessions.partition { TEST_SESSION_RE.containsMatchIn(it.title) }
+    }
 
     // 一进列表就拉一次：从会话页返回时列表常常是旧的（真机反馈"跑着的任务不在列表里/没标识"）
     LaunchedEffect(Unit) { repo.loadSessions() }
@@ -114,27 +127,61 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
             Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .height(60.dp)
-                .padding(horizontal = 8.dp),
+                .heightIn(min = 64.dp)
+                .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CircleButton(Icons.Outlined.Settings, "设置") { repo.openSettings() }
-            Spacer(Modifier.width(10.dp))
-            StatusPill(
-                text = when (state.conn) {
-                    Conn.ONLINE -> "已连接"
-                    Conn.CONNECTING -> "正在连接"
-                    Conn.OFFLINE -> "未连接 · 点此处理"
-                },
-                conn = state.conn,
-                onClick = if (state.conn == Conn.OFFLINE) ({ connHelp = true }) else null,
-            )
-            Spacer(Modifier.weight(1f))
-            CircleButton(Icons.Outlined.SwapHoriz, "文件传输") { repo.openTransfer() }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("会话", style = MaterialTheme.typography.headlineMedium, color = palette.textPrimary)
+                StatusPill(
+                    text = when (state.conn) {
+                        Conn.ONLINE -> "已连接"
+                        Conn.CONNECTING -> "正在连接"
+                        Conn.OFFLINE -> "未连接 · 点此处理"
+                    },
+                    conn = state.conn,
+                    onClick = if (state.conn == Conn.OFFLINE) ({ connHelp = true }) else null,
+                )
+            }
+            CircleButton(Icons.Outlined.SwapHoriz, "文件传输", size = 48.dp) { repo.openTransfer() }
+            Spacer(Modifier.width(6.dp))
+            CircleButton(Icons.Outlined.Settings, "设置", size = 48.dp) { repo.openSettings() }
         }
 
         state.update?.let { info ->
             UpdateBanner(info = info, onOpen = { showUpdate = true }, onDismiss = { repo.dismissUpdate() })
+        }
+
+        SearchPill(
+            active = searchActive || searching,
+            value = state.search,
+            onChange = { repo.setSearch(it) },
+            onActivate = { searchActive = true },
+            onClose = { searchActive = false; repo.setSearch("") },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+        )
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf("all" to "全部", "running" to "进行中", "unread" to "有新回复").forEach { (key, label) ->
+                val count = filterSessions(normalSessions, key).size
+                val chosen = filter == key
+                Box(
+                    Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
+                        .background(if (chosen) palette.selectedBg else Color.Transparent)
+                        .semantics { selected = chosen }
+                        .clickable(role = Role.Tab) { filter = key }
+                        .padding(horizontal = 12.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (key == "all") label else "$label $count",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (chosen) palette.selectedFg else palette.textSecondary,
+                    )
+                }
+            }
         }
 
         // 引擎未开启会话全文搜索时的降级说明（搜索仍可用，只是按标题匹配）
@@ -193,27 +240,39 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
                 } else {
                     // 「测试 / 系统」会话默认折叠，不污染主列表；搜索时不折叠（找东西优先）。
                     // 判定用标题里的 e2e / pong 字样——E2E 用例生成的都是这个形状。
-                    val searching = state.search.isNotBlank()
-                    val (testSessions, normalSessions) = remember(state.sessions, searching) {
-                        if (searching) emptyList<SessionSummary>() to state.sessions
-                        else state.sessions.partition { TEST_SESSION_RE.containsMatchIn(it.title) }
-                    }
                     var testOpen by rememberSaveable { mutableStateOf(false) }
-                    val groups = remember(normalSessions) { groupSessions(normalSessions) }
+                    val filtered = remember(normalSessions, filter) { filterSessions(normalSessions, filter) }
+                    val groups = remember(filtered) { groupSessions(filtered) }
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         state = listState,
-                        contentPadding = PaddingValues(bottom = 104.dp),
+                        contentPadding = PaddingValues(bottom = 116.dp),
                     ) {
-                        item(key = "greeting") { GreetingCard(state) { id -> repo.openSession(id) } }
+                        if (!searching && filter == "all") {
+                            item(key = "greeting") { GreetingCard(state.copy(sessions = normalSessions)) { id -> repo.openSession(id) } }
+                        }
+                        if (filtered.isEmpty()) {
+                            item(key = "filter-empty") {
+                                Text(
+                                    when (filter) { "running" -> "没有进行中的会话"; "unread" -> "新回复都已查看"; else -> "没有匹配的会话" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = palette.textSecondary,
+                                    modifier = Modifier.padding(24.dp),
+                                )
+                            }
+                        }
                         groups.forEach { group ->
                             item(key = "header:" + group.label) {
-                                SectionHeader(group.label, Modifier.padding(start = 20.dp))
+                                Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp)) {
+                                    Text(group.label, style = MaterialTheme.typography.labelLarge, color = palette.textSecondary)
+                                    Spacer(Modifier.weight(1f))
+                                    Text("${group.sessions.size} 个会话", style = MaterialTheme.typography.labelSmall, color = palette.textTertiary)
+                                }
                             }
                             items(group.sessions, key = { it.sessionId }) { session ->
                                 Box(Modifier.animateItem()) {
                                     SessionRow(
-                connected = state.connected,
+                                        connected = state.connected,
                                         session = session,
                                         onClick = { repo.openSession(session.sessionId) },
                                         onLongClick = { renameTarget = session },
@@ -221,7 +280,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
                                 }
                             }
                         }
-                        if (testSessions.isNotEmpty()) {
+                        if (testSessions.isNotEmpty() && filter == "all") {
                             item(key = "test-header") {
                                 Row(
                                     Modifier
@@ -287,18 +346,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
                     .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SearchPill(
-                    active = searchActive,
-                    value = state.search,
-                    onChange = { repo.setSearch(it) },
-                    onActivate = { searchActive = true },
-                    onClose = {
-                        searchActive = false
-                        repo.setSearch("")
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.weight(1f))
                 val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
                 PrimaryCta(
                     icon = Icons.Outlined.Edit,
@@ -365,10 +413,7 @@ fun SessionsScreen(state: AppState, repo: BridgeRepository, listState: LazyListS
     }
 }
 
-/**
- * 会话列表顶端的一张小卡片。原来列表直接从"今天"的分组标题开始，上面一片空；
- * 这里放个打招呼 + 会话数，界面不至于那么单调。
- */
+/** A single resume destination; status is derived from data, never from its title. */
 @Composable
 private fun GreetingCard(state: AppState, onContinue: (String) -> Unit) {
     val palette = LocalDsh.current
@@ -379,68 +424,43 @@ private fun GreetingCard(state: AppState, onContinue: (String) -> Unit) {
         hour < 18 -> "下午好呀"
         else -> "晚上好呀"
     }
-    val running = state.sessions.count { it.running }
     val last = remember(state.sessions) { state.sessions.maxByOrNull { it.updatedAt } }
-    val continueMode = running == 0 && last != null
-    val lastTitle = last?.let { displayTitle(it.title) }
-    Row(
+    if (last == null) return
+    Column(
         Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(palette.surface)
+            .border(1.dp, palette.divider, RoundedCornerShape(20.dp))
+            .clickable { onContinue(last.sessionId) }
+            .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Image(
-            painter = painterResource(R.drawable.whale_face_happy),
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.size(40.dp),
-        )
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                hello,
-                style = MaterialTheme.typography.titleSmall,
-                color = palette.textPrimary,
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Image(
+                painter = painterResource(R.drawable.whale_face_happy),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(44.dp),
             )
-            // 第二行：跑着任务就报数；没跑就给「继续上次：xxx」（点一下直接进会话）；
-            // 都没有才放默认引导。整行可点，不再占一大块空白。
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .then(if (continueMode) Modifier.clickable { last?.let { onContinue(it.sessionId) } } else Modifier)
-                    .padding(vertical = 1.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                when {
-                    running > 0 -> Text(
-                        "$running 个任务正在电脑上跑",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.textSecondary,
-                    )
-                    continueMode -> {
-                        Text(
-                            "继续上次：",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.textTertiary,
-                            maxLines = 1,
-                        )
-                        Text(
-                            lastTitle.orEmpty(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.accent,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    else -> Text(
-                        "在下面开始一个新会话吧",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.textTertiary,
-                    )
-                }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(hello, style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
+                Text("继续你的工作", style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
             }
+            Icon(Icons.AutoMirrored.Outlined.ArrowForward, contentDescription = "继续会话", tint = palette.accent, modifier = Modifier.size(20.dp))
+        }
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(palette.selectedBg).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text("上次会话", style = MaterialTheme.typography.labelSmall, color = palette.selectedFg)
+            Text(displayTitle(last.title), style = MaterialTheme.typography.titleSmall, color = palette.textPrimary,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(
+                when { !state.connected -> "离线缓存 · 连接后同步"; last.running -> "任务进行中 · 查看进度"; last.completed -> "有新回复 · 点击查看"; else -> "点击继续对话" },
+                style = MaterialTheme.typography.bodySmall, color = palette.textSecondary,
+            )
         }
     }
 }
@@ -518,8 +538,9 @@ private fun SearchPill(
     }
     Row(
         modifier
-            .height(50.dp)
-            .clip(RoundedCornerShape(999.dp))
+            .heightIn(min = 50.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .border(1.dp, palette.divider, RoundedCornerShape(14.dp))
             .background(palette.surface)
             .clickable(enabled = !active, onClick = onActivate)
             .padding(horizontal = 16.dp),
@@ -557,9 +578,10 @@ private fun SearchPill(
             )
             Box(
                 Modifier
+                    .size(48.dp)
                     .clip(CircleShape)
-                    .clickable { onClose() }
-                    .padding(2.dp),
+                    .clickable { onClose() },
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     Icons.Outlined.Close,
@@ -619,14 +641,28 @@ private fun SessionRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 6.dp, vertical = 1.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .padding(horizontal = 20.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(palette.surface)
+            .border(1.dp, palette.divider.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(9.dp),
+            .padding(14.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Box(
+            Modifier.size(36.dp).clip(RoundedCornerShape(11.dp))
+                .background(if (session.running || session.completed) palette.selectedBg else palette.bg),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (session.running) Icons.Outlined.PlayCircleOutline else Icons.Outlined.ChatBubbleOutline,
+                contentDescription = null,
+                tint = if (session.running || session.completed) palette.accent else palette.textTertiary,
+                modifier = Modifier.size(19.dp),
+            )
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             // 标题行：右边跟一个时间，120 条会话不再长得一模一样
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (session.completed) {
@@ -641,7 +677,7 @@ private fun SessionRow(
                 }
                 Text(
                     displayTitle(session.title),
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
                     color = palette.textPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -654,24 +690,25 @@ private fun SessionRow(
             }
             // 摘要行：桥接从引擎 turnOutline 取的最近一轮预览
             //（0.2.25+ 才有这个字段；老桥接不回就整行不出现——不假装）
-            val preview = remember(session.preview) { Wire.previewText(session.preview) }
+            val preview = remember(session.preview) { sessionPreview(session.preview) }
             if (preview.isNotEmpty()) {
                 Text(
                     preview,
                     style = MaterialTheme.typography.bodySmall,
-                    color = palette.textTertiary,
+                    color = palette.textSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
             // 状态行只在有值得注意的状态时出现：在跑 / 有产出
-            if (session.running || session.fileCount > 0) {
+            if (session.running || session.completed || session.fileCount > 0 || session.cwd.isNotBlank()) {
                 Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (session.running) {
-                        // J2 处方：运行态不用朱砂（朱砂只做印记）；图标+中文双编码，双主题同一语义映射。
+                        // 图标 + 文案表明状态，颜色只作辅助。
                         Row(
                             Modifier
                                 .clip(RoundedCornerShape(999.dp))
@@ -680,26 +717,33 @@ private fun SessionRow(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            // K4 复评：断线后不冒认「正在执行」——降为「状态待核实」。
                             Icon(
                                 if (connected) Icons.Outlined.PlayCircleOutline else Icons.Outlined.CloudOff,
                                 contentDescription = null,
-                                tint = palette.textSecondary,
+                                tint = if (connected) palette.accent else palette.textSecondary,
                                 modifier = Modifier.size(14.dp),
                             )
                             Text(
                                 if (connected) "正在执行" else "状态待核实",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = palette.textSecondary,
+                                color = if (connected) palette.accent else palette.textSecondary,
                             )
                         }
                     }
+                    if (session.completed && !session.running) {
+                        Text("有新回复", style = MaterialTheme.typography.labelSmall, color = palette.accent)
+                    }
                     if (session.fileCount > 0) {
+                        Icon(Icons.Outlined.Description, contentDescription = null, tint = palette.textTertiary, modifier = Modifier.size(13.dp))
                         Text(
                             "${session.fileCount} 个文件",
                             style = MaterialTheme.typography.labelSmall,
                             color = palette.textTertiary,
                         )
+                    }
+                    if (session.cwd.isNotBlank()) {
+                        Text(session.cwd.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\'),
+                            style = MaterialTheme.typography.labelSmall, color = palette.textTertiary, maxLines = 1)
                     }
                 }
             }
