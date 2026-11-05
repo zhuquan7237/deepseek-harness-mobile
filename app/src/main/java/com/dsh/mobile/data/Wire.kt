@@ -901,6 +901,7 @@ fun isInjectedContext(text: String): Boolean =
                     apiKeyRef = raw.optString("apiKeyRef"),
                     keyConfigured = raw.optBoolean("apiKeyConfigured", false),
                     network = raw.optString("network").let { if (it == "proxy" || it == "direct") it else "" },
+                    readonly = raw.optBoolean("readonly", false),
                 )
             )
         }
@@ -943,6 +944,8 @@ fun isInjectedContext(text: String): Boolean =
                     apiKeyConfigured = raw.optBoolean("apiKeyConfigured", false),
                     paramsJson = params?.toString().orEmpty(),
                     tagsJson = raw.optJSONArray("tags")?.toString() ?: "[]",
+                    readonly = raw.optBoolean("readonly", false),
+                    defaultEffort = params?.optString("defaultReasoningEffort")?.takeIf { it.isNotBlank() } ?: "",
                 )
             )
         }

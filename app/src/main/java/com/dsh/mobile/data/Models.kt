@@ -193,6 +193,14 @@ data class ModelItem(
     val tagsJson: String = "[]",
     /** 这个模型支持的思考强度档位（低/中/高…），空表示不支持。 */
     val efforts: List<String> = emptyList(),
+    /**
+     * 只读模型：来自引擎自己的提供商（官方 DeepSeek 账号登录、官方 API key、
+     * 其它插件注册的路由），手机可以选它开新对话，但不能编辑或删除——
+     * 那份配置不在电脑端的模型配置里，写回去会破坏引擎设置。
+     */
+    val readonly: Boolean = false,
+    /** 引擎给的默认思考档位（官方模型带 defaultReasoningEffort；空 = 用第一个）。 */
+    val defaultEffort: String = "",
 )
 
 /** One provider row: everything the phone needs to show and edit a provider. */
@@ -206,6 +214,8 @@ data class ModelProvider(
     val keyConfigured: Boolean = false,
     /** 网络路由："" = 自动（默认走代理）；"proxy" = 必须走代理；"direct" = 直连绕过代理。 */
     val network: String = "",
+    /** 只读提供商：由引擎自己管理（官方登录 / 官方 API key），手机只读不写。 */
+    val readonly: Boolean = false,
 )
 
 data class ModelDoc(
@@ -389,6 +399,7 @@ data class AppState(
 
 /** 思考强度的中文名：低 / 中 / 高 / 极高 / Max… */
 fun effortLabel(effort: String): String = when (effort.lowercase()) {
+    "off", "none" -> "关"
     "minimal" -> "最小"
     "low" -> "低"
     "medium", "mid" -> "中"

@@ -3532,8 +3532,9 @@ private fun ModelMenu(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     efforts.forEach { key ->
+                        val preferred = active?.defaultEffort?.takeIf { it.isNotBlank() } ?: efforts.firstOrNull()
                         val selected = key == state.reasoningEffort ||
-                            (state.reasoningEffort.isBlank() && key == efforts.first())
+                            (state.reasoningEffort.isBlank() && key == preferred)
                         Box(
                             Modifier
                                 .height(30.dp)

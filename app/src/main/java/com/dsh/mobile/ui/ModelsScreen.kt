@@ -557,6 +557,8 @@ private fun ProviderBlock(
     sync: ProviderSync?,
 ) {
     val palette = LocalDsh.current
+    // 引擎自己的提供商（官方登录 / 官方 API key）只读：能选、不能改。
+    val readOnly = provider.readonly || (rows.isNotEmpty() && rows.all { it.readonly })
     val filtered = remember(rows, query) {
         val q = query.trim()
         if (q.isBlank()) {
@@ -592,6 +594,10 @@ private fun ProviderBlock(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            if (readOnly) {
+                MiniTag("只读", palette.textTertiary)
+                Spacer(Modifier.width(8.dp))
             }
             if (apiModeLabel(provider.apiMode).isNotBlank()) {
                 MiniTag(apiModeLabel(provider.apiMode), palette.textSecondary)
@@ -639,10 +645,12 @@ private fun ProviderBlock(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     ModelSearchField(query, "搜索模型…", Modifier.weight(1f)) { onQuery(it) }
-                    if (selecting) {
-                        Pill("完成", onClick = { onSelecting(false) })
-                    } else {
-                        Pill("批量管理", onClick = { onSelecting(true) })
+                    if (!readOnly) {
+                        if (selecting) {
+                            Pill("完成", onClick = { onSelecting(false) })
+                        } else {
+                            Pill("批量管理", onClick = { onSelecting(true) })
+                        }
                     }
                 }
                 if (selecting) {
@@ -693,34 +701,45 @@ private fun ProviderBlock(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             ModelTexts(item, Modifier.weight(1f))
-                            Switch(
-                                checked = item.enabled,
-                                onCheckedChange = { onToggleModel(item) },
-                                modifier = Modifier.semantics {
-                                    contentDescription = if (item.enabled) "已启用，在会话中可用" else "已停用，点击启用"
-                                },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = palette.onPrimaryBtn,
-                                    checkedTrackColor = palette.primaryBtn,
-                                    uncheckedThumbColor = palette.textSecondary,
-                                    uncheckedTrackColor = palette.surfaceHi,
-                                ),
-                            )
-                            Icon(
-                                Icons.Outlined.Delete,
-                                contentDescription = "删除 ${item.name}",
-                                tint = palette.textTertiary,
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { onDeleteModel(item) }
-                                    .padding(6.dp),
-                            )
+                            if (readOnly) {
+                                MiniTag("只读", palette.textTertiary)
+                            } else {
+                                Switch(
+                                    checked = item.enabled,
+                                    onCheckedChange = { onToggleModel(item) },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = if (item.enabled) "已启用，在会话中可用" else "已停用，点击启用"
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = palette.onPrimaryBtn,
+                                        checkedTrackColor = palette.primaryBtn,
+                                        uncheckedThumbColor = palette.textSecondary,
+                                        uncheckedTrackColor = palette.surfaceHi,
+                                    ),
+                                )
+                                Icon(
+                                    Icons.Outlined.Delete,
+                                    contentDescription = "删除 ${item.name}",
+                                    tint = palette.textTertiary,
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { onDeleteModel(item) }
+                                        .padding(6.dp),
+                                )
+                            }
                         }
                     }
                 }
             }
-            if (!selecting) {
+            if (readOnly) {
+                Text(
+                    "这家由电脑端的引擎自己管理（官方登录 / 官方 API key）：模型可以直接选用，改动请到电脑端的设置里做。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textTertiary,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 12.dp),
+                )
+            } else if (!selecting) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
                     val syncCaption = when {
                         sync != null && !sync.ok ->
