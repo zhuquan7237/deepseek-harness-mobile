@@ -1,0 +1,61 @@
+# One-time setup (e.g., install system tools, global CLIs).
+initialize:
+  - name: Android SDK (cmdline-tools, platform 35, emulator, API 35 AVD)
+    run: |
+      export ANDROID_HOME="$HOME/Android/Sdk"
+      if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+        mkdir -p "$ANDROID_HOME/cmdline-tools"
+        curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+        unzip -q -o /tmp/cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+        rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+        mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+        rm -f /tmp/cmdtools.zip
+      fi
+      yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-35" "build-tools;34.0.0" "emulator" "system-images;android-35;google_apis;x86_64" > /dev/null
+      echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n dsh_api35 -k "system-images;android-35;google_apis;x86_64" -d pixel_6 --force > /dev/null
+      grep -q ANDROID_HOME "$ENVRC" 2>/dev/null || {
+        echo "ANDROID_HOME=$ANDROID_HOME" >> "$ENVRC"
+        echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$ENVRC"
+        echo "PATH=$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH" >> "$ENVRC"
+      }
+# Install project dependencies (runs during builds, surfaced to agent at session start).
+maintenance: |
+  bash gradlew --no-daemon -q :app:dependencies > /dev/null
+knowledge:
+  - name: build
+    contents: |
+      # gradlew is not executable in git (Windows maintainer); invoke via bash.
+      bash gradlew assembleDebug   # -> app/build/outputs/apk/debug/app-debug.apk
+  - name: test
+    contents: |
+      bash gradlew testDebugUnitTest   # JVM unit tests (app/src/test)
+  - name: emulator
+    contents: |
+      emulator -avd dsh_api35 -no-window -no-audio -no-snapshot -gpu swiftshader_indirect &
+      adb wait-for-device && adb install -r app/build/outputs/apk/debug/app-debug.apk && adb shell am start -n com.dsh.mobile/.MainActivity
+  - name: notes
+    contents: |
+      Do not run scripts/release.sh (bumps version, tags, publishes, SSH-syncs mirror). Release builds stay signed with the debug key.
+---
+runs-on: macos
+initialize: |
+  brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+maintenance: |
+  (cd ios && xcodegen generate)
+knowledge:
+  - name: build
+    contents: |
+      # iOS shell (SwiftUI + WKWebView); DshMobile.xcodeproj is gitignored, regenerate with `cd ios && xcodegen generate` after editing ios/project.yml
+      cd ios && xcodebuild -project DshMobile.xcodeproj -scheme DshMobile -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+  - name: test
+    contents: |
+      # No XCTest target; mirror .github/workflows/ios.yml pairing E2E against the mock bridge
+      UDID=$(xcrun simctl list devices available | awk -F'[()]' '/iPhone/ {print $2; exit}'); xcrun simctl boot $UDID; xcrun simctl bootstatus $UDID -b
+      xcrun simctl install $UDID "$(find ios/build -name DshMobile.app -type d | head -1)"
+      python3 .github/scripts/mock_bridge.py 8099 &
+      xcrun simctl launch --terminate-running-process $UDID com.dsh.mobile.ios -url http://127.0.0.1:8099/mobile/ -paircode TEST-1234
+      # pass = UserDefaults base.url set: plutil -p "$(xcrun simctl get_app_container $UDID com.dsh.mobile.ios data)/Library/Preferences/com.dsh.mobile.ios.plist"
+  - name: notes
+    contents: |
+      iOS version comes from app/build.gradle.kts (versionName/versionCode), injected via MARKETING_VERSION/CURRENT_PROJECT_VERSION. Xcode 27 has no Simulator.app; use DeviceHub or simctl.
